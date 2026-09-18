@@ -16,6 +16,10 @@ const probeError = ref('')
 // 只存用户改过的字段，保存时也只提交这些
 const draft = ref<Record<string, string>>({})
 
+/** 默认只露「模型与 API」——用户要填的就是它；渠道地址/解析引擎这些部署配置收起来，需要时展开 */
+const PRIMARY_GROUP = '模型与 API'
+const showAdvanced = ref(false)
+
 const editableGroups = computed(() => {
   const out: { name: string; items: ConfigItem[] }[] = []
   for (const it of cfg.value ? cfg.value.items : []) {
@@ -30,7 +34,11 @@ const editableGroups = computed(() => {
   return out
 })
 
-const readonlyItems = computed(() => (cfg.value ? cfg.value.items.filter((i) => !i.editable) : []))
+
+const advancedGroups = computed(() => editableGroups.value.filter((g) => g.name !== PRIMARY_GROUP))
+const visibleGroups = computed(() =>
+  showAdvanced.value ? editableGroups.value : editableGroups.value.filter((g) => g.name === PRIMARY_GROUP),
+)
 
 function shown(it: ConfigItem): string {
   const v = draft.value[it.key]
@@ -113,8 +121,8 @@ async function runProbe() {
 }
 
 function sourceLabel(s: string): string {
-  if (s === '.env') return '来自 .env'
-  if (s === 'environment') return '来自环境变量'
+  if (s === '.env') return '来自本机配置'
+  if (s === 'environment') return '来自运行环境'
   if (s === 'dsh-credential') return '来自 DSH 凭证'
   if (s === 'unset') return '未配置'
   if (s === 'mock') return '示意值'
@@ -134,7 +142,7 @@ onMounted(load)
   <section class="panel">
     <header class="panel-head">
       <span class="panel-title">模型与 API</span>
-      <span class="panel-sub">改完写进组件根的 .env 并热生效（密钥不回显明文）</span>
+      <span class="panel-sub">改完立即生效，只保存在这台机器上（密钥不回显明文）</span>
       <div class="grow" />
       <span v-if="dirtyCount" class="chip warn"><i class="dot" />{{ dirtyCount }} 项待保存</span>
       <button class="btn sm" :disabled="saving || !dirtyCount" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
@@ -145,13 +153,13 @@ onMounted(load)
     <div class="panel-body stack">
       <p v-if="loading" class="panel-sub">正在读取配置…</p>
       <p v-else-if="loadError" class="err-line">
-        读取失败：{{ loadError }} —— 内置模拟器没有配置中心，请用 VITE_API_BASE 连接真实后端。
+        读取失败：{{ loadError }} —— 演示模式下没有可改的配置，连上本机后端后即可修改。
       </p>
 
       <template v-else-if="cfg">
         <div class="row spread">
-          <span class="label">配置文件</span>
-          <span class="mono panel-sub">{{ cfg.envFile }}{{ cfg.envFileExists ? '' : '（尚未创建；首次保存时生成，权限 600）' }}</span>
+          <span class="label">保存位置</span>
+          <span class="panel-sub" :title="cfg.envFile">{{ cfg.envFileExists ? '本机配置文件（仅本机可读）' : '还没建过；第一次保存时在本机生成' }}</span>
         </div>
 
         <div v-if="probe" class="probe" :class="probe.ok ? 'ok' : 'bad'">
@@ -160,17 +168,16 @@ onMounted(load)
         </div>
         <p v-if="probeError" class="err-line">探针没发出去：{{ probeError }}</p>
         <p v-if="savedKeys.length" class="ok-line">
-          已写入 .env：{{ savedKeys.join('、') }}{{ restartNeeded.length ? '；其中 ' + restartNeeded.join('、') + ' 需重启后端才生效' : '（已热生效）' }}
+          已保存：{{ savedKeys.join('、') }}{{ restartNeeded.length ? '；其中 ' + restartNeeded.join('、') + ' 需重启后端才生效' : '（已立即生效）' }}
         </p>
         <p v-if="saveError" class="err-line">保存失败：{{ saveError }}</p>
 
-        <div v-for="g in editableGroups" :key="g.name" class="group">
+        <div v-for="g in visibleGroups" :key="g.name" class="group">
           <div class="group-title">{{ g.name }}</div>
           <div v-for="it in g.items" :key="it.key" class="cfg-row">
             <div class="cfg-main">
               <div class="cfg-label">
-                {{ it.label }}
-                <span class="mono key">{{ it.key }}</span>
+                <span :title="'配置项：' + it.key">{{ it.label }}</span>
                 <span class="chip" :class="sourceTone(it.source)"><i class="dot" />{{ sourceLabel(it.source) }}</span>
               </div>
               <div class="panel-sub">{{ it.desc }}</div>
@@ -194,15 +201,13 @@ onMounted(load)
           </div>
         </div>
 
-        <div class="group">
-          <div class="group-title">运行环境（只读，由 ops/start_all.sh 注入）</div>
-          <div class="ro-grid">
-            <div v-for="it in readonlyItems" :key="it.key" class="ro-item">
-              <span class="panel-sub">{{ it.label }}</span>
-              <span class="mono">{{ it.value }}</span>
-            </div>
-          </div>
-        </div>
+        <button
+          v-if="advancedGroups.length"
+          class="btn sm ghost self-start"
+          @click="showAdvanced = !showAdvanced"
+        >
+          {{ showAdvanced ? '收起部署配置' : '显示部署配置（渠道地址、解析引擎等）' }}
+        </button>
       </template>
     </div>
   </section>
@@ -210,6 +215,7 @@ onMounted(load)
 
 <style scoped>
 .group { display: flex; flex-direction: column; gap: 2px; }
+.self-start { align-self: flex-start; }
 .group-title {
   font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--muted); padding: 12px 0 6px; border-bottom: 1px solid var(--line-soft);
