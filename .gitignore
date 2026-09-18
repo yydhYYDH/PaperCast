@@ -1,0 +1,44 @@
+# 工作区根仓库的忽略规则（规范见 docs/conventions.md）
+# 原则：代码进版本库，运行态 / 依赖 / 密钥 / 上游克隆不进。
+
+# —— 运行态：全部在 var/，可删可重建 ——
+/var/
+
+# —— 依赖与构建产物 ——
+node_modules/
+dist/
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# —— 密钥、账号、本地配置（绝不入库）——
+cookies.json
+.env
+.env.*
+!.env.example
+
+# —— 上游参考：各自带 .git，克隆方式与版本记录在 docs/research/upstream-repos.md ——
+/reference/upstream/
+/reference/baoyu-research/
+
+# —— 独立仓库的组件（有自己的 git 历史，不作为子树提交）——
+/apps/xiaohongshu-mcp/
+
+# —— 迁移期例外：并发中的知乎轨道（收尾后归位）——
+/zhihu-official/
+/p2b/
+/.p2b/
+/.home-zhihu/
+/.venv-zhihu/
+/.conda-pkgs/
+/.tectonic-cache/
+/example-papers/
+/.cache/
+/.tools/
+
+# —— 编辑器 / 系统 ——
+.DS_Store
+*.swp
+.idea/
+.vscode/

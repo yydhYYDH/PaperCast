@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Paper2Video — poster</title>
+<style>
+  :root{
+    --ink:#0e1524; --ink-2:#1b2437; --line:#33405c; --paper:#f4f6fb;
+    --accent:#ff4d6d; --accent2:#4d7cfe; --accent3:#12b981; --muted:#5b6780;
+  }
+  *{box-sizing:border-box;margin:0}
+  html,body{background:#0b0f18}
+  body{display:flex;justify-content:center}
+  .poster{
+    container-type:inline-size;
+    width:100%; aspect-ratio:3/4; background:var(--paper); color:var(--ink);
+    font-family:"Helvetica Neue",Helvetica,Arial,"PingFang SC",sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  header{ background:linear-gradient(120deg,var(--ink),var(--ink-2)); color:#fff; padding:4.4cqw 4cqw 3.6cqw; }
+  .kicker{ font-size:1.45cqw; letter-spacing:.28em; text-transform:uppercase; color:#8fa6d8; margin-bottom:1.1cqw }
+  h1{ font-size:5.1cqw; line-height:1.06; letter-spacing:-.02em; font-weight:800 }
+  h1 span{ color:var(--accent) }
+  .byline{ margin-top:1.5cqw; font-size:1.75cqw; color:#c7d3ee; display:flex; flex-wrap:wrap; gap:.9cqw 1.6cqw; align-items:baseline }
+  .byline em{ font-style:normal; color:#8fa6d8 }
+  .body{ flex:1; display:grid; grid-template-columns:1fr 1fr 1fr; gap:2.1cqw; padding:3cqw 4cqw 0 }
+  .col{ display:flex; flex-direction:column; gap:2.1cqw }
+  .card{ border:.16cqw solid #d6dcea; border-radius:1.1cqw; padding:1.9cqw; background:#fff; box-shadow:0 .4cqw 1.2cqw rgba(16,24,40,.06) }
+  .card h2{ font-size:2.05cqw; letter-spacing:-.01em; display:flex; align-items:center; gap:.8cqw; margin-bottom:1.1cqw }
+  .card h2::before{ content:""; width:.7cqw; height:2.05cqw; border-radius:.4cqw; background:var(--accent2) }
+  .col:nth-child(2) .card h2::before{ background:var(--accent) }
+  .col:nth-child(3) .card h2::before{ background:var(--accent3) }
+  .card p,.card li{ font-size:1.5cqw; line-height:1.5; color:#26314a }
+  .card ul{ padding-left:1.8cqw; display:flex; flex-direction:column; gap:.7cqw }
+  .card li::marker{ color:var(--accent2) }
+  .lead{ background:linear-gradient(135deg,#eef3ff,#fff); border-color:#c9d8ff }
+  .pipeline{ display:flex; flex-direction:column; gap:1.1cqw; margin-top:.4cqw }
+  .step{ display:flex; align-items:center; gap:1.1cqw; font-size:1.5cqw }
+  .n{ flex:none; width:3.1cqw; height:3.1cqw; border-radius:50%; background:var(--ink); color:#fff; display:grid; place-items:center; font-size:1.4cqw; font-weight:700 }
+  .step b{ display:block; font-size:1.5cqw }
+  .step small{ color:var(--muted); font-size:1.28cqw }
+  .metrics{ display:grid; grid-template-columns:1fr 1fr; gap:1.1cqw }
+  .metric{ background:#f7f9ff; border:.16cqw solid #dbe3f5; border-radius:.9cqw; padding:1.35cqw }
+  .metric b{ display:block; font-size:2.5cqw; letter-spacing:-.02em; color:var(--accent2) }
+  .metric small{ font-size:1.25cqw; color:var(--muted); line-height:1.35; display:block }
+  .quote{ border-left:.6cqw solid var(--accent); padding-left:1.4cqw; font-size:1.55cqw; line-height:1.5; color:#1d2940 }
+  .figs{ display:grid; grid-template-columns:1fr 1fr; gap:1.1cqw; margin-top:.6cqw }
+  .fig{ background:#eef1f8; border:.16cqw dashed #b9c4da; border-radius:.9cqw; padding:1.5cqw; text-align:center; font-size:1.2cqw; color:var(--muted); line-height:1.4 }
+  .fig b{ display:block; color:#324061; font-size:1.3cqw; margin-bottom:.5cqw }
+  footer{ margin-top:2.1cqw; background:var(--ink); color:#c7d3ee; padding:2.1cqw 4cqw; display:flex; align-items:center; gap:2.6cqw; font-size:1.35cqw }
+  footer .qr{ width:8.4cqw; height:8.4cqw; background:#fff; border-radius:.8cqw; display:grid; place-items:center; color:var(--ink); font-size:1.05cqw; text-align:center; font-weight:700; padding:.6cqw }
+  footer .links{ flex:1; display:flex; flex-direction:column; gap:.55cqw }
+  footer .links b{ color:#fff; font-size:1.5cqw }
+  footer .tag{ background:#24304a; padding:.5cqw 1.1cqw; border-radius:2cqw; font-size:1.2cqw }
+</style>
+</head>
+<body>
+<div class="poster">
+  <header>
+    <div class="kicker">NeurIPS 2025 · SEA Workshop · Poster</div>
+    <h1>Paper2Video: Automatic <span>Video Generation</span><br />from Scientific Papers</h1>
+    <div class="byline">
+      <span>Zeyu Zhu · Kevin Qinghong Lin · Mike Zheng Shou</span>
+      <em>Show Lab, National University of Singapore</em>
+      <em>arXiv:2510.05096</em>
+    </div>
+  </header>
+
+  <div class="body">
+    <div class="col">
+      <div class="card lead">
+        <h2>TL;DR</h2>
+        <p>一篇论文加一张作者照片与一段音频，直接产出一段带幻灯片、字幕、光标与配音的学术演讲视频。我们用 101 篇论文的基准把这件事定义成可评测的长时程智能体任务。</p>
+      </div>
+      <div class="card">
+        <h2>问题</h2>
+        <ul>
+          <li>一段 2–10 分钟的 talk，制作往往要花掉几个小时。</li>
+          <li>现有系统要么只做幻灯片，要么只做配音，缺少端到端整合。</li>
+          <li>长时程任务里的布局数值、光标位置、音画对齐都缺少可验证的反馈信号。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>基准设计</h2>
+        <p>101 篇论文，每篇配作者录制的演讲视频、幻灯片与演讲者元数据，作为长时程智能体任务的评测集。</p>
+        <div class="figs">
+          <div class="fig"><b>Fig. 1</b>PaperTalker 总览</div>
+          <div class="fig"><b>Fig. 2</b>按幻灯片推进的流水线</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <h2>PaperTalker：四个 builder</h2>
+        <div class="pipeline">
+          <div class="step"><span class="n">1</span><div><b>幻灯片 builder</b><small>以 LaTeX 工程为输入，LLM 直接写 Beamer 代码，用编译错误与警告引导修复</small></div></div>
+          <div class="step"><span class="n">2</span><div><b>字幕 builder</b><small>切分讲稿为句级单元，为后续对齐提供时间锚点</small></div></div>
+          <div class="step"><span class="n">3</span><div><b>光标 builder</b><small>句内静止、句间移动的视觉指代假设</small></div></div>
+          <div class="step"><span class="n">4</span><div><b>说话人 builder</b><small>语音合成 + 数字人渲染，把讲稿变成可看的讲述</small></div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Tree Search Visual Choice</h2>
+        <p>模型对数值型布局参数不敏感，于是改成规则化候选生成 + 视觉模型打分，用树搜索选出最优布局，再交给渲染环节。</p>
+        <div class="quote">把「猜一个数」换成「在有限候选里做视觉判断」，是这条流水线能稳定出稿的关键。</div>
+      </div>
+      <div class="card">
+        <h2>效率</h2>
+        <p>按幻灯片维度并行生成，减少长文档上的串行等待；相比逐页人工制作，量级上约为 6× 的加速。</p>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <h2>四项评价指标</h2>
+        <div class="metrics">
+          <div class="metric"><small>忠实度</small><b>Meta<br />Similarity</b></div>
+          <div class="metric"><small>感知质量</small><b>Present<br />Arena</b></div>
+          <div class="metric"><small>知识覆盖</small><b>Present<br />Quiz</b></div>
+          <div class="metric"><small>作者记忆度</small><b>IP<br />Memory</b></div>
+        </div>
+        <p style="margin-top:1.3cqw;color:#5b6780;font-size:1.3cqw">分数细节见论文；仓库 README 未给出具体数值。</p>
+      </div>
+      <div class="card">
+        <h2>结果</h2>
+        <ul>
+          <li>在自建基准上优于现有基线方法。</li>
+          <li>与作者录制的真实版本相比具有竞争力。</li>
+          <li>人工评测显示生成的讲述在可理解性上可用。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>局限</h2>
+        <ul>
+          <li>IP Memory 难以模拟与验证，作者也视为开放问题。</li>
+          <li>光标轨迹假设过于理想，缺少手势等真实表达。</li>
+          <li>依赖 LaTeX 源码；数字人渲染计算开销大（建议 48GB 显存）。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="qr">扫码<br />看 demo</div>
+    <div class="links">
+      <b>arXiv:2510.05096 · showlab/Paper2Video</b>
+      <span>本海报由 PaperCast 流水线生成：理解层 digest → Parser → Planner → Painter → 盲读校验</span>
+    </div>
+    <span class="tag">slides 7 页</span>
+    <span class="tag">视频 4:12</span>
+    <span class="tag">36×48 in</span>
+  </footer>
+</div>
+</body>
+</html>

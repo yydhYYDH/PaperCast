@@ -1,0 +1,304 @@
+diff --git a/app_server.go b/app_server.go
+index cfa3f11..0a9386b 100644
+--- a/app_server.go
++++ b/app_server.go
+@@ -19,14 +19,18 @@ type AppServer struct {
+ 	mcpServer          *mcp.Server
+ 	router             *gin.Engine
+ 	httpServer         *http.Server
+-	authToken          string
++	auth               AuthConfig
++	sessions           *sessionStore
++	limiter            *loginLimiter
+ }
+ 
+ // NewAppServer 创建新的应用服务器实例
+-func NewAppServer(xiaohongshuService *XiaohongshuService, authToken string) *AppServer {
++func NewAppServer(xiaohongshuService *XiaohongshuService, auth AuthConfig) *AppServer {
+ 	appServer := &AppServer{
+ 		xiaohongshuService: xiaohongshuService,
+-		authToken:          authToken,
++		auth:               auth,
++		sessions:           newSessionStore(),
++		limiter:            newLoginLimiter(),
+ 	}
+ 
+ 	// 初始化 MCP Server（需要在创建 appServer 之后，因为工具注册需要访问 appServer）
+diff --git a/go.mod b/go.mod
+index 74c4654..086874f 100644
+--- a/go.mod
++++ b/go.mod
+@@ -13,6 +13,7 @@ require (
+ 	github.com/stretchr/testify v1.11.1
+ 	github.com/ulikunitz/xz v0.5.15
+ 	github.com/xpzouying/headless_browser v0.4.0
++	golang.org/x/crypto v0.23.0
+ )
+ 
+ require (
+@@ -48,7 +49,6 @@ require (
+ 	github.com/ysmood/gson v0.7.3 // indirect
+ 	github.com/ysmood/leakless v0.9.0 // indirect
+ 	golang.org/x/arch v0.8.0 // indirect
+-	golang.org/x/crypto v0.23.0 // indirect
+ 	golang.org/x/net v0.25.0 // indirect
+ 	golang.org/x/oauth2 v0.34.0 // indirect
+ 	golang.org/x/sys v0.40.0 // indirect
+diff --git a/main.go b/main.go
+index bbcbb62..47514a3 100644
+--- a/main.go
++++ b/main.go
+@@ -18,14 +18,35 @@ func main() {
+ 		headless bool
+ 		port     string
+ 		token    string
++		authUser string
++		authPass string
+ 	)
+ 	flag.BoolVar(&headless, "headless", true, "是否无头模式")
+ 	flag.StringVar(&port, "port", ":18060", "端口")
+-	flag.StringVar(&token, "token", "", "鉴权 Token，留空则读取 AUTH_TOKEN")
++	flag.StringVar(&token, "token", "", "鉴权 Token（机器客户端），留空则读取 AUTH_TOKEN")
++	flag.StringVar(&authUser, "auth-user", "", "登录账号，留空则读取 AUTH_USER")
++	flag.StringVar(&authPass, "auth-pass", "", "登录密码（明文或 bcrypt hash），留空则读取 AUTH_PASS")
+ 	flag.Parse()
+ 	if token == "" {
+ 		token = os.Getenv("AUTH_TOKEN")
+ 	}
++	if authUser == "" {
++		authUser = os.Getenv("AUTH_USER")
++	}
++	if authPass == "" {
++		authPass = os.Getenv("AUTH_PASS")
++	}
++
++	auth := AuthConfig{Token: token, User: authUser, Pass: authPass}
++	if auth.Enabled() {
++		if auth.PasswordLoginEnabled() {
++			logrus.Infof("已启用鉴权：账号密码登录 + Token（用户 %s）", auth.User)
++		} else {
++			logrus.Infof("已启用鉴权：仅 Token")
++		}
++	} else {
++		logrus.Warnf("未配置任何鉴权，接口对可达方完全开放；公网部署前请设置 AUTH_USER / AUTH_PASS")
++	}
+ 
+ 	logrus.Infof("xiaohongshu-mcp version: %s", version)
+ 
+@@ -47,7 +68,7 @@ func main() {
+ 	xiaohongshuService := NewXiaohongshuService()
+ 
+ 	// 创建并启动应用服务器
+-	appServer := NewAppServer(xiaohongshuService, token)
++	appServer := NewAppServer(xiaohongshuService, auth)
+ 	if err := appServer.Start(port); err != nil {
+ 		logrus.Fatalf("failed to run server: %v", err)
+ 	}
+diff --git a/middleware.go b/middleware.go
+index dd7047f..9bdaa1b 100644
+--- a/middleware.go
++++ b/middleware.go
+@@ -1,37 +1,14 @@
+ package main
+ 
+ import (
+-	"crypto/subtle"
+ 	"net/http"
+-	"strings"
+ 
+ 	"github.com/gin-gonic/gin"
+ 	"github.com/sirupsen/logrus"
+ )
+ 
+-// authMiddleware 静态 Bearer Token 鉴权中间件，Token 为空时关闭鉴权。
+-func authMiddleware(token string) gin.HandlerFunc {
+-	expectedToken := []byte(token)
+-
+-	return func(c *gin.Context) {
+-		if token == "" {
+-			c.Next()
+-			return
+-		}
+-
+-		scheme, credentials, found := strings.Cut(c.GetHeader("Authorization"), " ")
+-		credentials = strings.TrimLeft(credentials, " ")
+-		if !found || !strings.EqualFold(scheme, "Bearer") ||
+-			subtle.ConstantTimeCompare([]byte(credentials), expectedToken) != 1 {
+-			c.Header("WWW-Authenticate", "Bearer")
+-			respondError(c, http.StatusUnauthorized, "UNAUTHORIZED", "未授权", nil)
+-			c.Abort()
+-			return
+-		}
+-
+-		c.Next()
+-	}
+-}
++// 鉴权中间件已迁移到 auth.go（AuthConfig.middleware），
++// 支持「Bearer Token 机器客户端」与「账号密码 + 会话 cookie 浏览器」两种凭据。
+ 
+ // corsMiddleware CORS 中间件
+ func corsMiddleware() gin.HandlerFunc {
+diff --git a/middleware_test.go b/middleware_test.go
+index 6e69676..dfedfa7 100644
+--- a/middleware_test.go
++++ b/middleware_test.go
+@@ -9,10 +9,15 @@ import (
+ 	"github.com/stretchr/testify/assert"
+ )
+ 
+-func newAuthTestRouter(token string) *gin.Engine {
++// newAuthTestRouter 注册两条路径：一条接口路径、一条页面路径，
++// 用来固定「接口 401 / 页面 302」这条契约。
++func newAuthTestRouter(cfg AuthConfig) *gin.Engine {
+ 	gin.SetMode(gin.TestMode)
+ 	router := gin.New()
+-	router.Use(authMiddleware(token))
++	router.Use(cfg.middleware(newSessionStore(), newLoginLimiter()))
++	router.GET("/api/v1/protected", func(c *gin.Context) {
++		c.Status(http.StatusNoContent)
++	})
+ 	router.GET("/protected", func(c *gin.Context) {
+ 		c.Status(http.StatusNoContent)
+ 	})
+@@ -21,9 +26,9 @@ func newAuthTestRouter(token string) *gin.Engine {
+ 
+ func TestAuthMiddlewareAllowsRequestWhenDisabled(t *testing.T) {
+ 	recorder := httptest.NewRecorder()
+-	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
++	request := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+ 
+-	newAuthTestRouter("").ServeHTTP(recorder, request)
++	newAuthTestRouter(AuthConfig{}).ServeHTTP(recorder, request)
+ 
+ 	assert.Equal(t, http.StatusNoContent, recorder.Code)
+ }
+@@ -41,10 +46,10 @@ func TestAuthMiddlewareAllowsValidBearerToken(t *testing.T) {
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+ 			recorder := httptest.NewRecorder()
+-			request := httptest.NewRequest(http.MethodGet, "/protected", nil)
++			request := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+ 			request.Header.Set("Authorization", tt.authorization)
+ 
+-			newAuthTestRouter("secret-token").ServeHTTP(recorder, request)
++			newAuthTestRouter(AuthConfig{Token: "secret-token"}).ServeHTTP(recorder, request)
+ 
+ 			assert.Equal(t, http.StatusNoContent, recorder.Code)
+ 		})
+@@ -69,12 +74,12 @@ func TestAuthMiddlewareRejectsInvalidCredentials(t *testing.T) {
+ 	for _, tt := range tests {
+ 		t.Run(tt.name, func(t *testing.T) {
+ 			recorder := httptest.NewRecorder()
+-			request := httptest.NewRequest(http.MethodGet, "/protected", nil)
++			request := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
+ 			if tt.authorization != "" {
+ 				request.Header.Set("Authorization", tt.authorization)
+ 			}
+ 
+-			newAuthTestRouter("secret-token").ServeHTTP(recorder, request)
++			newAuthTestRouter(AuthConfig{Token: "secret-token"}).ServeHTTP(recorder, request)
+ 
+ 			assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+ 			assert.Equal(t, "Bearer", recorder.Header().Get("WWW-Authenticate"))
+@@ -82,3 +87,27 @@ func TestAuthMiddlewareRejectsInvalidCredentials(t *testing.T) {
+ 		})
+ 	}
+ }
++
++// TestAuthMiddlewareRedirectsPageRequestToLogin 固定页面请求跳登录页的契约：
++// 浏览器访问页面时才需要 302，接口请求仍返回 JSON。
++func TestAuthMiddlewareRedirectsPageRequestToLogin(t *testing.T) {
++	recorder := httptest.NewRecorder()
++	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
++
++	newAuthTestRouter(AuthConfig{Token: "secret-token"}).ServeHTTP(recorder, request)
++
++	assert.Equal(t, http.StatusFound, recorder.Code)
++	assert.Equal(t, "/login?next=%2Fprotected", recorder.Header().Get("Location"))
++}
++
++// TestAuthMiddlewareAccountPasswordIgnoresBearer 固定「未配置 Token 时，
++// 空的 Bearer 头不能当通行证」，避免账号密码模式被绕过。
++func TestAuthMiddlewareAccountPasswordIgnoresBearer(t *testing.T) {
++	recorder := httptest.NewRecorder()
++	request := httptest.NewRequest(http.MethodGet, "/api/v1/protected", nil)
++	request.Header.Set("Authorization", "Bearer ")
++
++	newAuthTestRouter(AuthConfig{User: "me", Pass: "pw"}).ServeHTTP(recorder, request)
++
++	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
++}
+diff --git a/routes.go b/routes.go
+index f6bffc3..e503fdd 100644
+--- a/routes.go
++++ b/routes.go
+@@ -23,6 +23,11 @@ func setupRoutes(appServer *AppServer) *gin.Engine {
+ 	// 健康检查
+ 	router.GET("/health", healthHandler)
+ 
++	// 登录相关端点必须放在鉴权中间件之外，否则无法登录
++	router.GET("/login", appServer.handleLoginPage)
++	router.POST("/login", appServer.handleLoginSubmit)
++	router.POST("/logout", appServer.handleLogout)
++
+ 	// MCP 端点 - 使用官方 SDK 的 Streamable HTTP Handler
+ 	mcpHandler := mcp.NewStreamableHTTPHandler(
+ 		func(r *http.Request) *mcp.Server {
+@@ -37,7 +42,7 @@ func setupRoutes(appServer *AppServer) *gin.Engine {
+ 		},
+ 	)
+ 	protected := router.Group("")
+-	protected.Use(authMiddleware(appServer.authToken))
++	protected.Use(appServer.auth.middleware(appServer.sessions, appServer.limiter))
+ 
+ 	protected.Any("/mcp", gin.WrapH(mcpHandler))
+ 	protected.Any("/mcp/*path", gin.WrapH(mcpHandler))
+diff --git a/routes_test.go b/routes_test.go
+index 4a07208..e3bb8bc 100644
+--- a/routes_test.go
++++ b/routes_test.go
+@@ -15,7 +15,7 @@ import (
+ //
+ // 契约由 routes.go 里一行 Stateless 支撑，丢掉它编译和其他单测都不会报错。
+ func TestMCPStatelessSinglePost(t *testing.T) {
+-	router := setupRoutes(NewAppServer(NewXiaohongshuService(), ""))
++	router := setupRoutes(NewAppServer(NewXiaohongshuService(), AuthConfig{}))
+ 	server := httptest.NewServer(router)
+ 	defer server.Close()
+ 
+@@ -58,7 +58,7 @@ func TestMCPStatelessSinglePost(t *testing.T) {
+ // 三个工具的注册各是 registerTools 里一段独立代码，漏掉任何一个编译都不会报错，
+ // 只有真正调用时才会发现工具不存在。
+ func TestNotificationToolsRegistered(t *testing.T) {
+-	router := setupRoutes(NewAppServer(NewXiaohongshuService(), ""))
++	router := setupRoutes(NewAppServer(NewXiaohongshuService(), AuthConfig{}))
+ 	server := httptest.NewServer(router)
+ 	defer server.Close()
+ 
+@@ -96,7 +96,7 @@ func TestNotificationToolsRegistered(t *testing.T) {
+ // 读路由表而不是发请求：这些 handler 会真的起浏览器访问小红书，
+ // 单测里不能碰。
+ func TestNotificationRoutesRegistered(t *testing.T) {
+-	router := setupRoutes(NewAppServer(NewXiaohongshuService(), ""))
++	router := setupRoutes(NewAppServer(NewXiaohongshuService(), AuthConfig{}))
+ 
+ 	registered := make(map[string]bool)
+ 	for _, r := range router.Routes() {
+@@ -116,7 +116,7 @@ func TestNotificationRoutesRegistered(t *testing.T) {
+ }
+ 
+ func TestProtectedRoutesRequireBearerToken(t *testing.T) {
+-	router := setupRoutes(NewAppServer(NewXiaohongshuService(), "secret-token"))
++	router := setupRoutes(NewAppServer(NewXiaohongshuService(), AuthConfig{Token: "secret-token"}))
+ 
+ 	tests := []struct {
+ 		name       string
+@@ -144,7 +144,7 @@ func TestProtectedRoutesRequireBearerToken(t *testing.T) {
+ }
+ 
+ func TestMCPAcceptsConfiguredBearerToken(t *testing.T) {
+-	router := setupRoutes(NewAppServer(NewXiaohongshuService(), "secret-token"))
++	router := setupRoutes(NewAppServer(NewXiaohongshuService(), AuthConfig{Token: "secret-token"}))
+ 	recorder := httptest.NewRecorder()
+ 	request := httptest.NewRequest(http.MethodPost, "/mcp",
+ 		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))

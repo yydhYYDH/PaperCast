@@ -1,0 +1,96 @@
+{
+  "arxivId": "2510.05096",
+  "title": "Paper2Video: Automatic Video Generation from Scientific Papers",
+  "authors": [
+    "Zeyu Zhu",
+    "Kevin Qinghong Lin",
+    "Mike Zheng Shou"
+  ],
+  "venue": "Scaling Environments for Agents (SEA) Workshop at NeurIPS 2025；Show Lab, National University of Singapore",
+  "year": 2025,
+  "abstractCn": "学术演讲视频是研究成果传播的重要媒介，但制作一段 2 到 10 分钟的视频往往需要数小时的幻灯片设计、录制与剪辑。该工作提出 Paper2Video 基准，包含 101 篇研究论文及其作者录制的演讲视频、幻灯片与演讲者元数据，并设计 Meta Similarity、PresentArena、PresentQuiz、IP Memory 四项指标衡量视频如何向观众传达论文信息。在此基础上提出 PaperTalker，一个面向学术演讲视频生成的多智能体框架，集成幻灯片生成与布局精修、光标定位、字幕、语音合成与数字人渲染，并按幻灯片并行生成以提升效率。",
+  "keywords": [
+    "学术演讲视频生成",
+    "多智能体框架",
+    "幻灯片生成",
+    "光标定位",
+    "语音合成",
+    "数字人（talking head）",
+    "视频生成评测基准",
+    "多模态长文档"
+  ],
+  "contributions": [
+    "提出 Paper2Video 基准：101 篇研究论文，每篇配有作者录制的演讲视频、幻灯片与演讲者元数据，用于评测长时程的智能体任务。",
+    "设计了四项面向学术演讲视频的评价指标——Meta Similarity、PresentArena、PresentQuiz 与 IP Memory，覆盖忠实度、感知质量、知识覆盖与作者记忆度。",
+    "提出 PaperTalker：首个面向学术演讲视频生成的多智能体框架，统一了幻灯片生成、字幕、光标定位、语音合成与数字人渲染多条通路。",
+    "提出 Tree Search Visual Choice 布局精修方法，用规则化候选生成配合视觉模型打分，缓解模型对数值型布局参数不敏感的问题。",
+    "将生成按幻灯片维度并行化以提升效率，并在基准上报告结果优于现有基线、与作者录制版本相比具有竞争力。"
+  ],
+  "method": "PaperTalker 把制作流程拆成四个 builder。第一，幻灯片 builder：以论文的 LaTeX 工程为输入，由大模型直接编写 Beamer 代码，编译后收集报错与警告，用错误信息引导修复；警告同时被当作布局探针，用来定位需要精修的页面。第二，针对溢出页面，Tree Search Visual Choice 用规则化方式生成布局变体邻域（纯文字页扫描字号，含图页先调整图片缩放再缩小字号），逐张渲染成图像，再由视觉模型打分选出最优候选，从而把离散的布局搜索与语义推理解耦。第三，字幕与光标 builder：把幻灯片栅格化后交给视觉语言模型，产出句级字幕与视觉焦点提示；焦点提示作为中间表示，先由界面定位模型从截图回归出光标屏幕坐标，再用词级时间戳对齐到句子，得到每句光标的起止时间。第四，演讲者 builder：依据字幕、作者肖像与语音样本合成语音并渲染数字人画面；由于幻灯片之间是硬切换、不要求跨页的时间连续性，各页可并行生成以缩短总时长。",
+  "results": [
+    {
+      "label": "Meta Similarity",
+      "value": "作者报告生成结果与作者原版的对齐程度优于基线",
+      "note": "论文与项目仓库（README）均未给出具体分数；指标包含幻灯片与字幕的内容相似度、以及语音说话人嵌入的余弦相似度"
+    },
+    {
+      "label": "PresentArena",
+      "value": "与前代方法相比获得更高的两两比较胜率",
+      "note": "作者在 README 与项目主页给出的定性结论，未给出具体概率数值"
+    },
+    {
+      "label": "PresentQuiz",
+      "value": "在信息覆盖上优于现有基线，被作者表述为可与作者录制的视频相比",
+      "note": "作者在论文摘要与 README 中使用“更忠实、更有信息量”的表述；具体准确率数值未在 README 中给出"
+    },
+    {
+      "label": "IP Memory",
+      "value": "作者报告在观众回忆关联上取得最好结果",
+      "note": "完整实现细节在论文附录；具体百分比未在 README 中给出"
+    },
+    {
+      "label": "生成效率",
+      "value": "按幻灯片并行生成带来显著加速，作者报告为 6 倍量级",
+      "note": "论文正文与结论中的报告值；README 仅说明提供不含数字人的快速生成版本"
+    },
+    {
+      "label": "基准规模",
+      "value": "101 篇论文，每篇配有作者录制的演讲视频、幻灯片与演讲者元数据",
+      "note": "论文摘要、README 与项目主页一致给出"
+    },
+    {
+      "label": "人工评测",
+      "value": "作者录制的视频得分最高，PaperTalker 居次并优于其他基线",
+      "note": "作者报告的结论性描述；具体评分未在 README 中给出"
+    }
+  ],
+  "figures": [
+    {
+      "id": "fig1",
+      "caption": "总览图：左侧是 PaperTalker——集成了幻灯片、字幕、光标、语音合成与数字人渲染的智能体；右侧是 Paper2Video 基准及其评价指标。",
+      "source": "README 的 assets/teaser.png 与论文 Figure 1"
+    },
+    {
+      "id": "fig2",
+      "caption": "方法流程：一条按幻灯片推进的流水线，各 builder 依次处理论文、生成幻灯片、字幕、光标与演讲者画面。",
+      "source": "README 的 assets/method.png 与论文方法图"
+    },
+    {
+      "id": "fig3",
+      "caption": "评价指标设计：从观众与作者两个维度出发，对应 Meta Similarity、PresentArena、PresentQuiz 与 IP Memory 四项指标。",
+      "source": "README 的 assets/metrics.png 与论文指标章节"
+    },
+    {
+      "id": "fig4",
+      "caption": "演示样例：输入为一篇论文、一张作者肖像与一段音频样本，输出为一段演讲视频。",
+      "source": "README 输入输出表格与项目主页样例区"
+    }
+  ],
+  "limitations": [
+    "学术演讲视频的记忆度（IP Memory）难以模拟与验证，作者自身也将其视为开放问题。",
+    "光标轨迹被假设为句内静止、句间移动，与真人连续移动甚至配合手势的表达方式仍有差距。",
+    "流水线以论文的 LaTeX 工程作为输入，对没有 LaTeX 源码或其他格式论文的适用性未在 README 中说明。",
+    "生成质量依赖底层的语音合成与数字人模型，数字人渲染本身计算开销大，完整版本需要较高显存（README 建议 48GB 显存的 NVIDIA A6000）。"
+  ],
+  "stagesNote": "这条流水线的各阶段分别依赖：幻灯片 builder 依赖论文的 LaTeX 工程；字幕与光标 builder 依赖已生成的幻灯片图像（以及语音音频用于时间对齐）；演讲者 builder 依赖字幕文本、作者肖像与语音样本；最后合成阶段依赖前面全部产物（幻灯片、语音、光标轨迹与演讲者片段）。"
+}
