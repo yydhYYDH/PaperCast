@@ -76,12 +76,18 @@ for f in glob.glob(os.path.join(WS, "var", "runs", "*", "run.json")):
         d = json.load(open(f, encoding="utf-8"))
     except Exception:
         continue
-    rows.append((d.get("createdAt") or 0, d.get("id", "?"), d.get("status", "?"), (d.get("title") or "")[:28]))
+    # 光有 id/标题看不出「卡在哪一段」，而重启要不要等正是由这一段决定的：
+    # 在 video 段重启 = 白扔几分钟 ffmpeg 渲染。所以带上当前段与已完成段数。
+    stages = d.get("stages") or []
+    cur = next((s.get("id") for s in stages if s.get("status") == "running"), "")
+    fin = len([s for s in stages if s.get("status") in ("done", "skipped")])
+    rows.append((d.get("createdAt") or 0, d.get("id", "?"), d.get("status", "?"), (d.get("title") or "")[:28], cur, fin, len(stages)))
 def n(st):
     return len([r for r in rows if r[2] == st])
 print("  共 %d 条 | running %d | waiting %d | failed %d | done %d" % (len(rows), n("running"), n("waiting"), n("failed"), n("done")))
-for ts, rid, st, t in sorted([r for r in rows if r[2] in ("running", "waiting")]):
-    print("   %-8s %s %s" % (st, rid, t))
+for ts, rid, st, t, cur, fin, tot in sorted([r for r in rows if r[2] in ("running", "waiting")]):
+    where = ("当前段 %s（已完成 %d/%d 段）" % (cur, fin, tot)) if cur else "（无正在跑的段）"
+    print("   %-8s %s %s %s" % (st, rid, t, where))
 if n("running"):
     print("  !! 有 run 正在跑：现在重启后端 = 它们会被判 failed(INTERRUPTED)；先等，或先在看板喊一声再动")
 if n("waiting"):
