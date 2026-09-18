@@ -1,0 +1,42 @@
+# 后端运行时依赖的**精确锁版**（从实际跑通的 venv 导出，Python 3.13）
+# 安装：apps/papercast-server/.venv/bin/pip install -r requirements.lock.txt
+# 说明：requirements.txt 只写直接依赖（带下限），这个文件是可直接复现的全量快照。
+# 重新生成：python -c "import importlib.metadata as m;print(chr(10).join(sorted(f'{d.metadata[chr(78)+chr(97)+chr(109)+chr(101)]}=={d.version}' for d in m.distributions())))"
+
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+certifi==2026.7.22
+click==8.5.0
+fastapi==0.141.1
+flatbuffers==25.12.19
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.8.0
+httpx==0.28.1
+idna==3.20
+Jinja2==3.1.6
+MarkupSafe==3.0.3
+networkx==3.6.1
+numpy==2.5.3
+onnxruntime==1.30.0
+packaging==26.3
+pillow==12.3.0
+protobuf==7.36.2
+psutil==7.2.2
+pydantic==2.13.5
+pydantic_core==2.46.5
+pymupdf-layout==1.28.2
+pymupdf4llm==1.28.2
+pymupdf==1.28.2
+python-dotenv==1.2.3
+python-multipart==0.0.32
+PyYAML==6.0.3
+starlette==1.6.0
+tabulate==0.10.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+uvicorn==0.53.0
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==17.1

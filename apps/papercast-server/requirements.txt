@@ -1,8 +1,19 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
+# PaperCast 后端（FastAPI）直接依赖。
+#
+# 两种装法：
+#   1) 精确复现（推荐）：pip install -r requirements.lock.txt（37 个包的全量锁版，来自实跑环境）
+#   2) 宽松安装：pip install -r requirements.txt（跟随下表的下限，可能拉到更新的小版本）
+#
+# 不需要 Node/Go/浏览器：后端只做 PDF 解析、编排、调用 LLM 与本地通道服务的 HTTP 接口。
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
 python-multipart>=0.0.9
-pymupdf>=1.28
-pymupdf4llm>=1.28
+pymupdf>=1.28          # PDF 解析（同时提供 pymupdf4llm 用的底层）
+pymupdf4llm>=1.28      # PDF -> Markdown（会一并拉 onnxruntime / pymupdf_layout）
 httpx>=0.27
 jinja2>=3.1
 pillow>=10
+python-dotenv>=1.0
+psutil>=5.9            # /api/ops 的服务与进程信息
+pyyaml>=6.0            # 语音风格等配置

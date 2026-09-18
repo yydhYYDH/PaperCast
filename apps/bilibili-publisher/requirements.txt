@@ -1,0 +1,16 @@
+# B站发布通道（apps/bilibili-publisher，:18080）的依赖。
+#
+# 分两层，别装到同一个环境里：
+#   1) 服务本体（FastAPI）：跟后端共用 apps/papercast-server/.venv 即可 ——
+#      所以本文件只列这一层，装法与后端一致。
+#   2) 上传工具 biliup：**独立 venv**（默认 var/toolchains/bili-venv），
+#      因为它是命令行程序、有自己的一堆依赖，服务用 subprocess 调它：
+#        python3 -m venv var/toolchains/bili-venv
+#        var/toolchains/bili-venv/bin/pip install "biliup==1.2.4"   # 版本很重要，1.x 与 0.x 命令行不兼容
+#      或一把装好：./ops/install.sh --with-bilibili
+#
+# 没有 biliup 时服务照样能起：如实上报 unconfigured，素材包照常导出（不会假装能投）。
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.9

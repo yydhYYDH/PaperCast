@@ -34,6 +34,7 @@
 ## 4. 验证命令（改完随手跑）
 
 ```bash
+./ops/install.sh                       # 首次安装（幂等；已装过会跳过）
 ./ops/start_all.sh                     # 起服务（幂等：端口占用会跳过）
 curl -s http://127.0.0.1:8000/api/health
 cd apps/papercast && npx vue-tsc --noEmit

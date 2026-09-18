@@ -1,0 +1,19 @@
+# 知乎发布通道（apps/zhihu-publisher，:18070）的依赖。
+#
+# 它要同时满足两件事，所以**单独建一个 venv**（默认 var/toolchains/zhihu-mcp-venv）：
+#   1) 跑自己的 FastAPI 服务；
+#   2) import 上游只读克隆 reference/upstream/zhihu-mcp 里的 ZhihuService（Playwright 通道）。
+# 因此这个 venv 既要 FastAPI，也要 fastmcp/playwright/loguru。精确锁版见 requirements.lock.txt。
+#
+# 前置：
+#   ./ops/sync_upstream.sh          # 先把 reference/upstream/zhihu-mcp 按登记的 commit 取回来
+#   ./ops/install.sh --with-zhihu   # 建 venv + 装依赖 + playwright install chromium
+#
+# 只有走「官方 OpenAPI」通道时才是纯 HTTP（不需要浏览器）；Playwright 通道必须要 chromium。
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+httpx>=0.27
+loguru>=0.7
+fastmcp>=4.0
+playwright>=1.40
