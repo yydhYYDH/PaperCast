@@ -13,10 +13,11 @@ const platforms = usePlatformsStore()
 
 const TITLES: Record<ViewId, string> = {
   workbench: '工作台',
-  runs: '运行历史',
-  library: '产物库',
+  runs: '运行记录',
+  library: '作品库',
   platforms: '平台账号',
-  settings: '引擎与环境',
+  ops: '运营维护',
+  settings: '设置',
 }
 
 const ok = computed(() => ENV_DEPS.filter((d) => d.state === 'ok').length)
@@ -35,9 +36,9 @@ onMounted(() => {
   <header class="top">
     <div class="row gap">
       <strong class="brand">PaperCast</strong>
-      <span class="muted-2">/</span>
+      <span class="sep" />
       <span class="cur">{{ TITLES[ui.view] }}</span>
-      <span class="panel-sub hide-sm">论文 → 文章 · Poster · 视频</span>
+      <span class="panel-sub hide-sm">把一篇论文变成大家看得懂的内容</span>
     </div>
 
     <div class="grow" />
@@ -54,8 +55,7 @@ onMounted(() => {
       @click="ui.setView('platforms')"
     >
       <i class="dot" />
-      平台账号 · {{ platforms.loading ? '探测中…' : '待探测' }}
-      <span class="arrow">→</span>
+      {{ platforms.loading ? '正在检查登录状态…' : '查看平台登录状态' }}
     </button>
 
     <button
@@ -67,33 +67,29 @@ onMounted(() => {
     >
       <i class="dot" />
       小红书 {{ xhs.state === 'ready' ? (xhs.account || '已登录') : PLATFORM_STATE[xhs.state].label }}
-      <span class="arrow">→</span>
     </button>
 
-    <span class="chip" :class="ok === ENV_DEPS.length ? 'ok' : 'warn'">
-      <i class="dot" />依赖 {{ ok }}/{{ ENV_DEPS.length }}
-    </span>
-    <span class="chip mono" :title="store.apiLabel">
-      {{ store.apiLabel.includes('mock') ? 'mock adapter' : 'http adapter' }}
+    <span class="chip" :class="ok === ENV_DEPS.length ? 'ok' : 'warn'" title="本机依赖项的就绪数量">
+      <i class="dot" />环境 {{ ok }}/{{ ENV_DEPS.length }}
     </span>
   </header>
 </template>
 
 <style scoped>
 .top {
-  display: flex; align-items: center; gap: 10px;
-  padding: 11px 16px 11px 18px;
-  border-bottom: 1px solid var(--line-soft);
-  background: rgba(255, 255, 255, 0.86);
-  backdrop-filter: saturate(180%) blur(10px);
+  display: flex; align-items: center; gap: 12px;
+  padding: 15px 26px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: saturate(180%) blur(8px);
 }
-.brand { font-size: 14.5px; letter-spacing: -0.01em; }
+.brand { font-family: var(--serif); font-size: 16px; font-weight: 500; color: var(--text); letter-spacing: -0.01em; }
+.sep { width: 1px; height: 15px; background: var(--line); }
 .cur { font-size: 13px; color: var(--text-2); }
 .gap { gap: 8px; }
-.demo { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); cursor: pointer; }
-.demo input { accent-color: var(--accent); }
+.demo { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); cursor: pointer; }
+.demo input { accent-color: var(--text); }
 .login-chip { cursor: pointer; transition: 0.15s; }
-.login-chip:hover { border-color: var(--accent); color: var(--text); }
-.login-chip .arrow { color: var(--muted-2); }
+.login-chip:hover { border-color: #dcdbd6; color: var(--text); }
 @media (max-width: 1280px) { .hide-sm { display: none; } }
 </style>

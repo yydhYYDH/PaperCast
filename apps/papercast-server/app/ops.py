@@ -260,16 +260,28 @@ async def _zhihu_items(seed: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 async def _xhs_account() -> dict[str, Any]:
+    """账号级数据（粉丝 / 获赞 / 收藏）。MCP 的 /api/v1/user/me 是 GET，而且每次真开一次浏览器，很慢。
+
+    未登录时 MCP 会直接 500 —— 这里翻译成一句人话，别把它当成「数字为零」。
+    """
+    base = settings.xhs_mcp_base
     try:
-        async with httpx.AsyncClient(timeout=90.0, trust_env=False) as cx:
-            r = await cx.get(f"{settings.xhs_mcp_base}/api/v1/user/me")
+        async with httpx.AsyncClient(timeout=150.0, trust_env=False) as cx:
+            status = await cx.get(f"{base}/api/v1/login/status")
+            body_status = status.json() if status.content else {}
+            logged = bool(((body_status.get("data") or {}) if isinstance(body_status, dict) else {}).get("is_logged_in"))
+            if status.status_code < 400 and not logged:
+                return {"available": False, "detail": "小红书 MCP 报告未登录：先去「平台账号」扫码，再回来刷数据"}
+            r = await cx.get(f"{base}/api/v1/user/me")
     except Exception as e:
         return {"available": False, "detail": f"MCP 不可达（{type(e).__name__}）"}
     body = r.json() if r.content else {}
     if r.status_code != 200 or not body.get("success"):
-        return {"available": False, "detail": (body.get("message") or f"HTTP {r.status_code}")[:160]}
-    data = body.get("data")
-    return {"available": True, "raw": data}
+        detail = str(body.get("message") or f"MCP 返回 HTTP {r.status_code}")
+        if r.status_code >= 500:
+            detail = f"MCP 返回 {r.status_code}（未登录或浏览器启动失败）：{detail}"
+        return {"available": False, "detail": detail[:200]}
+    return {"available": True, "raw": body.get("data")}
 
 
 def _sum(items: list[dict[str, Any]], key: str) -> int:

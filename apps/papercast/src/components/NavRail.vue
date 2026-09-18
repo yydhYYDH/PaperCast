@@ -6,17 +6,18 @@ defineEmits<{ (e: 'navigate', v: ViewId): void }>()
 
 const items: { id: ViewId; label: string; icon: string }[] = [
   { id: 'workbench', label: '工作台', icon: 'M4 13h6V4H4v9Zm10 7h6v-9h-6v9ZM4 20h6v-4H4v4Zm10-11h6V4h-6v5Z' },
-  { id: 'runs', label: '运行历史', icon: 'M12 8v5l4 2M12 3a9 9 0 1 0 9 9' },
-  { id: 'library', label: '产物库', icon: 'M4 5h16v4H4zM4 15h16v4H4zM4 11h16' },
+  { id: 'runs', label: '运行记录', icon: 'M12 8v5l4 2M12 3a9 9 0 1 0 9 9' },
+  { id: 'library', label: '作品库', icon: 'M4 5h16v4H4zM4 15h16v4H4zM4 11h16' },
   { id: 'platforms', label: '平台账号', icon: 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 9a7 7 0 0 1 11.7-5.2M16.5 15.5l2 2 3.5-3.5' },
-  { id: 'settings', label: '引擎与环境', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8-3a8 8 0 0 0-.1-1.3l2-1.5-2-3.4-2.3 1a8 8 0 0 0-2.2-1.3L15 3H9l-.4 2.5a8 8 0 0 0-2.2 1.3l-2.3-1-2 3.4 2 1.5A8 8 0 0 0 4 12c0 .4 0 .9.1 1.3l-2 1.5 2 3.4 2.3-1a8 8 0 0 0 2.2 1.3L9 21h6l.4-2.5a8 8 0 0 0 2.2-1.3l2.3 1 2-3.4-2-1.5c.1-.4.1-.9.1-1.3Z' },
+  { id: 'ops', label: '运营维护', icon: 'M4 19h16M6 16V9m4 7V4m4 12v-6m4 6v-9' },
+  { id: 'settings', label: '设置', icon: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8-3a8 8 0 0 0-.1-1.3l2-1.5-2-3.4-2.3 1a8 8 0 0 0-2.2-1.3L15 3H9l-.4 2.5a8 8 0 0 0-2.2 1.3l-2.3-1-2 3.4 2 1.5A8 8 0 0 0 4 12c0 .4 0 .9.1 1.3l-2 1.5 2 3.4 2.3-1a8 8 0 0 0 2.2 1.3L9 21h6l.4-2.5a8 8 0 0 0 2.2-1.3l2.3 1 2-3.4-2-1.5c.1-.4.1-.9.1-1.3Z' },
 ]
 </script>
 
 <template>
   <nav class="rail">
-    <div class="brand" title="PaperCast">
-      <span>PC</span>
+    <div class="brand" title="PaperCast · 把论文变成大家看得懂的内容">
+      <span>P</span>
     </div>
     <button
       v-for="it in items"
@@ -49,14 +50,14 @@ const items: { id: ViewId; label: string; icon: string }[] = [
   background: var(--bg-2);
 }
 .brand {
-  width: 38px; height: 38px;
+  width: 34px; height: 34px;
   display: grid; place-items: center;
-  border-radius: 11px;
-  background: linear-gradient(140deg, var(--accent), var(--accent-2));
-  color: #fff;
-  font-weight: 800; font-size: 13px; letter-spacing: -0.02em;
-  margin-bottom: 8px;
-  box-shadow: 0 10px 22px -12px rgba(79, 70, 229, 0.9);
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-family: var(--serif); font-weight: 500; font-size: 16px; letter-spacing: 0;
+  margin-bottom: 12px;
 }
 .item {
   width: 46px; height: 44px;
@@ -67,7 +68,7 @@ const items: { id: ViewId; label: string; icon: string }[] = [
 }
 .item svg { width: 18px; height: 18px; }
 .item .txt { font-size: 9.5px; letter-spacing: 0.02em; }
-.item:hover { color: var(--text-2); background: rgba(255, 255, 255, 0.03); }
+.item:hover { color: var(--text); background: var(--panel-3); }
 .item.on { color: var(--accent); background: var(--accent-soft); }
 .grow { flex: 1; }
 .live { width: 30px; height: 30px; display: grid; place-items: center; }

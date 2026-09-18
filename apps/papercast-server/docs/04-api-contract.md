@@ -191,3 +191,56 @@ HTTP 状态码：400 参数错 / 404 不存在 / 409 状态冲突（对已放行
 - 闸门 `publish-gate` 选项：`continue`（只向就绪渠道投递）/ `draft`（只准备）/ `skip`（本轮不发）。
 
 完整规格（新增平台四步、B 站选型、失败隔离的验收方式）见 `08-channels.md`。
+
+## 8. 运营维护层（`app/ops.py`，2026-09-19 新增）
+
+给「跑起来之后」用的四个端点。与渠道层的分工：渠道层回答「账号能不能投」，这一层回答
+「机器还健康吗、投出去的内容效果如何」。
+
+### `GET /api/ops/services` — 五个本机服务的真实状态
+
+```json
+[{ "name": "backend", "label": "后端 API", "port": 8000, "up": true, "pid": 30330,
+   "url": "http://127.0.0.1:8000",
+   "health": { "probed": true, "ok": true, "status": 200, "elapsedMs": 9, "detail": "HTTP 200" },
+   "log": { "path": "…/var/logs/backend.log", "exists": true, "size": 3072, "updatedAt": 1789750938434 },
+   "restartHint": "./ops/start_all.sh backend" }]
+```
+
+- 白名单固定 `backend | frontend | mcp | zhihu | bilibili`；未知名字 → 404 `SERVICE_NOT_FOUND`；
+- `up` 用 TCP 连接 127.0.0.1:port 判断（不解析 `ss`/`netstat`，也不需要额外权限）；
+- 前端（5178）没有 HTTP 健康接口，`health.probed=false` 并说明原因，不假装正常。
+
+### `POST /api/ops/services/{name}/{action}` — 启停
+
+`action ∈ {start, stop, restart}`；`restart` 先 `stop_all.sh <name>` 再 `start_all.sh <name>`。
+一律通过 `ops/` 脚本执行（不自己拼命令行），90s 超时 → 504 `OPS_TIMEOUT`。
+
+### `GET /api/ops/logs?name=backend&lines=200&grep=` — 日志尾巴
+
+读 `var/logs/<name>.log`，返回 `{lines[], matched, size, truncated, path}`；`lines` 上限 2000。只读。
+
+### `GET /api/ops/metrics?force=false` — 运营数据
+
+```json
+{ "fetchedAt": 1789751003955,
+  "channels": [ { "id": "bilibili", "name": "B 站", "kind": "video",
+      "source": "公开 view 接口（api.bilibili.com/x/web-interface/view）",
+      "items": [ { "id": "BV1DveU6GEPR", "url": "…", "title": "…", "author": "YYDH54",
+                   "publishedAt": 1789748791000,
+                   "stats": { "view": 1, "like": 0, "coin": 0, "favorite": 0, "reply": 0, "danmaku": 0, "share": 0 },
+                   "source": "var/runs/run_a7b9460d3953/video/upload_result.json" } ],
+      "errors": [], "totals": { "view": 1, "…": 0 }, "gap": "" } ] }
+```
+
+约定（都在 `app/ops.py` 顶部注释里）：
+
+- **内容从本机回执里发现**：扫 `var/runs` 与 `var/artifacts` 下 JSON 里的 BV 号与 `zhuanlan.zhihu.com/p/…`，
+  只认真的投递过的条目；
+- **每个渠道带 `source`**（数据来源）与 `gap`（拿不到什么、为什么），界面直接展示；
+- **取不到不编**：知乎通道抓不到正文标题时返回 502 `STATS_EMPTY`，本层把它放进 `errors`，
+  小红书未登录时提示「先去平台账号扫码」；两者都**不会**退化成 `0`；
+- 60s 缓存（`force=true` 绕过）：小红书那次探测会真开一次浏览器，不缓存会拖死页面。
+
+各平台能拿到什么（2026-09-19 实测：B 站全量互动数据 ✅、知乎赞同/评论需登录态 ⚠、两家浏览量均不公开 ❌）
+见 `../../../docs/10-ops-and-theme.md`。

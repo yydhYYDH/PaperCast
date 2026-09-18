@@ -2,11 +2,12 @@
 import { computed, reactive, ref, watchEffect } from 'vue'
 import { useRunsStore } from '../stores/runs'
 import type { RunConfig, SourceInput, SourceKind } from '../types'
+import { EXAMPLE_PAPER, exampleRunConfig } from '../data/example'
 
 const store = useRunsStore()
 
 const kind = ref<SourceKind>('arxiv')
-const arxiv = ref('https://arxiv.org/abs/2510.05096')
+const arxiv = ref(EXAMPLE_PAPER.url)
 const latexPath = ref('')
 const dragging = ref(false)
 const file = ref<{ name: string; size: number } | null>(null)
@@ -14,7 +15,7 @@ const showConfig = ref(true)
 
 const kinds: { id: SourceKind; label: string; hint: string }[] = [
   { id: 'arxiv', label: 'arXiv 链接', hint: '粘贴 abs / pdf 链接或裸 ID，自动下载 LaTeX 源码' },
-  { id: 'pdf', label: 'PDF 文件', hint: '拖入本地 PDF，走 MinerU 解析' },
+  { id: 'pdf', label: 'PDF 文件', hint: '拖入本地 PDF，走 PyMuPDF 解析（本机无 GPU，纯本地）' },
   { id: 'latex', label: 'LaTeX 源码', hint: '本地目录 / .tar.gz / main.tex' },
 ]
 
@@ -25,12 +26,13 @@ const arxivId = computed(() => {
 
 const parsed = computed(() => {
   if (kind.value === 'arxiv') {
-    if (arxivId.value === '2510.05096') {
+    // 离线兜底：示例论文不联网也能显示完整元数据（元数据只在 data/example.ts 定义一处）
+    if (arxivId.value === EXAMPLE_PAPER.arxivId) {
       return {
-        title: 'Paper2Video: Automatic Video Generation from Scientific Papers',
-        authors: ['Zayn Zhu', 'Show Lab'],
-        venue: 'NeurIPS 2025 SEA Workshop',
-        pages: 17,
+        title: EXAMPLE_PAPER.title,
+        authors: [...EXAMPLE_PAPER.authors],
+        venue: EXAMPLE_PAPER.venue,
+        pages: EXAMPLE_PAPER.pages,
       }
     }
     return arxivId.value
@@ -57,18 +59,16 @@ function onPick(e: Event) {
   }
 }
 
-const config = reactive<RunConfig>({
-  article: { variants: ['xhs-author'] },
-  poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'en' },
-  video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '16:9', narration: '中文' },
-  publish: { targets: ['xhs', 'zhihu'], autoPublish: false },
-})
+// 初值来自 data/example.ts：与「一键跑示例」共用同一份配置
+const config = reactive<RunConfig>(exampleRunConfig())
 
 /** 平台 = 体裁与硬约束（可多选，每个平台调一次 LLM） */
 const PLATFORMS = [
   { id: 'xhs', label: '小红书', hint: '图文 ≤1000 字 · 无公式 · 标题计重 38 · 3:4 卡片' },
   { id: 'zhihu', label: '知乎', hint: '长文 2000-4000 字 · 允许公式 · 结论前置' },
   { id: 'bilibili', label: 'B站', hint: '分镜表 + 口播稿 + 简介 · 无公式' },
+  // 后端 styles.py 的 "en" 平台：英文传播，产出 X / LinkedIn thread（不是发布渠道，故不进 TARGETS）
+  { id: 'en', label: '英文传播', hint: '英文 thread（X / LinkedIn）6-10 条 · 单条 ≤280 字符 · 全篇 320-850 词 · 无公式' },
 ]
 
 /** 人格 = 讲述者语气（单选，套用到每个选中的平台） */
@@ -104,6 +104,13 @@ const canSubmit = computed(() =>
   kind.value === 'arxiv' ? !!arxivId.value : kind.value === 'pdf' ? !!file.value : !!latexPath.value,
 )
 
+/** 一键跑示例：预填 + 直接提交。mock 与真后端走的是同一条 createRun 路径 */
+function runExample() {
+  kind.value = 'arxiv'
+  arxiv.value = EXAMPLE_PAPER.url
+  submit()
+}
+
 function submit() {
   if (!canSubmit.value) return
   const source: SourceInput =
@@ -131,10 +138,10 @@ function submit() {
       <p class="panel-sub hint">{{ kinds.find((k) => k.id === kind)?.hint }}</p>
 
       <div v-if="kind === 'arxiv'" class="stack">
-        <input v-model="arxiv" class="field mono" placeholder="https://arxiv.org/abs/2510.05096" />
+        <input v-model="arxiv" class="field mono" :placeholder="EXAMPLE_PAPER.url" />
         <div class="row wrap">
           <span class="chip" :class="arxivId ? 'ok' : 'err'"><i class="dot" />{{ arxivId ? `arXiv:${arxivId}` : '未识别到 ID' }}</span>
-          <button class="btn sm ghost" @click="arxiv = 'https://arxiv.org/abs/2510.05096'">用示例论文</button>
+          <button class="btn sm" :disabled="!canSubmit" title="预填示例论文并直接提交" @click="runExample">用示例论文跑一遍</button>
         </div>
       </div>
 
@@ -148,7 +155,7 @@ function submit() {
         >
           <input type="file" accept="application/pdf" hidden @change="onPick" />
           <strong>{{ file ? file.name : '拖入 PDF 或点击选择' }}</strong>
-          <span class="panel-sub">{{ file ? `${(file.size / 1048576).toFixed(2)} MB · 走 MinerU 解析` : '仅本地解析，文件不上传到第三方（MinerU 云端模式除外）' }}</span>
+          <span class="panel-sub">{{ file ? `${(file.size / 1048576).toFixed(2)} MB · 走 PyMuPDF 解析` : '仅本地解析，文件不上传到第三方' }}</span>
         </label>
       </div>
 
@@ -210,6 +217,18 @@ function submit() {
         </div>
 
         <p class="panel-sub">本次生成 {{ variants.length }} 个变体：{{ variants.join(" / ") || "（未选平台）" }}（每个变体一次 LLM 调用）</p>
+
+        <label class="cfg-block">
+          <span class="label">自由文本指令（可选）</span>
+          <textarea
+            v-model="config.brief"
+            class="field brief"
+            rows="3"
+            maxlength="2000"
+            placeholder="例：做成知乎长文，800 字以内，重点讲方法，不要营销腔"
+          />
+          <span class="panel-sub">只影响风格、体裁、篇幅与侧重，不会改变论文事实（数字仍以事实源为准）</span>
+        </label>
 
         <div class="grid2">
           <label class="cfg-block">
@@ -289,6 +308,7 @@ function submit() {
 .cfg-toggle { width: 100%; padding: 2px 0; }
 .cfg { gap: 12px; }
 .cfg-block { display: flex; flex-direction: column; gap: 6px; }
+.brief { min-height: 62px; resize: vertical; line-height: 1.5; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .chip.toggle { cursor: pointer; padding: 4px 10px; }
 .chip.toggle.on { background: var(--accent-soft); border-color: rgba(90, 162, 255, 0.45); color: #d6e7ff; }

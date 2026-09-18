@@ -23,9 +23,16 @@ function open(id: string) {
 
 <template>
   <div class="page">
+    <header class="page-head">
+      <div class="grow">
+        <h1 class="page-title">运行记录</h1>
+        <p class="page-lead">每一次「论文 → 内容」的完整过程都留在这里，点一行就能回头看它产出了什么。</p>
+      </div>
+    </header>
+
     <section class="panel">
       <header class="panel-head">
-        <span class="panel-title">运行历史</span>
+        <span class="panel-title">全部记录</span>
         <div class="grow" />
         <div class="seg sm">
           <button v-for="f in (['all', 'live', 'done', 'failed'] as const)" :key="f" :class="{ on: filter === f }" @click="filter = f">

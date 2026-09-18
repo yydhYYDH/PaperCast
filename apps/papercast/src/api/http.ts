@@ -1,5 +1,8 @@
 import type { PipelineApi, CreateRunRequest } from './types'
 import type {
+  OpsLog,
+  OpsMetrics,
+  OpsService,
   PaperRun,
   PlatformChannel,
   PlatformDraftBody,
@@ -9,7 +12,16 @@ import type {
   PlatformQrcode,
   StageId,
 } from '../types'
-import type { AppConfig, ConfigPatchResult, LlmTestResult } from './types'
+import type {
+  AppConfig,
+  ChatReply,
+  ChatRequest,
+  ConfigPatchResult,
+  EnvStatus,
+  LlmTestResult,
+  PlatformLogoutResult,
+  UploadResult,
+} from './types'
 
 /**
  * 真实后端适配器（骨架）。
@@ -27,6 +39,10 @@ import type { AppConfig, ConfigPatchResult, LlmTestResult } from './types'
  *   POST   /api/platforms/:id/export      -> { dir, files }（只落盘，无副作用）
  *   POST   /api/platforms/:id/publish     -> PlatformPublishResult（必须 confirmed=true）
  *   POST   /api/platforms/:id/login/logout-> 204
+ *   GET    /api/ops/services              -> OpsService[]（五个服务的端口/pid/健康/日志）
+ *   POST   /api/ops/services/:name/:action-> 起停服务（start|stop|restart）
+ *   GET    /api/ops/logs?name=&lines=     -> OpsLog（var/logs/*.log 的尾巴）
+ *   GET    /api/ops/metrics               -> OpsMetrics（已发布内容的浏览/点赞等）
  *   GET    /api/config                    -> AppConfig（全部可配项，密钥打码）
  *   PATCH  /api/config                    -> { values } -> ConfigPatchResult（写 .env 并热生效）
  *   POST   /api/config/test               -> LlmTestResult（连通性探针）
@@ -101,8 +117,45 @@ export class HttpPipelineApi implements PipelineApi {
     })
   }
 
-  async platformLogout(channelId: string) {
-    await this.json<void>(`/api/platforms/${channelId}/login/logout`, { method: 'POST' })
+  platformLogout(channelId: string) {
+    return this.json<PlatformLogoutResult>(`/api/platforms/${channelId}/login/logout`, { method: 'POST' })
+  }
+
+  /* ---------- 对话 ---------- */
+
+  chat(body: ChatRequest) {
+    return this.json<ChatReply>('/api/chat', { method: 'POST', body: JSON.stringify(body) })
+  }
+
+  uploadPaper(file: File) {
+    const form = new FormData()
+    form.append('file', file, file.name)
+    // 必须让浏览器自己带 multipart boundary：不能沿用 json() 默认的 application/json
+    return this.json<UploadResult>('/api/uploads', { method: 'POST', body: form, headers: {} })
+  }
+
+  /* ---------- 运营维护 ---------- */
+
+  opsServices() {
+    return this.json<OpsService[]>('/api/ops/services')
+  }
+
+  opsLogs(name: string, lines = 200, grep = '') {
+    const qs = new URLSearchParams({ name, lines: String(lines) })
+    if (grep) qs.set('grep', grep)
+    return this.json<OpsLog>('/api/ops/logs?' + qs.toString())
+  }
+
+  opsMetrics(force = false) {
+    return this.json<OpsMetrics>('/api/ops/metrics' + (force ? '?force=true' : ''))
+  }
+
+  opsServiceAction(name: string, action: 'start' | 'stop' | 'restart') {
+    return this.json<{ service: string; action: string; output: string }>(`/api/ops/services/${name}/${action}`, { method: 'POST' })
+  }
+
+  env() {
+    return this.json<EnvStatus>('/api/env')
   }
 
   getConfig() {

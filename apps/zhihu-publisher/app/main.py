@@ -203,8 +203,15 @@ async def stats(url: str) -> dict[str, Any]:
             detail = await asyncio.to_thread(_service().get_feed_detail, url, False, 1, True)
         except Exception as exc:
             raise ChannelError(502, "STATS_FAILED", f"抓取运营数据失败：{exc}") from exc
-    if not isinstance(detail, dict) or not detail:
-        raise ChannelError(502, "STATS_EMPTY", "没抓到正文数据（可能未登录或页面结构变了）")
+    # 抓不到标题 = 页面没渲染出正文（多半是登录墙或知乎改了结构），此时 votes 会是 "0"。
+    # 直接回给调用方，就会把「没抓到」伪装成「零赞」，所以这里必须报错。
+    if not isinstance(detail, dict) or not detail.get("title"):
+        raise ChannelError(
+            502,
+            "STATS_EMPTY",
+            "没抓到正文（标题为空）：多半是登录态失效触发了登录墙，或知乎改了页面结构；"
+            "此时赞同数不可信，故不返回数字",
+        )
     return {"success": True, "data": {
         "url": detail.get("url") or url,
         "title": detail.get("title") or "",
@@ -253,7 +260,10 @@ async def login_clear() -> dict[str, Any]:
     existed = COOKIES_PATH.is_file()
     if existed:
         COOKIES_PATH.unlink()
-    return {"success": True, "data": {"deleted": existed, "cookies_path": str(COOKIES_PATH)}}
+    # 状态缓存必须一起失效：否则登出后的十几秒里 /login/status 还会报「已登录」，
+    # 调用方（backend / 前端）会以为退出没生效。
+    _STATE_CACHE.update(at=0.0, data=None)
+    return {"success": True, "data": {"deleted": existed, "cookies_path": str(COOKIES_PATH), "cached": False}}
 
 
 # --------------------------------------------------------------------------- #

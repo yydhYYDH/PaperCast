@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { usePlatformsStore } from '../stores/platforms'
+import { useUiStore } from '../stores/ui'
 import { PLATFORM_STATE, fmtAgo } from '../utils'
 
 const store = usePlatformsStore()
+const ui = useUiStore()
 const copied = ref('')
 
 onMounted(() => void store.refresh(false))
@@ -17,6 +19,19 @@ const LOGIN_LABEL: Record<string, string> = {
 }
 
 const readyCount = computed(() => store.readyCount)
+
+/** 把技术端点说成人话（页面上不出现 localhost:18070 这种字符串） */
+const PLAIN_ENDPOINT: Record<string, string> = {
+  'http://127.0.0.1:18060': '本机的小红书服务',
+  'http://127.0.0.1:18070': '本机的知乎服务',
+  'http://127.0.0.1:18080': '本机的 B 站服务',
+}
+function plainEndpoint(endpoint: string) {
+  if (!endpoint) return ''
+  if (PLAIN_ENDPOINT[endpoint]) return PLAIN_ENDPOINT[endpoint]
+  if (endpoint.includes('127.0.0.1') || endpoint.includes('localhost')) return '本机服务'
+  return endpoint
+}
 const total = computed(() => store.channels.length)
 
 async function copy(text: string, id: string) {
@@ -30,33 +45,44 @@ async function copy(text: string, id: string) {
 }
 
 async function doLogout(id: string, name: string, account: string) {
-  const ok = window.confirm(`退出 ${name} 登录？\n\n将删除本机 cookies（当前账号：${account || '未知'}），下次发布前需要重新登录。`)
+  const ok = await ui.askConfirm({
+    title: `退出 ${name} 的登录？`,
+    text: `会删除本机保存的登录凭证（当前账号：${account || '未知'}）。这一步不可撤销，下次要发布时得重新登录一次。`,
+    okLabel: '退出登录',
+    cancelLabel: '再想想',
+    tone: 'err',
+  })
   if (!ok) return
-  await store.logout(id)
+  const result = await store.logout(id)
+  if (result) ui.toast(result.message, result.state === 'ready' ? 'warn' : 'info', 9000)
+  else if (store.error) ui.toast('退出登录失败：' + store.error, 'err')
 }
 </script>
 
 <template>
   <div class="page">
+    <header class="page-head">
+      <div class="grow">
+        <h1 class="page-title">平台账号</h1>
+        <p class="page-lead">
+          这里管「往哪里发」。点一下就能扫码或打开登录窗口，登录一次之后，发布时不用再输密码。
+        </p>
+      </div>
+      <span class="chip" :class="readyCount ? 'ok' : 'warn'"><i class="dot" />已登录 {{ readyCount }}/{{ total }}</span>
+      <span v-if="store.refreshedAt" class="meta-line">{{ fmtAgo(store.refreshedAt) }}前更新</span>
+      <button class="btn" :disabled="store.loading" @click="store.refresh(true)">{{ store.loading ? '查看中…' : '刷新状态' }}</button>
+    </header>
+
     <section class="panel">
-      <header class="panel-head">
-        <span class="panel-title">平台账号</span>
-        <span class="panel-sub">发布渠道的登录入口与账号状态</span>
-        <div class="grow" />
-        <span class="chip" :class="readyCount ? 'ok' : 'warn'"><i class="dot" />已登录 {{ readyCount }}/{{ total }}</span>
-        <span v-if="store.refreshedAt" class="panel-sub mono">{{ fmtAgo(store.refreshedAt) }}探测</span>
-        <button class="btn sm" :disabled="store.loading" @click="store.refresh(true)">{{ store.loading ? '探测中…' : '刷新状态' }}</button>
-      </header>
       <div class="panel-body notes">
         <p class="panel-sub">
-          「刷新状态」会真实探测每一个渠道：小红书走本机 <span class="mono">xiaohongshu-mcp</span>、知乎走 <span class="mono">zhihu-publisher</span>、
-          B 站走 <span class="mono">bilibili-publisher</span>（底层 biliup），小红书与 B 站的扫码登录都能在本页完成。
-          <strong>没接通的渠道如实显示未配置或受限，不假装可用。</strong>
+          「刷新状态」会真的去每一个平台看一次，所以第一次可能要等十几秒。
+          没登录的渠道会如实写清楚，不会假装能用。
         </p>
         <p class="panel-sub">
-          登录态只用于「人工闸门放行之后」的真实投递；闸门没放行时，凭证不会被动用。
+          登录信息只存在这台电脑上，只在你在发布页点了「确认发布」之后才会用到。
         </p>
-        <p v-if="store.error" class="err-line">探测失败：{{ store.error }}</p>
+        <p v-if="store.error" class="err-line">查看状态失败：{{ store.error }}</p>
       </div>
     </section>
 
@@ -65,9 +91,8 @@ async function doLogout(id: string, name: string, account: string) {
         <strong class="ch-name">{{ c.name }}</strong>
         <span class="chip" :class="PLATFORM_STATE[c.state].cls"><i class="dot" />{{ PLATFORM_STATE[c.state].label }}</span>
         <span v-if="c.account" class="chip accent">账号 {{ c.account }}</span>
-        <span class="chip mono">{{ c.kind }}</span>
         <div class="grow" />
-        <span class="panel-sub mono ellipsis" style="max-width: 40%">{{ c.endpoint }}</span>
+        <span class="panel-sub ellipsis" style="max-width: 40%">{{ plainEndpoint(c.endpoint) }}</span>
       </header>
 
       <div class="panel-body stack">
@@ -77,9 +102,9 @@ async function doLogout(id: string, name: string, account: string) {
         </div>
         <p class="detail">{{ c.detail }}</p>
         <p v-if="c.state !== 'ready'" class="hint-line">
-          <span class="label">接通方式</span>
+          <span class="label">怎么接通</span>
           <span class="mono grow ellipsis">{{ c.loginHint }}</span>
-          <button class="btn sm ghost" @click="copy(c.loginHint, c.id)">{{ copied === c.id ? '已复制' : '复制' }}</button>
+          <button class="btn sm ghost" @click="copy(c.loginHint, c.id)">{{ copied === c.id ? '已复制' : '复制命令' }}</button>
         </p>
 
         <div class="row wrap gap">
@@ -93,9 +118,9 @@ async function doLogout(id: string, name: string, account: string) {
               {{ store.workingId === c.id ? '获取二维码…' : c.state === 'ready' ? '重新扫码 / 切换账号' : '扫码登录' }}
             </button>
             <button v-if="c.state === 'ready'" class="btn sm danger" :disabled="store.workingId === c.id" @click="doLogout(c.id, c.name, c.account)">
-              {{ store.workingId === c.id ? '处理中…' : '退出登录（清 cookies）' }}
+              {{ store.workingId === c.id ? '正在退出…' : '退出登录' }}
             </button>
-            <span class="panel-sub">{{ c.id === 'bilibili' ? '二维码由本机 biliup 生成，扫码成功后 cookies 落在 bilibili-publisher' : '扫码成功后 cookies 自动落在本机 MCP 目录' }}</span>
+            <span class="panel-sub">用手机扫这个码就登录好了，登录状态保存在本机</span>
           </template>
           <!-- 桌面窗口人工登录：知乎（风控会拦纯 HTTP 扫码，必须真人过窗口） -->
           <template v-else-if="c.login === 'browser'">
@@ -103,7 +128,7 @@ async function doLogout(id: string, name: string, account: string) {
               {{ store.workingId === c.id ? '等待窗口登录…' : c.state === 'ready' ? '重新登录 / 切换账号' : '打开浏览器登录' }}
             </button>
             <button v-if="c.state === 'ready'" class="btn sm danger" :disabled="store.workingId === c.id" @click="doLogout(c.id, c.name, c.account)">
-              退出登录（清 cookies）
+              退出登录
             </button>
             <span class="panel-sub">桌面会弹出浏览器窗口，扫码或账号登录（含人机验证）；登录态落在本机 zhihu-publisher，真实发布仍需人工闸门</span>
           </template>

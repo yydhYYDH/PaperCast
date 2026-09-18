@@ -14,6 +14,7 @@ import asyncio
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -505,8 +506,97 @@ async def export_draft(channel_id: str, payload: dict[str, Any]) -> dict[str, An
     return body.get("data") or {}
 
 
+# --------------------------------------------------------------------------- #
+# 退出登录：把「本机凭证」真的删掉
+#
+# 三个渠道的凭证存放位置各不相同（2026-09-19 核对）：
+#   - 知乎   var/secrets/zhihu/cookies.json          → 由 zhihu-publisher 的 DELETE 端点负责
+#   - B 站   var/home/.bilibili/cookies.json         → biliup 的 HOME 位置，通道服务 + 这里各清一遍
+#            var/artifacts/bilibili/cookies.json     （旧路径，兼容读，也要清）
+#            bilibili-publisher 自己的 COOKIES_PATH  → 由它的 DELETE 端点负责
+#   - 小红书 apps/xiaohongshu-mcp/cookies.json       → **MCP 没有清 cookie 的接口**（它的 /logout
+#            是它自己的 HTTP 鉴权登出，与小红书账号无关），所以这里直接删文件；
+#            路径优先级：COOKIES_PATH 环境变量 > 工作区里的组件目录。
+# --------------------------------------------------------------------------- #
+
+
+def _workspace() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _xhs_cookie_path() -> Path:
+    import os
+
+    env = os.environ.get("COOKIES_PATH", "").strip()
+    if env:
+        return Path(env)
+    return _workspace() / "apps" / "xiaohongshu-mcp" / "cookies.json"
+
+
+def _xhs_profile_dir() -> Path:
+    """小红书 MCP 的浏览器 profile —— **真正的登录态在这里**，不在 cookies.json 里。
+
+    依据（2026-09-19 实测）：MCP 的 /api/v1/login/status 是真开一个浏览器访问
+    xiaohongshu.com/explore、看 DOM 里有没有用户菜单，所以只删 cookies.json 它照样报「已登录」；
+    而 MCP 没有清会话的 HTTP 接口（它的 POST /logout 只是它自己的 HTTP 鉴权登出）。
+    因此这里连 profile 一起删，并把 MCP 重启一次 —— 重启顺带清掉进程内的 300s 状态缓存。
+    """
+    import os
+
+    cache_root = os.environ.get("XDG_CACHE_HOME", "").strip()
+    base = Path(cache_root) if cache_root else (_workspace() / "var" / "cache")
+    return base / "xiaohongshu-mcp" / "browser"
+
+
+def _restart_service(name: str) -> list[str]:
+    """按 ops 脚本重启一个服务，返回输出行（失败不抛，由调用方看后续探测结果）。"""
+    ws = _workspace()
+    out: list[str] = []
+    for script in ("stop_all.sh", "start_all.sh"):
+        path = ws / "ops" / script
+        if not path.is_file():
+            out.append("缺少 " + str(path))
+            continue
+        try:
+            proc = subprocess.run([str(path), name], capture_output=True, text=True, timeout=90, cwd=str(ws))
+        except subprocess.TimeoutExpired:
+            out.append(script + " " + name + " 超时")
+            continue
+        text = (proc.stdout or proc.stderr or "").strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _bili_cookie_paths() -> list[Path]:
+    ws = _workspace()
+    return [
+        ws / "var" / "home" / ".bilibili" / "cookies.json",
+        ws / "var" / "artifacts" / "bilibili" / "cookies.json",
+    ]
+
+
+def _unlink_all(paths: list[Path]) -> tuple[list[str], list[str]]:
+    """删文件；返回 (删掉的, 本来就不在的)。删失败会抛 PlatformError，不静默。"""
+    removed: list[str] = []
+    missing: list[str] = []
+    for path in paths:
+        try:
+            if path.is_file():
+                path.unlink()
+                removed.append(str(path))
+            else:
+                missing.append(str(path))
+        except OSError as e:
+            raise PlatformError(500, "LOGOUT_FAILED", f"删除 {path} 失败：{e}") from e
+    return removed, missing
+
+
 async def logout(channel_id: str) -> dict[str, Any]:
-    """退出登录：删掉本机 cookies（不可逆，前端必须先确认）。"""
+    """退出登录：删掉本机 cookies（不可逆，前端必须先经用户确认）。
+
+    成功后立刻失效缓存 —— 否则前端下次探测还会看到「已登录」，用户会以为没生效。
+    """
     if channel_id == "zhihu":
         try:
             async with httpx.AsyncClient(timeout=30.0, trust_env=False) as cx:
@@ -528,17 +618,44 @@ async def logout(channel_id: str) -> dict[str, Any]:
         payload = r.json() if r.content else {}
         if r.status_code != 200 or not payload.get("success"):
             raise PlatformError(502, "LOGOUT_FAILED", f"退出登录失败：HTTP {r.status_code}")
+        # 通道服务只清它自己那份；biliup 的 HOME 与旧路径也一起清，否则 B 站还会显示「已登录」
+        removed, _missing = _unlink_all(_bili_cookie_paths())
         _BILI_CACHE.update(at=0.0, data=None)
-        return {"channelId": channel_id, "message": "已清除本机 B 站 cookies，下次投稿前需重新扫码登录"}
+        detail = "、".join([Path(p).as_posix() for p in removed]) or "通道服务侧凭证"
+        return {"channelId": channel_id,
+                "message": f"已清除 B 站登录态（{detail}）；下次投稿前需重新扫码登录"}
 
     if channel_id != "xhs":
         raise PlatformError(400, "LOGOUT_UNSUPPORTED", f"{channel_id} 不支持从本界面退出登录")
-    try:
-        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as cx:
-            r = await cx.delete(f"{settings.xhs_mcp_base}/api/v1/login/cookies")
-    except Exception as e:
-        raise PlatformError(502, "MCP_UNREACHABLE", f"小红书 MCP 不可达：{type(e).__name__}: {e}")
-    if r.status_code != 200:
-        raise PlatformError(502, "LOGOUT_FAILED", f"退出登录失败：HTTP {r.status_code}")
+    cookie_path = _xhs_cookie_path()
+    profile_dir = _xhs_profile_dir()
+    removed, _missing = _unlink_all([cookie_path])
+    profile_removed = profile_dir.is_dir()
+    if profile_removed:
+        shutil.rmtree(profile_dir, ignore_errors=False)
+    if not removed and not profile_removed:
+        _XHS_CACHE.update(at=0.0, data=None)
+        return {"channelId": channel_id,
+                "message": f"没有找到小红书凭证（{cookie_path}）与浏览器 profile（{profile_dir}）：当前就是未登录状态"}
+
+    restart_log = _restart_service("mcp")
     _XHS_CACHE.update(at=0.0, data=None)
-    return {"channelId": channel_id, "message": "已清除小红书登录态，下次发布前需重新扫码"}
+
+    # 如实回报退出的「结果」：重启后再探一次，不假设成功
+    state, account = "unknown", ""
+    try:
+        ch = await _xhs_probe()
+        state, account = ch.state, ch.account
+    except Exception as e:
+        state = f"探测失败（{type(e).__name__}）"
+
+    what = []
+    if removed:
+        what.append("cookies.json")
+    if profile_removed:
+        what.append("浏览器 profile")
+    message = "已清除小红书登录态（" + " + ".join(what) + "，已重启 MCP）；当前状态：" + state
+    if state == "ready":
+        message += "。仍显示已登录时，最彻底的做法是在手机端小红书「设置 → 账号与安全 → 登录设备管理」里踢掉本机"
+    return {"channelId": channel_id, "message": message, "state": state, "account": account,
+            "restartOutput": restart_log}

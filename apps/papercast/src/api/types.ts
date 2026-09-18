@@ -1,4 +1,7 @@
 import type {
+  OpsLog,
+  OpsMetrics,
+  OpsService,
   PaperRun,
   PlatformChannel,
   PlatformDraftBody,
@@ -42,6 +45,34 @@ export interface AppConfig {
   items: ConfigItem[]
 }
 
+export interface UploadResult {
+  uploadId: string
+  filename: string
+  bytes: number
+  sha256: string
+}
+
+export interface ChatRequest {
+  message: string
+  runId?: string | null
+  history?: { role: string; content: string }[]
+}
+
+export interface ChatReply {
+  reply: string
+  model: string
+  context: { runId: string | null; hasDigest: boolean; artifacts: number }
+}
+
+export interface PlatformLogoutResult {
+  channelId: string
+  /** 人话回执：清了什么、现在是什么状态 */
+  message: string
+  state?: string
+  account?: string
+  restartOutput?: string[]
+}
+
 export interface ConfigPatchResult {
   changed: string[]
   envFile: string
@@ -57,6 +88,14 @@ export interface LlmTestResult {
   message?: string
   model: string
   baseUrl: string
+}
+
+/** 本机运行环境（后端 GET /api/env 的真实探测结果；只取界面要用的部分） */
+export interface EnvStatus {
+  intake: { engine: string; ocr: boolean }
+  llm: { configured: boolean; model: string }
+  cards: { enabled: boolean; cjkFontUsable: boolean }
+  publish: { xiaohongshu?: { reachable: boolean; loggedIn: boolean; account: string } }
 }
 
 export interface PipelineApi {
@@ -78,8 +117,26 @@ export interface PipelineApi {
   platformExportDraft(channelId: string, body: PlatformDraftBody): Promise<{ dir: string; files: string[] }>
   /** **真实投递**：必须 confirmed=true（人工闸门放行后） */
   platformPublish(channelId: string, body: PlatformPublishRequest): Promise<PlatformPublishResult>
-  /** 退出登录（清 cookies，不可逆） */
-  platformLogout(channelId: string): Promise<void>
+  /** 退出登录（删除本机凭证，不可逆）。返回后端如实写的执行结果，用于向用户回执。 */
+  platformLogout(channelId: string): Promise<PlatformLogoutResult>
+
+  /* ---------- 对话 ---------- */
+  /** 一问一答：回答只依据该运行已落盘的事实源（见后端 app/chat_api.py） */
+  chat(body: ChatRequest): Promise<ChatReply>
+  /** 上传 PDF/LaTeX 包，拿到 uploadId（createRun 的 source.value 用它） */
+  uploadPaper(file: File): Promise<UploadResult>
+
+  /* ---------- 运营维护 ---------- */
+  /** 本机五个服务的真实状态（端口 / pid / 健康 / 日志） */
+  opsServices(): Promise<OpsService[]>
+  /** 读 var/logs/<name>.log 的尾巴 */
+  opsLogs(name: string, lines?: number, grep?: string): Promise<OpsLog>
+  /** 运营数据：本机发现的已发布内容 + 各平台真实互动数字 */
+  opsMetrics(force?: boolean): Promise<OpsMetrics>
+  /** 起 / 停 / 重启某个服务（走 ops/start_all.sh、ops/stop_all.sh） */
+  opsServiceAction(name: string, action: 'start' | 'stop' | 'restart'): Promise<{ service: string; action: string; output: string }>
+  /** 本机运行环境的真实探测结果（模型是否配好、中文字体、发布服务是否在线） */
+  env(): Promise<EnvStatus>
   /** 配置中心：回显全部可配项（密钥打码）。模拟器返回假配置，写入会抛错 */
   getConfig(): Promise<AppConfig>
   /** 按白名单写 .env 并热生效；密钥留空/省略 = 不修改 */

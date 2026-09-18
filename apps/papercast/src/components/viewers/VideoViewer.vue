@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import type { PaperRun } from '../../types'
+import { sampleAsset } from '../../data/example'
+import { assetUrl } from '../../api'
 
 interface Slide { index: number; title: string; bullets: string[]; narration: string; durationSec: number }
 interface Script { title: string; totalSec: number; slides: Slide[] }
@@ -13,11 +15,19 @@ const script = ref<Script | null>(null)
 const el = ref<HTMLVideoElement | null>(null)
 const active = ref(0)
 
+/** 这次运行真出的旁白脚本：有真产物就不用示例，避免「看着像真的」 */
+const narration = computed(() => stage.value?.artifacts.find((a) => a.path.endsWith('narration.json')))
+
 onMounted(async () => {
-  try {
-    const res = await fetch('/samples/video/narration.json')
-    if (res.ok) script.value = (await res.json()) as Script
-  } catch { /* 忽略 */ }
+  for (const src of [assetUrl(narration.value?.url), sampleAsset('video', 'narration.json')]) {
+    if (!src) continue
+    try {
+      const res = await fetch(src)
+      if (!res.ok) continue
+      script.value = (await res.json()) as Script
+      return
+    } catch { /* 试下一个 */ }
+  }
 })
 
 /** 旁白时长映射到片段真实时长：示例视频与脚本不是同一条片子，按比例对齐 */

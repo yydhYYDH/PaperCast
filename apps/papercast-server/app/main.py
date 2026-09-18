@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from . import ops as ops_mod
 from . import platforms as platforms_mod
 from .channels import routes as channels_routes
+from .chat_api import router as chat_router
 from .config_api import router as config_router
 from .config import settings
 from .models import CreateRunRequest, GateRequest, PaperRun, SourceInput, new_run
@@ -43,6 +44,7 @@ app = FastAPI(title="PaperCast API", version=VERSION, lifespan=lifespan)
 # 投递渠道层（app/channels/）：GET /api/channels
 app.include_router(channels_routes.router)
 app.include_router(config_router)
+app.include_router(chat_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -290,11 +292,14 @@ async def platform_publish(channel_id: str, body: PlatformPublishBody) -> dict[s
     return await platforms_mod.publish(channel_id, payload)
 
 
-@app.post("/api/platforms/{channel_id}/login/logout", status_code=204)
-async def platform_logout(channel_id: str) -> JSONResponse:
-    """退出登录（清 cookies，不可逆）。前端必须先经用户确认再调。"""
-    await platforms_mod.logout(channel_id)
-    return JSONResponse(status_code=204, content=None)
+@app.post("/api/platforms/{channel_id}/login/logout")
+async def platform_logout(channel_id: str) -> dict[str, Any]:
+    """退出登录（删除本机凭证，不可逆）。前端必须先经用户确认再调。
+
+    返回真实的执行结果（删了哪些文件、重启了什么、退出后当前状态），而不是一个空洞的 204 ——
+    前端会把这句话原样展示给用户，避免「点了没反应」。
+    """
+    return await platforms_mod.logout(channel_id)
 
 
 # --------------------------------------------------------------------------- #

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import type { Artifact, PaperRun } from '../../types'
+import { assetUrl } from '../../api'
 
 const props = defineProps<{ run: PaperRun }>()
 
@@ -30,7 +31,7 @@ watch(
     if (!a?.url) return
     loading.value = true
     try {
-      const res = await fetch(a.url)
+      const res = await fetch(assetUrl(a.url))
       source.value = await res.text()
     } catch {
       source.value = '> 示例文件未找到'

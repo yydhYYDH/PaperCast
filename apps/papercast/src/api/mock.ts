@@ -4,12 +4,21 @@ import type {
   AppConfig,
   ConfigItem,
   ConfigPatchResult,
+  EnvStatus,
   LlmTestResult,
+  PlatformLogoutResult,
+  ChatReply,
+  ChatRequest,
+  UploadResult,
 } from './types'
+import { EXAMPLE_PAPER, exampleSource } from '../data/example'
 import type {
   Artifact,
   ArtifactKind,
   LogLine,
+  OpsLog,
+  OpsMetrics,
+  OpsService,
   PaperRun,
   PlatformChannel,
   PlatformDraftBody,
@@ -45,7 +54,7 @@ const LOGS: Record<StageId, Script> = {
     { text: '检测输入类型：arxiv:2510.05096' },
     { text: '下载 arXiv 源码包 arXiv-2510.05096.tar.gz（1.4 MB）' },
     { text: '解包 paper_src/：main.tex + 6 个 .tex + 23 张图' },
-    { text: 'MinerU 解析 PDF → content.md（保留公式 / 表格 / 图注）', level: 'ok' },
+    { text: 'PyMuPDF 解析 PDF → content.md（保留公式 / 表格 / 图注）', level: 'ok' },
     { text: '归一化完成：paper 模型 42 节，38 张图注' , level: 'ok' },
   ],
   understand: [
@@ -294,15 +303,8 @@ export class MockPipelineApi implements PipelineApi {
     const run: PaperRun = {
       id: nextId(),
       createdAt: Date.now() - 1000 * 60 * 26,
-      title: 'Paper2Video: Automatic Video Generation from Scientific Papers',
-      source: {
-        kind: 'arxiv',
-        value: '2510.05096',
-        title: 'Paper2Video: Automatic Video Generation from Scientific Papers',
-        authors: ['Zeyu Zhu', 'Kevin Qinghong Lin', 'Mike Zheng Shou'],
-        venue: 'NeurIPS 2025 · SEA Workshop',
-        pages: 17,
-      },
+      title: EXAMPLE_PAPER.title,
+      source: exampleSource(),
       status: 'done',
       config: DEFAULT_CONFIG,
       stages: STAGE_ORDER.map((id) => {
@@ -341,7 +343,7 @@ export class MockPipelineApi implements PipelineApi {
     poster.progress = 71
     poster.logs = [
       ...poster.logs,
-      { ts: Date.now() - 1000 * 60 * 172, level: 'err', text: 'MinerU 解析失败：PDF 第 3 页公式区域乱码' },
+      { ts: Date.now() - 1000 * 60 * 172, level: 'err', text: 'PyMuPDF 解析失败：PDF 第 3 页公式区域乱码' },
     ]
     poster.artifacts = []
     poster.gate = undefined
@@ -487,23 +489,37 @@ export class MockPipelineApi implements PipelineApi {
     }
   }
 
-  async platformLogout(channelId: string) {
+  async platformLogout(channelId: string): Promise<PlatformLogoutResult> {
     if (channelId === 'zhihu') {
       this.zhihuState = 'login_required'
       this.zhihuAccount = ''
       this.zhihuLoggedInAt = 0
-      return
+      return { channelId, message: '模拟器：已把知乎标记为未登录（真实后端会删掉本机 cookies 并回报当前状态）', state: 'login_required' }
     }
-    if (channelId !== 'xhs') return
+    // 模拟器里 B 站的登录态是静态演示值，这里只回执一句话（真实后端会删凭证并重启通道服务）
+    if (channelId === 'bilibili') {
+      return { channelId, message: '模拟器：B 站登录态未真正清除（真实后端会删掉本机 cookies）', state: 'ready' }
+    }
     this.xhsState = 'login_required'
     this.xhsAccount = ''
     this.xhsLoggedInAt = 0
+    return { channelId, message: '模拟器：已把小红书标记为未登录', state: 'login_required' }
   }
 
   /**
    * 模拟器不连后端，给一份与后端 SPEC 同形状的假配置：字段名、分组、kind 都对齐，
    * 这样「设置 → 模型与 API」在 mock 模式下也能完整渲染（值仅供示意，写入会抛错）。
    */
+  /** 演示模式没有本机后端，如实汇报「什么都没接通」，界面据此显示演示状态 */
+  async env(): Promise<EnvStatus> {
+    return {
+      intake: { engine: 'local', ocr: false },
+      llm: { configured: false, model: '' },
+      cards: { enabled: true, cjkFontUsable: true },
+      publish: { xiaohongshu: { reachable: false, loggedIn: false, account: '' } },
+    }
+  }
+
   async getConfig(): Promise<AppConfig> {
     const mk = (key: string, group: string, label: string, kind: ConfigItem['kind'], value: string, desc: string): ConfigItem => ({
       key, group, label, kind, value, desc, editable: true, restart: false, source: 'mock',
@@ -526,6 +542,101 @@ export class MockPipelineApi implements PipelineApi {
 
   async patchConfig(): Promise<ConfigPatchResult> {
     throw new Error('模拟器不支持写入配置：请用 VITE_API_BASE 连接真实后端')
+  }
+
+  /* ---------- 对话与上传（模拟器） ---------- */
+
+  async chat(body: ChatRequest): Promise<ChatReply> {
+    await new Promise((r) => setTimeout(r, 300))
+    return {
+      reply:
+        '（模拟器）这是占位回答。真实回答由本机后端调用你配置的模型产生，而且只依据这次运行已经落盘的事实源（run.json 与 understand/digest.json）。接上真后端后，同一个问题会得到真正的模型回答。',
+      model: 'mock',
+      context: { runId: body.runId ?? null, hasDigest: false, artifacts: 0 },
+    }
+  }
+
+  async uploadPaper(file: File): Promise<UploadResult> {
+    await new Promise((r) => setTimeout(r, 200))
+    return {
+      uploadId: 'up_mock' + Math.random().toString(16).slice(2, 8),
+      filename: file.name,
+      bytes: file.size,
+      sha256: 'mock',
+    }
+  }
+
+  /* ---------- 运营维护（模拟器：形状与后端一致，数字是编的） ---------- */
+
+  async opsServices(): Promise<OpsService[]> {
+    const mk = (name: string, label: string, port: number, up: boolean): OpsService => ({
+      name, label, port, up,
+      pid: up ? 10000 + port : null,
+      url: 'http://127.0.0.1:' + port,
+      health: up
+        ? { probed: port !== 5178, ok: true, status: 200, elapsedMs: 12, detail: port === 5178 ? '无 HTTP 健康接口（前端静态服务）' : 'HTTP 200' }
+        : { probed: false, ok: false, detail: '端口未监听' },
+      log: { path: 'var/logs/' + name + '.log', exists: up, size: 4096, updatedAt: Date.now() - 20000 },
+      restartHint: './ops/start_all.sh ' + name,
+    })
+    return [
+      mk('backend', '后端 API', 8000, true),
+      mk('frontend', '前端 (vite)', 5178, true),
+      mk('mcp', '小红书 MCP', 18060, true),
+      mk('zhihu', '知乎通道', 18070, false),
+      mk('bilibili', 'B 站通道', 18080, false),
+    ]
+  }
+
+  async opsLogs(name: string, lines = 200, grep = ''): Promise<OpsLog> {
+    const demo = [
+      'INFO:     127.0.0.1:44130 - "GET /api/health HTTP/1.1" 200 OK',
+      'INFO:     127.0.0.1:44148 - "GET /api/platforms HTTP/1.1" 200 OK',
+      'WARNING:  单次探测耗时 11.2s（MCP 侧开了一次无头浏览器）',
+      'ERROR:    模拟器里的日志是编的，接上真后端后这里读 var/logs/' + name + '.log',
+    ].filter((l) => !grep || l.includes(grep))
+    return { name, path: 'var/logs/' + name + '.log', lines: demo.slice(-lines), matched: demo.length, size: 8192, truncated: false }
+  }
+
+  async opsMetrics(): Promise<OpsMetrics> {
+    return {
+      fetchedAt: Date.now(),
+      channels: [
+        {
+          id: 'bilibili', name: 'B 站', kind: 'video',
+          source: '模拟器演示数据（真后端会用公开 view 接口取真实数字）',
+          items: [{
+            id: 'BV1DveU6GEPR', url: 'https://www.bilibili.com/video/BV1DveU6GEPR',
+            title: '【演示】Paper2Video 论文分享视频', author: '演示账号', publishedAt: Date.now() - 3600_000,
+            stats: { view: 128, like: 12, coin: 5, favorite: 9, reply: 3, danmaku: 1, share: 2 },
+            source: 'mock',
+          }],
+          errors: [],
+          totals: { view: 128, like: 12, coin: 5, favorite: 9, reply: 3, danmaku: 1, share: 2 },
+          gap: '',
+        },
+        {
+          id: 'zhihu', name: '知乎', kind: 'article', source: '模拟器演示数据',
+          items: [{
+            id: '2084432742410993947', url: 'https://zhuanlan.zhihu.com/p/2084432742410993947',
+            title: '【演示】用已登录浏览器抓赞同数', author: '演示账号',
+            stats: { like: 7, reply: 2 }, source: 'mock',
+          }],
+          errors: [], totals: { like: 7, reply: 2 },
+          gap: '浏览量知乎不对外提供（只在创作者中心可见）',
+        },
+        {
+          id: 'xiaohongshu', name: '小红书', kind: 'note', source: '模拟器演示数据',
+          items: [], errors: [], totals: {},
+          account: { name: '演示账号', raw: { fans: 3, liked: 15, collected: 4 } },
+          gap: '单篇浏览量在创作者中心，MCP 未覆盖；未登录时账号级数据也拿不到',
+        },
+      ],
+    }
+  }
+
+  async opsServiceAction(name: string, action: string) {
+    return { service: name, action, output: '模拟器不会真的起停服务：接上真后端（VITE_API_BASE）后这里会调 ops/start_all.sh' }
   }
 
   async testLlm(): Promise<LlmTestResult> {

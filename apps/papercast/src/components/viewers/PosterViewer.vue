@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import type { PaperRun } from '../../types'
+import { assetUrl } from '../../api'
 
 const props = defineProps<{ run: PaperRun }>()
 
@@ -11,10 +12,10 @@ const spec = computed(() => props.run.config.poster)
 const zoom = ref(1)
 const mode = ref<'fit' | 'actual'>('fit')
 
-const url = computed(() => html.value?.url ?? '')
+const url = computed(() => assetUrl(html.value?.url))
 
 function openPng() {
-  if (png.value?.url) window.open(png.value.url, '_blank')
+  if (png.value?.url) window.open(assetUrl(png.value.url), '_blank')
 }
 </script>
 

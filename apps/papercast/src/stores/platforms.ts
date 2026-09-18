@@ -192,17 +192,17 @@ export const usePlatformsStore = defineStore('platforms', {
       }
     },
 
-    /** 退出登录（清 cookies，不可逆）—— 调用方必须先经用户确认 */
+    /** 退出登录（删除本机凭证，不可逆）—— 调用方必须先经用户确认 */
     async logout(id: string) {
       this.workingId = id
       this.error = ''
       try {
-        await api.platformLogout(id)
+        const result = await api.platformLogout(id)
         await this.refresh(true)
-        return true
+        return result
       } catch (e) {
         this.error = (e as Error).message
-        return false
+        return null
       } finally {
         this.workingId = ''
       }

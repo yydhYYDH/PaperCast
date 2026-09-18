@@ -1,6 +1,6 @@
 /** 领域模型：一条「论文 → 多形态产物」的运行 */
 
-export type ViewId = 'workbench' | 'runs' | 'library' | 'platforms' | 'settings'
+export type ViewId = 'workbench' | 'runs' | 'library' | 'platforms' | 'ops' | 'settings'
 
 export type StageId = 'intake' | 'understand' | 'article' | 'poster' | 'video' | 'publish'
 
@@ -90,10 +90,69 @@ export interface PaperDigest {
   stagesNote: string
 }
 
+/* ---------- 运营维护 ---------- */
+
+export interface OpsHealth {
+  probed: boolean
+  ok: boolean | null
+  status?: number
+  elapsedMs?: number
+  detail: string
+}
+
+export interface OpsService {
+  name: string
+  label: string
+  port: number
+  up: boolean
+  pid: number | null
+  url: string
+  health: OpsHealth
+  log: { path: string; exists: boolean; size: number; updatedAt: number }
+  restartHint: string
+}
+
+export interface OpsLog {
+  name: string
+  path: string
+  lines: string[]
+  matched: number
+  size: number
+  truncated: boolean
+}
+
+export interface OpsMetricItem {
+  id: string
+  url: string
+  title: string
+  author?: string
+  publishedAt?: number
+  stats: Record<string, number | null>
+  source: string
+}
+
+export interface OpsMetricChannel {
+  id: string
+  name: string
+  kind: string
+  source: string
+  items: OpsMetricItem[]
+  errors: string[]
+  totals: Record<string, number>
+  gap: string
+  account?: { name: string; raw: Record<string, unknown> }
+}
+
+export interface OpsMetrics {
+  fetchedAt: number
+  channels: OpsMetricChannel[]
+}
+
 export interface ArticleVariant {
   /** "{platform}-{voice}"，例如 zhihu-analyst */
   id: string
-  platform: 'xhs' | 'zhihu' | 'bilibili'
+  /** 与后端 app/styles.py 的 PLATFORMS 一致（后端 models.py 已含 "en"，漏加会导致收不到英文变体） */
+  platform: 'xhs' | 'zhihu' | 'bilibili' | 'en'
   voice: string
   label: string
   url: string
@@ -101,6 +160,9 @@ export interface ArticleVariant {
 }
 
 export interface RunConfig {
+  /** 用户自由文本指令（「这篇论文我想出成什么格式」）。只影响风格/体裁/篇幅/侧重，
+   *  不改变事实层；适用边界见后端 app/prompts.py 的 BRIEF_RULES，遵从度由 brief_checks 机检 */
+  brief?: string
   article: { variants: string[] }
   poster: { size: string; venue: string; theme: string; lang: string }
   video: { durationSec: number; voice: string; aspect: '16:9' | '9:16'; narration: string }
@@ -192,7 +254,7 @@ export interface PlatformQrcode {
 export const STAGE_ORDER: StageId[] = ['intake', 'understand', 'article', 'poster', 'video', 'publish']
 
 export const STAGE_META: Record<StageId, { label: string; engine: string; hint: string }> = {
-  intake: { label: '输入归一化', engine: 'MinerU · arXiv source', hint: 'PDF / arXiv / LaTeX → 统一 paper 模型' },
+  intake: { label: '输入归一化', engine: 'PyMuPDF · arXiv source', hint: 'PDF / arXiv / LaTeX → 统一 paper 模型' },
   understand: { label: '论文理解层', engine: 'paper2note', hint: '唯一事实源：贡献 / 方法 / 证据 / 图表' },
   article: { label: '文章生成', engine: 'styles · platform × voice', hint: '平台体裁 × 讲述者人格（小红书 / 知乎 / B站）' },
   poster: { label: 'Poster 生成', engine: 'paper2poster · Paper2Poster', hint: 'Parser → Planner → Painter → 盲读校验' },

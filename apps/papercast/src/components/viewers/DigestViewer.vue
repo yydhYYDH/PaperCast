@@ -1,18 +1,30 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import type { PaperDigest } from '../../types'
+import { computed, onMounted, ref } from 'vue'
+import type { PaperDigest, PaperRun } from '../../types'
+import { sampleAsset } from '../../data/example'
+import { assetUrl } from '../../api'
+
+const props = defineProps<{ run?: PaperRun }>()
 
 const digest = ref<PaperDigest | null>(null)
 const failed = ref(false)
 
+/** 这次运行真出的 digest 优先；示例只在读不到真产物时兜底 */
+const artifact = computed(() =>
+  props.run?.stages.find((s) => s.id === 'understand')?.artifacts.find((a) => a.path.endsWith('digest.json')),
+)
+
 onMounted(async () => {
-  try {
-    const res = await fetch('/samples/digest.json')
-    if (!res.ok) throw new Error(String(res.status))
-    digest.value = (await res.json()) as PaperDigest
-  } catch {
-    failed.value = true
+  for (const src of [assetUrl(artifact.value?.url), sampleAsset('digest.json')]) {
+    if (!src) continue
+    try {
+      const res = await fetch(src)
+      if (!res.ok) continue
+      digest.value = (await res.json()) as PaperDigest
+      return
+    } catch { /* 试下一个 */ }
   }
+  failed.value = true
 })
 </script>
 

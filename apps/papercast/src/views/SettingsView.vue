@@ -8,6 +8,13 @@ const store = useRunsStore()
 
 <template>
   <div class="page">
+    <header class="page-head">
+      <div class="grow">
+        <h1 class="page-title">设置</h1>
+        <p class="page-lead">模型与密钥、本机依赖，以及每个环节背后用到的开源实现。日常使用不需要动这里。</p>
+      </div>
+    </header>
+
     <ModelApiPanel />
 
     <section class="panel">
@@ -73,7 +80,7 @@ const store = useRunsStore()
           示例视频来自 showlab/Paper2Video 的公开产物。
         </p>
         <p class="panel-sub">
-          真实流水线里每个阶段都要跑分钟级的外部工具（MinerU、xelatex、TTS、浏览器渲染、平台发布），
+          真实流水线里每个阶段都要跑分钟级的外部工具（PyMuPDF、xelatex、TTS、浏览器渲染、平台发布），
           所以这个面板把「人工闸门」和「阶段产物」做成一等公民：任何一步都能停下来看、确认、再往下走。
         </p>
       </div>
