@@ -11,6 +11,7 @@
 #   6) 最近 10 分钟被改的文件（谁在动哪块，判断是否撞车）
 #   7) 在途 run 状态（重启后端前必看：02:35 真发生过一次重启，把别人的在途 run 判死了）
 #   8) 后端单测（AGENTS.md §4 的口径；红要重跑一次再判定，中途状态很常见）
+#   9) 静默时长（按源码量「谁还在改」，排除我跑 pytest 产生的 __pycache__）
 #
 # 用法：./ops/supervise.sh [--fast]     --fast 跳过 vue-tsc（约 40s），只做接口与增量
 set -euo pipefail
@@ -103,6 +104,42 @@ if [ "$FAST" = "0" ]; then
   echo "=== 8) 前端类型检查 ==="
   ( cd apps/papercast && timeout 150 npx vue-tsc --noEmit 2>&1 | tail -8 ) && echo "  ok: vue-tsc 通过" || echo "  !! vue-tsc 有错（看上面）"
 fi
+
+echo
+echo "=== 9) 静默时长（判断「两端是否已停止改动」的口径）==="
+# 为什么单列一项：我第一版量「最后改动」时量到了 __pycache__/*.pyc（那是我自己跑 pytest 生成的），
+# 差点把「我在跑测试」误判成「后端在改代码」。这里按源码后缀 walk，且跳过 __pycache__/node_modules。
+python3 - "$WS" <<'PY'
+import os, sys, time
+WS = sys.argv[1]
+areas = (
+    ("前端 src", "apps/papercast/src", (".ts", ".vue")),
+    ("后端 app", "apps/papercast-server/app", (".py",)),
+    ("后端 tests", "apps/papercast-server/tests", (".py",)),
+    ("ops", "ops", (".sh", ".py")),
+    ("docs", "docs", (".md",)),
+)
+now = time.time()
+for label, rel, exts in areas:
+    newest, path = 0.0, ""
+    for root, dirs, files in os.walk(os.path.join(WS, rel)):
+        if "__pycache__" in root or "node_modules" in root or ".venv" in root:
+            continue
+        for fn in files:
+            if not fn.endswith(exts):
+                continue
+            p = os.path.join(root, fn)
+            try:
+                m = os.path.getmtime(p)
+            except OSError:
+                continue
+            if m > newest:
+                newest, path = m, os.path.relpath(p, WS)
+    if not newest:
+        print("  %-10s 无文件" % label)
+        continue
+    print("  %-10s %s（%d 分钟前）%s" % (label, time.strftime("%H:%M:%S", time.localtime(newest)), int((now - newest) // 60), path))
+PY
 
 echo
 echo "=== 监督口径提醒 ==="
