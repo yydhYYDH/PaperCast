@@ -2,7 +2,8 @@
 
 > 这里全是**别人的代码，只读**。用途是给 PaperCast 的设计找参考实现，不参与构建。
 > 规则见 [`../conventions.md`](../conventions.md) 第 7 节：不改上游、不用 submodule、结论写回 `docs/research/`。
-> 快照时间：2026-09-19 · 共 23 个 · 合计约 2.5G。删掉后可按下表来源重新克隆。
+> 快照时间：2026-09-19 · 共 24 个 · 合计约 2.5G。删掉后可按下表来源重新克隆。
+> 自查：`./ops/sync_upstream.sh --list` 会核对「本地目录数 vs 登记数」是否一致（多一个少一个都会报出来）。
 
 ## 复现 / 状态核对
 
@@ -24,6 +25,7 @@
 | `Paper2Poster` | [Paper2Poster/Paper2Poster](https://github.com/Paper2Poster/Paper2Poster) | `623d042` | 2026-06-08 | 1.2G | R2 `poster` 阶段：论文→海报的视觉排版与图文对齐 |
 | `Paper2Video` | [showlab/Paper2Video](https://github.com/showlab/Paper2Video) | `47beb50` | 2026-03-05 | 65M | R2 `video` 阶段：幻灯片+旁白+TTS 的成片流程 |
 | `Paper2Slides` | [HKUDS/Paper2Slides](https://github.com/HKUDS/Paper2Slides) | `0785051` | 2026-05-20 | 40M | Beamer/HTML 幻灯片生成路径 |
+| `sustech-slides-template` | [yhbcode000/sustech-slides-template](https://github.com/yhbcode000/sustech-slides-template) | `55147b3` | 2026-08-12 | 8.0M | 中英文 LaTeX Beamer 学术报告模板（`p2b` 幻灯片轨道的排版底座） |
 | `Paper2Any` | [OpenDCAI/Paper2Any](https://github.com/OpenDCAI/Paper2Any) | `b538531` | 2026-08-31 | 345M | 一站式「一份论文→多形态」的编排方式 |
 | `PPTAgent` | [icip-cas/PPTAgent](https://github.com/icip-cas/PPTAgent) | `2419d30` | 2026-06-28 | 148M | 论文→PPT 的 agent 编排与自评机制 |
 | `paper2anything` | [QuZhan51496/paper2anything](https://github.com/QuZhan51496/paper2anything) | `72bf82d` | 2026-07-16 | 79M | `scripts/parse_pdf.py`：轻量 PDF 解析（M1 intake 对照） |
@@ -83,7 +85,7 @@
 | 许可 | 仓库 |
 | --- | --- |
 | MIT | `Paper2Poster`、`Paper2Slides`、`Paper2Video`、`PPTAgent`、`zhihu-cli`、`zhihu-automation-skill`、`zhihu-publisher`、`ip-publisher` |
-| Apache-2.0 | `paper2x`、`paper2anything`、`Paper2Any`、`paper-share-skills`、`wechat-article-skills`、`zhihu-mcp-wingAGI` |
+| Apache-2.0 | `paper2x`、`paper2anything`、`Paper2Any`、`paper-share-skills`、`wechat-article-skills`、`sustech-slides-template`、`zhihu-mcp-wingAGI` |
 | **AGPL-3.0** | `guizang-social-card-skill` —— ⚠️ 复制其代码会传染到整个分发物，动手前先评估 |
 | 未见 LICENSE 文件 | `ZhihuPublisher`、`paper-to-wechat`、`paper2content`、`zhihu-mcp`、`zhihu`、`zhihuMcpServer`、`zhihu_mcp_server`、`zhihu-mcp-server` —— 按默认版权「保留所有权利」对待，**只能读，不要抄进 `apps/`** |
 

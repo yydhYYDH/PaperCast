@@ -105,8 +105,12 @@ try {
       src: im.getAttribute('src') || '', natural: im.naturalWidth + 'x' + im.naturalHeight,
       box: Math.round(im.getBoundingClientRect().width) + 'x' + Math.round(im.getBoundingClientRect().height),
     }))
+    const regions = Array.from(document.querySelectorAll('[data-region]')).map((el) => {
+      const r = el.getBoundingClientRect()
+      return { name: el.getAttribute('data-region') || '', x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
+    })
     return {
-      panels, images,
+      panels, images, regions,
       docH: document.documentElement.scrollHeight,
       docW: document.documentElement.scrollWidth,
       bodyBg: getComputedStyle(document.body).backgroundColor,

@@ -6,12 +6,13 @@
 
 | 文档 | 内容 | 状态 |
 | --- | --- | --- |
+| [`TODO.md`](TODO.md) | **项目级任务板**：本轮目标、分组任务、谁负责、变更记录 | 活 |
 | [`00-goal-and-architecture.md`](00-goal-and-architecture.md) | 跨子项目总纲：意图、R1 目标、五层架构、ADR、验收标准 | 有效 |
 | [`conventions.md`](conventions.md) | **目录 / 路径 / 命名 / 密钥规范**（本工作区的法律） | 有效 |
 | [`migration-2026-09-19.md`](migration-2026-09-19.md) | 2026-09-19 目录分层迁移：旧→新对照、影响、回滚 | 记录 |
 | [`research/`](research/) | 调研结论与上游清单 | — |
 | [`research/paper-dissemination-agents-landscape.md`](research/paper-dissemination-agents-landscape.md) | 论文传播类 Agent 生态调研（各平台工具链盘点） | 有效 |
-| [`research/upstream-repos.md`](research/upstream-repos.md) | `reference/upstream/` 23 个上游仓库清单（来源/HEAD/借用点） | 有效 |
+| [`research/upstream-repos.md`](research/upstream-repos.md) | `reference/upstream/` 上游仓库登记表（来源/HEAD/借用点/许可证），是 `ops/sync_upstream.sh` 的唯一输入 | 有效 |
 | [`evidence/`](evidence/) | 验收证据：小红书测试帖截图等 | — |
 | [`patches/`](patches/) | 上游/本地改动补丁留档 | — |
 

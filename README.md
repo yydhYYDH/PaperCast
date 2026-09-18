@@ -21,7 +21,7 @@
 | | `upstream/` 23 个上游参考实现（清单见 `docs/research/upstream-repos.md`） | |
 | | `baoyu-research/` 出图后端调研（R2 素材增强） | |
 | `ops/` | **跨组件的脚本与工具** | 脚本不可删 |
-| | `start_all.sh` / `stop_all.sh` 起停三个服务；`build_mcp.sh` 重建 Go 二进制 | |
+| | `start_all.sh` / `stop_all.sh` 起停三个服务；`build_mcp.sh` 重建 Go 二进制；`sync_upstream.sh` 核对/复现上游参考 | |
 | | `shot/` HTML→PNG 渲染（chrome-headless-shell）；`bin/` 本地编译的发布二进制 | |
 | | `skillsearch/` 上游技能调研脚本 | |
 | `var/` | **运行态**：runs / uploads / logs / pids / samples / cache / toolchains | 可删（见 `var/README.md`） |

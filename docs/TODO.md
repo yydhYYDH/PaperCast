@@ -1,7 +1,7 @@
 # TODO · PaperCast
 
 > **项目级任务板。** 路径约定：代码在 `apps/`，工具与脚本在 `ops/`，运行态在 `var/`，文档在 `docs/`。
-> 架构与设计决策见 `docs/00-goal-and-architecture.md`（另一位 agent 正在修订中）。
+> 架构与设计决策见 `docs/00-goal-and-architecture.md`（另一位 agent 正在修订中）；上游仓库清单与复现见 `docs/research/upstream-repos.md`。
 >
 > **维护约定**：只改自己负责那一组的「状态」和「备注」列，不要在别人的任务上打分或改范围；改完在文末「变更记录」追加一行（日期 + 谁 + 改了什么）。
 >
@@ -38,7 +38,7 @@
 
 ### 当前服务状态
 
-三个服务**当前都已停止**（`var/logs/backend.log` 尾部为 graceful shutdown）。用 `./ops/start_all.sh` 起。
+三个服务**当前都在跑**（`8000` / `5178` / `18060` 均在监听，2026-09-19 复核）。启停用 `./ops/start_all.sh` / `./ops/stop_all.sh`（幂等，端口占用会跳过）。
 
 ---
 
@@ -98,8 +98,9 @@
 
 | ID | 任务 | P | 说明 | 状态 |
 | --- | --- | --- | --- | --- |
-| F1 | **补 `docs/conventions.md`** | P0 | `ops/start_all.sh` 注释里引用「路径约定见 docs/conventions.md」，但该文件**不存在** | ⬜ |
-| F2 | 版本控制 | P1 | 根目录**不是 git 仓库**，目前全项目无版本控制（`apps/papercast-server` 等也无）。建议 init + 首次提交 + `.gitignore` 排除 `var/`、`.venv*`、`.p2b/`、`node_modules/` | ⬜ |
+| F1 | 补 `docs/conventions.md` | — | ✅ 已由另一 agent 建好（含 §7 上游规范、§8 脚本规范） | ✅ |
+| F2 | **版本控制** | P1 | `.gitignore` 已由另一 agent 建好（覆盖 `var/`、`node_modules`、`.venv`、`cookies.json`、`.env`、`reference/upstream/`）；**仍缺 `git init` + 首次提交** —— 现在全项目依然没有版本控制，误删不可恢复 | ⬜ |
+| F6 | **上游清单与复现机制** | — | ✅ `docs/research/upstream-repos.md` 已补「复现 / 状态核对」节 + 许可与合规节 + D 组；`ops/sync_upstream.sh` 可 `--list` 核对 / 按登记 commit 复现。当前 24 个全部一致。**新增上游仓库必须登记** | ✅ |
 | F3 | 补丁归档流程 | P2 | 已有 `docs/patches/xhs-mcp-local-2026-09-19/` 一例（base-commit + diff + status），把它固化为例行做法 | ⬜ |
 | F4 | 服务开机自启 | P2 | `start_all.sh` 能脱离终端但**开机不自启**；持久化需 root + systemd | ⬜ |
 | F5 | 架构文档修订 | — | `docs/00-goal-and-architecture.md` 正被另一 agent 修改（我的初版已从 `/home/yydh/hack/docs/` 移入） | 🟡 |
@@ -108,7 +109,7 @@
 
 | ID | 任务 | P | 说明 | 状态 |
 | --- | --- | --- | --- | --- |
-| G1 | 顶层 `README.md` | P1 | 现在根目录没有 README：怎么起、怎么跑一遍、各部分在哪 | ⬜ |
+| G1 | 顶层 `README.md` | — | ✅ 已由另一 agent 建好（根目录现在只有 `README.md` / `AGENTS.md` / `.gitignore` 三个文件 —— 本任务板因此已移到 `docs/TODO.md`） | ✅ |
 | G2 | 一键 demo 脚本 | P1 | `ops/start_all.sh` → 建 run → 走到 draft → 打开 dashboard → 打印产物路径 | ⬜ |
 | G3 | 演示材料 | P1 | 已有 10 张界面截图在 `apps/papercast/screenshots/`（mock 态）；需补**真后端**跑通的截图/录屏 | ⬜ |
 
@@ -145,3 +146,4 @@ C1 (渠道抽象) ──► 多平台扩展不再是四份定制代码
 | 日期 | 谁 | 变更 |
 | --- | --- | --- |
 | 2026-09-19 | 前端 agent | 建立本任务板；按用户决策写入三条（视频外部负责 / 远端不接入 / 英文传播要做）；补现状快照与 A–G 分组 |
+| 2026-09-19 | 前端 agent | 任务板移至 `docs/TODO.md`（根目录只允许三个文件）；F1/G1 完成、F2 收窄为「只差 git init」、新增 F6 上游复现机制；补登 `sustech-slides-template`（第 24 个上游） |

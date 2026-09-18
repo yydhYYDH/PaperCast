@@ -8,6 +8,7 @@
 | `build_mcp.sh` | 重建 `ops/bin/` 里的三个 Go 二进制（干净版 + 本地 auth 版 + 登录工具） |
 | `bin/` | 本地编译产物：`xiaohongshu-mcp`（上游 HEAD 干净版）、`xiaohongshu-mcp-auth`（含本地 `auth.go` 改动）、`xiaohongshu-login`（扫码登录工具）。**二进制，不要 `sed`/改内容，只能重建** |
 | `shot/` | HTML→PNG 渲染与截图脚本（chrome-headless-shell，来自 Playwright 缓存）；前端 10 张界面截图由 `shot.mjs` 生成 |
+| `sync_upstream.sh` | 按 `docs/research/upstream-repos.md` 的登记表复现/核对 `reference/upstream/`（`--list` 只核对，默认补齐缺失；幂等、非破坏） |
 | `skillsearch/` | 上游技能调研脚本（`clone.sh` 克隆 11 个参考仓库、`inspect/deep2/readmes` 提取 README 结构） |
 
 ## 约定
