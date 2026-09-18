@@ -126,7 +126,7 @@ GOPROXY=https://proxy.golang.org ./ops/build_mcp.sh
 ```bash
 # 1) 渠道层自检（不联网、不投递、不写真实 var/ 数据）
 apps/papercast-server/.venv/bin/python apps/papercast-server/scripts/check_channels.py
-#    期望：25 项通过 / 0 失败
+#    期望：0 失败（全新环境 24 项；工作区里已有真实 run 时是 25 项——多出的那条在核验真实投递回执）
 
 # 2) 服务存活
 ./ops/start_all.sh && curl -s http://127.0.0.1:8000/api/health
@@ -156,3 +156,29 @@ cd apps/papercast && npx vue-tsc --noEmit
 产出、日志、缓存、凭证、工具链全在 `var/` 下，删掉整个目录只会丢历史运行记录。
 目录职责与清理建议见 `var/README.md` 与 `docs/conventions.md` §4。最该珍惜的是：
 `var/secrets/`（凭证）、`var/home/.bilibili/`、`var/cache/xiaohongshu-mcp/browser/`（登录态）、`var/runs/`（历史产出）。
+
+## 10. 推到 GitHub 之前
+
+**① 体积**：`ops/bin/` 里有 5 个随仓库提供的二进制，共约 95 MB
+（3 个 Linux：`xiaohongshu-mcp`(22M)、`xiaohongshu-mcp-auth`(22M)、`xiaohongshu-login`(15M)；
+2 个 Windows `.exe`：21M + 14M）。GitHub 单文件上限 100 MB，总量 1 GB 会警告。
+想瘦身就删掉两个 `.exe`（只在 Windows 部署时才用，可由 `ops/build_mcp.sh` 重建），
+或改用 Git LFS。
+
+**② 凭证别推上去**（推之前跑一遍）：
+
+```bash
+git ls-files | grep -E 'cookie|\.env$|secret|\.venv|node_modules' || echo '干净'
+git grep -nIE 'SESSDATA|z_c0=|sk-[A-Za-z0-9]{20,}' $(git rev-list --all | head -50) || echo '历史里没有凭证'
+```
+
+**③ 推**：
+
+```bash
+git remote add origin git@github.com:<你的账号>/<仓库名>.git
+git push -u origin main
+```
+
+**④ CI**：仓库自带 `.github/workflows/ci.yml`，push 会跑两件事 ——
+后端渠道层自检（`scripts/check_channels.py`，不联网不投递）与前端 `vue-tsc` 类型检查。
+
