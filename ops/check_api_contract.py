@@ -95,6 +95,7 @@ def frontend_calls() -> dict[tuple[str, str], list[str]]:
 
 def live_probe(paths: list[str]) -> None:
     """对无路径参数的 GET 打一次真实服务：证明「代码里有」和「跑着的有」是一回事。"""
+    import time
     import urllib.error
     import urllib.request
 
@@ -102,8 +103,9 @@ def live_probe(paths: list[str]) -> None:
     print()
     print(f"[live] 探活 {base} （无路径参数的 GET）")
     for p in paths:
+        t0 = time.monotonic()
         try:
-            with urllib.request.urlopen(base + p, timeout=8) as r:
+            with urllib.request.urlopen(base + p, timeout=20) as r:
                 body = r.read(4000).decode("utf-8", "replace")
             try:
                 data = json.loads(body)
@@ -111,7 +113,10 @@ def live_probe(paths: list[str]) -> None:
                     f"list[{len(data)}]" if isinstance(data, list) else type(data).__name__)
             except Exception:
                 shape = body[:60].replace("\n", " ")
-            print(f"     200 {p:26} {shape}")
+            dt = time.monotonic() - t0
+            # 耗时也报出来：本机常有长 run 在跑，慢是负载信号，不是接口的对错
+            slow = " [慢]" if dt > 3 else ""
+            print(f"     200 {p:26} {shape} {dt:.2f}s{slow}")
         except urllib.error.HTTPError as e:
             raw = e.read(600).decode("utf-8", "replace")
             # 紧凑 JSON 没有空格：只认 "loc":["query","name"] 这种
@@ -125,7 +130,13 @@ def live_probe(paths: list[str]) -> None:
             else:
                 print(f"     {e.code} {p:26} {raw[:80].replace(chr(10), ' ')}")
         except Exception as e:
-            print(f"     --- {p:26} 打不通: {type(e).__name__}")
+            dt = time.monotonic() - t0
+            if isinstance(e, TimeoutError):
+                # 超时 != 接口有问题：实测 /api/platforms 在负载下要 5.5s。
+                # 探针超时只说明「这一次没在 20s 内答」，下结论前先单独 curl 复核。
+                print(f"     --- {p:26} 本次超时 {dt:.1f}s（20s 上限，可能是负载）→ 单独 curl 复核再判定")
+            else:
+                print(f"     --- {p:26} 打不通: {type(e).__name__}")
 
 
 def main() -> int:
