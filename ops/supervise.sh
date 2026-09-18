@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# 一轮监督：把「两个 agent 并行改前后端」这件事里我该看的东西一次看完。
+#
+# 为什么要脚本：监督的价值在于每轮口径一致、可比对，而不是我每次凭记忆抽查。
+# 每轮固定看六件事：
+#   1) 看板增量（他们回了什么、问我什么，必须第一时间答/裁决）
+#   2) 接口对账（前端调了后端没有的 = 一定 404；后端加了前端没接 = 待接项）
+#   3) 前端类型检查（并发改动的第一道破口）
+#   4) 后端能否干净导入（语法/循环导入被改坏的信号）
+#   5) 合并冲突标记残留（两边同时写同一文件的直接痕迹）
+#   6) 最近 10 分钟被改的文件（谁在动哪块，判断是否撞车）
+#
+# 用法：./ops/supervise.sh [--fast]     --fast 跳过 vue-tsc（约 40s），只做接口与增量
+set -euo pipefail
+
+WS="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$WS"
+FAST=0
+[ "${1:-}" = "--fast" ] && FAST=1
+SEEN="$WS/var/board/.last_seen"
+mkdir -p "$WS/var/board"
+touch "$SEEN"
+
+echo "=== 1) 看板增量（自上次监督）==="
+python3 - "$WS/var/board/messages.jsonl" "$SEEN" <<'PY'
+import json, pathlib, sys
+msgs, seen_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+rows = [json.loads(l) for l in msgs.read_text(encoding="utf-8").splitlines() if l.strip()] if msgs.exists() else []
+seen = int(seen_path.read_text().strip() or 0) if seen_path.exists() else 0
+fresh = rows[seen:]
+who = [r for r in fresh if r["from"] != "master"]
+print(f"  新帖 {len(fresh)} 条，其中别人发的 {len(who)} 条")
+for r in who:
+    to = f" -> {r['to']}" if r.get("to") else ""
+    print(f"  [{r['kind']}] {r['from']}{to}: {r['text'][:400]}")
+if not who:
+    print("  （他们没回话 —— 可能还没读写看板，需要人转达）")
+seen_path.write_text(str(len(rows)), encoding="utf-8")
+PY
+
+echo
+echo "=== 2) 接口对账 ==="
+python3 ops/check_api_contract.py 2>&1 | head -20 || true
+
+echo
+echo "=== 3) 后端能否干净导入 ==="
+( cd apps/papercast-server && timeout 60 .venv/bin/python -c "
+from app.main import app
+p = app.openapi()['paths']
+print(f'  ok: {len(p)} 条路由')
+" 2>&1 | tail -3 ) || echo "  !! 导入失败（看上面 traceback）"
+
+echo
+echo "=== 4) 合并冲突标记残留 ==="
+if grep -rn -e '^<<<<<<< ' -e '^>>>>>>> ' apps/ docs/ 2>/dev/null | head -5; then
+  echo "  !! 有冲突标记，立刻处理"
+else
+  echo "  ok: 无残留"
+fi
+
+echo
+echo "=== 5) 最近 10 分钟被改的文件 ==="
+find apps -type f \( -name '*.py' -o -name '*.ts' -o -name '*.vue' \) -newermt '-10 minutes' 2>/dev/null | sed 's|^|  |' | head -25
+
+if [ "$FAST" = "0" ]; then
+  echo
+  echo "=== 6) 前端类型检查 ==="
+  ( cd apps/papercast && timeout 150 npx vue-tsc --noEmit 2>&1 | tail -8 ) && echo "  ok: vue-tsc 通过" || echo "  !! vue-tsc 有错（看上面）"
+fi
+
+echo
+echo "=== 监督口径提醒 ==="
+echo "  前端调后端没有的 = 一定 404，最高优先级，立刻在看板问责"
+echo "  两套接口并存（/api/channels vs /api/platforms）= 迟早漂移，必须定归属"
+echo "  同一文件被两条轨道同时改 = 直接裁决单一写者，别让它们自己商量"
