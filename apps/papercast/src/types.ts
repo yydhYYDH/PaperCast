@@ -253,11 +253,11 @@ export interface PlatformQrcode {
 
 export const STAGE_ORDER: StageId[] = ['intake', 'understand', 'article', 'poster', 'video', 'publish']
 
-export const STAGE_META: Record<StageId, { label: string; engine: string; hint: string }> = {
-  intake: { label: '输入归一化', engine: 'PyMuPDF · arXiv source', hint: 'PDF / arXiv / LaTeX → 统一 paper 模型' },
-  understand: { label: '论文理解层', engine: 'paper2note', hint: '唯一事实源：贡献 / 方法 / 证据 / 图表' },
-  article: { label: '文章生成', engine: 'styles · platform × voice', hint: '平台体裁 × 讲述者人格（小红书 / 知乎 / B站）' },
-  poster: { label: 'Poster 生成', engine: 'paper2poster · Paper2Poster', hint: 'Parser → Planner → Painter → 盲读校验' },
-  video: { label: '视频合成', engine: 'paper-share-skills · Paper2Video', hint: 'Beamer → 旁白 → TTS → 合成 + 封面' },
-  publish: { label: '发布与运营', engine: 'xiaohongshu-mcp · zhihu-publisher · biliup', hint: '小红书 / 知乎 / B 站，人工确认后发出' },
+export const STAGE_META: Record<StageId, { label: string; hint: string }> = {
+  intake: { label: '输入归一化', hint: 'PDF / arXiv / LaTeX → 统一 paper 模型' },
+  understand: { label: '论文理解层', hint: '唯一事实源：贡献 / 方法 / 证据 / 图表' },
+  article: { label: '文章生成', hint: '平台体裁 × 讲述者人格（小红书 / 知乎 / B站）' },
+  poster: { label: 'Poster 生成', hint: '排版、作图、盲读校验' },
+  video: { label: '视频合成', hint: '幻灯片 → 旁白 → 配音 → 合成 + 封面' },
+  publish: { label: '发布与运营', hint: '小红书 / 知乎 / B 站，人工确认后发出' },
 }

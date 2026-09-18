@@ -130,7 +130,7 @@ async function doLogout(id: string, name: string, account: string) {
             <button v-if="c.state === 'ready'" class="btn sm danger" :disabled="store.workingId === c.id" @click="doLogout(c.id, c.name, c.account)">
               退出登录
             </button>
-            <span class="panel-sub">桌面会弹出浏览器窗口，扫码或账号登录（含人机验证）；登录态落在本机 zhihu-publisher，真实发布仍需人工闸门</span>
+            <span class="panel-sub">桌面会弹出浏览器窗口，扫码或账号登录（含人机验证）；登录态保存在本机，真实发布仍需你确认</span>
           </template>
           <!-- 凭证 / CLI 类渠道 -->
           <template v-else>

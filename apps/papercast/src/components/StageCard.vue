@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Stage } from '../types'
-import { REUSE_NOTE, STAGE_STATUS, fmtClock, fmtDuration } from '../utils'
+import { STAGE_STATUS, fmtClock, fmtDuration } from '../utils'
 import { useUiStore } from '../stores/ui'
 
 const props = defineProps<{ stage: Stage; index: number }>()
@@ -34,10 +34,8 @@ const KIND_ICON: Record<string, string> = {
         <div class="row wrap gap">
           <strong class="c-title">{{ stage.label }}</strong>
           <span class="chip" :class="st.cls"><i class="dot" />{{ st.label }}</span>
-          <span v-if="stage.engine" class="chip mono">{{ stage.engine }}</span>
           <span v-if="stage.startedAt" class="muted mono ts">{{ duration }}</span>
         </div>
-        <div v-if="open" class="reuse mono">↳ 复用 {{ REUSE_NOTE[stage.id] }}</div>
       </div>
       <svg class="caret" :class="{ open }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6" /></svg>
     </header>

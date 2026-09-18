@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
-import { ENV_DEPS } from '../data/env'
+import { useEnvStore } from '../stores/env'
 import { useRunsStore } from '../stores/runs'
 import { usePlatformsStore } from '../stores/platforms'
 import { useUiStore } from '../stores/ui'
@@ -20,7 +20,9 @@ const TITLES: Record<ViewId, string> = {
   settings: '设置',
 }
 
-const ok = computed(() => ENV_DEPS.filter((d) => d.state === 'ok').length)
+const env = useEnvStore()
+/** 悬停时逐条说清「哪项还没好」，不暴露端口/工具名 */
+const envTip = computed(() => env.rows.map((r) => r.label + '：' + r.detail).join('\n'))
 
 /** 小红书是唯一有真实登录入口的渠道：状态直接顶到顶栏，没登录时点一下就能扫码 */
 const xhs = computed(() => platforms.channel('xhs'))
@@ -29,6 +31,7 @@ const probing = computed(() => !xhs.value && !platforms.refreshedAt)
 
 onMounted(() => {
   if (!platforms.channels.length) void platforms.refresh(false)
+  void env.load()
 })
 </script>
 
@@ -69,9 +72,15 @@ onMounted(() => {
       小红书 {{ xhs.state === 'ready' ? (xhs.account || '已登录') : PLATFORM_STATE[xhs.state].label }}
     </button>
 
-    <span class="chip" :class="ok === ENV_DEPS.length ? 'ok' : 'warn'" title="本机依赖项的就绪数量">
-      <i class="dot" />环境 {{ ok }}/{{ ENV_DEPS.length }}
-    </span>
+    <button
+      class="chip login-chip"
+      :class="env.ready ? 'ok' : 'warn'"
+      :title="envTip"
+      @click="ui.setView('settings')"
+    >
+      <i class="dot" />
+      {{ env.ready ? '环境就绪' : '待处理 ' + env.pending.length + ' 项' }}
+    </button>
   </header>
 </template>
 

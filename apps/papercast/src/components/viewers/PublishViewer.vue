@@ -11,28 +11,25 @@ const platforms = usePlatformsStore()
 
 const stage = computed(() => props.run.stages.find((s) => s.id === 'publish'))
 
-/** 渠道的静态说明（引擎 / 投递要求）；登录态一律取平台 store 的真实探测结果 */
+/** 渠道的静态说明（投递要求）；登录态一律取平台 store 的真实探测结果 */
 const CHANNELS = [
   {
     id: 'xhs',
     name: '小红书',
-    engine: 'xiaohongshu-mcp · http://127.0.0.1:18060',
     needs: ['6 张卡片图', '标题 ≤ 20 字', '正文 + 话题标签'],
-    note: 'MCP 已登录，发布前仍有闸门确认',
+    note: '发布前仍有一道人工确认',
   },
   {
     id: 'zhihu',
     name: '知乎',
-    engine: 'zhihu-publisher · http://127.0.0.1:18070',
     needs: ['标题 + 纯文本正文', '话题 / 标签'],
-    note: '风控拦纯 HTTP 扫码，登录走桌面窗口；发布仍需人工闸门',
+    note: '需要在本机弹出的窗口里人工登录；发布仍需人工确认',
   },
   {
     id: 'bilibili',
     name: 'B 站',
-    engine: 'biliup 投稿 CLI',
     needs: ['横版 16:9 视频', '竖版封面', '分区 / 简介 / 标签'],
-    note: 'biliup 未登录；元数据校验已通过',
+    note: '需要先扫码登录；元数据校验已通过',
   },
 ]
 
@@ -111,7 +108,7 @@ onMounted(() => {
               {{ stateOf('xhs') === 'ready' ? '切换账号' : '扫码登录' }}
             </button>
           </div>
-          <div class="mono ch-engine">{{ c.engine }}</div>
+
           <div class="row wrap gap">
             <span v-for="n in c.needs" :key="n" class="chip tiny">{{ n }}</span>
           </div>

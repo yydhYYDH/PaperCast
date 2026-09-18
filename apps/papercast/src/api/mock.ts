@@ -196,7 +196,7 @@ function makeStage(id: StageId, status: StageStatus = 'pending'): Stage {
   return {
     id,
     label: STAGE_META[id].label,
-    engine: STAGE_META[id].engine,
+    engine: '',
     status,
     progress: 0,
     logs: [],
@@ -698,7 +698,7 @@ export class MockPipelineApi implements PipelineApi {
     next.progress = 1
     next.startedAt = Date.now()
     run.status = 'running'
-    next.logs.push({ ts: Date.now(), level: 'info', text: `▶ ${next.label} · ${next.engine}` })
+    next.logs.push({ ts: Date.now(), level: 'info', text: `▶ ${next.label}` })
     return next
   }
 

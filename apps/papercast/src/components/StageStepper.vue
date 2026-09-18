@@ -21,7 +21,6 @@ const emit = defineEmits<{ (e: 'jump', id: string): void }>()
             </span>
           </span>
           <span class="lbl">{{ s.label }}</span>
-          <span class="eng mono">{{ s.engine.split(' · ')[0] }}</span>
         </button>
         <span v-if="i < run.stages.length - 1" class="link" :class="{ filled: s.status === 'done' }" />
       </template>

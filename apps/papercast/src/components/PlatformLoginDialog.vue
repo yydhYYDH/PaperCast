@@ -98,7 +98,7 @@ function fmt(s: number) {
         </footer>
 
         <p v-if="isMock" class="mock-note">
-          当前是内置模拟器：这里显示的是演示二维码，不会真的登录。接真后端（VITE_API_BASE=http://127.0.0.1:8000）后即为真实登录入口。
+          演示模式：这是示例二维码，不会真的登录。连上本机后端后，这里就是真实的登录入口。
         </p>
       </section>
     </div>

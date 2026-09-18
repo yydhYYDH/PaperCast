@@ -91,7 +91,6 @@ function open(id: string) {
         <div v-for="s in store.active.stages" :key="s.id" class="row-item">
           <span class="pill" :class="STAGE_STATUS[s.status].cls" />
           <strong class="grow">{{ s.label }}</strong>
-          <span class="mono muted">{{ s.engine }}</span>
           <span class="mono muted-2">{{ Math.round(s.progress) }}%</span>
           <span class="mono muted-2">{{ s.artifacts.length }} 产物</span>
         </div>

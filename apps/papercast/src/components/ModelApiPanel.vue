@@ -156,7 +156,7 @@ onMounted(load)
 
         <div v-if="probe" class="probe" :class="probe.ok ? 'ok' : 'bad'">
           <template v-if="probe.ok">连接正常：{{ probe.model }} 回话「{{ probe.reply }}」，耗时 {{ probe.ms }} ms（{{ probe.baseUrl }}）</template>
-          <template v-else>探测失败 {{ probe.code }}：{{ probe.message }}（{{ probe.ms }} ms）</template>
+          <template v-else>探测失败：{{ probe.message }}</template>
         </div>
         <p v-if="probeError" class="err-line">探针没发出去：{{ probeError }}</p>
         <p v-if="savedKeys.length" class="ok-line">

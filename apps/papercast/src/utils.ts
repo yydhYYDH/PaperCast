@@ -53,12 +53,4 @@ export const PLATFORM_STATE: Record<PlatformState, { label: string; cls: string 
   blocked: { label: '受限', cls: 'warn' },
 }
 
-/** 这一步复用了哪些开源实现 —— 直接来自本次调研结论 */
-export const REUSE_NOTE: Record<string, string> = {
-  intake: 'paper-share-skills/pdf-to-markdown · paper2anything/scripts/parse_pdf.py',
-  understand: 'pickxiguapi/paper2x → paper2note',
-  article: 'kangw24/paper2content · QuZhan51496/paper2anything',
-  poster: 'paper2anything/paper2poster · Paper2Poster/Paper2Poster',
-  video: 'yhbcode000/paper-share-skills · showlab/Paper2Video',
-  publish: 'xpzouying/xiaohongshu-mcp · zhihu-publisher · biliup',
-}
+/* 各阶段复用了哪些开源实现，只写在 docs/research/upstream-repos.md 里，不在界面上出现。 */

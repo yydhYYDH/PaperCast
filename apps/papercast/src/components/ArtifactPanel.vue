@@ -52,10 +52,8 @@ const counts = computed(() =>
     </div>
 
     <footer class="viewer-foot mono">
-      <span class="muted-2">引擎</span>
-      <span class="grow ellipsis">{{ STAGE_META[TABS.find((t) => t.id === ui.tab)!.stage].engine }}</span>
-      <span class="muted-2">产物根目录</span>
-      <span>.papercast/runs/{{ run.id.slice(0, 10) }}/</span>
+      <span class="muted-2">这次运行</span>
+      <span class="grow ellipsis">产物都保存在本机（{{ run.id.slice(0, 10) }}）</span>
     </footer>
   </section>
 </template>
