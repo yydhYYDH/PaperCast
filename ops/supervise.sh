@@ -9,6 +9,7 @@
 #   4) 后端能否干净导入（语法/循环导入被改坏的信号）
 #   5) 合并冲突标记残留（两边同时写同一文件的直接痕迹）
 #   6) 最近 10 分钟被改的文件（谁在动哪块，判断是否撞车）
+#   7) 在途 run 状态（重启后端前必看：02:35 真发生过一次重启，把别人的在途 run 判死了）
 #
 # 用法：./ops/supervise.sh [--fast]     --fast 跳过 vue-tsc（约 40s），只做接口与增量
 set -euo pipefail
@@ -62,9 +63,32 @@ echo
 echo "=== 5) 最近 10 分钟被改的文件 ==="
 find apps -type f \( -name '*.py' -o -name '*.ts' -o -name '*.vue' \) -newermt '-10 minutes' 2>/dev/null | sed 's|^|  |' | head -25
 
+echo
+echo "=== 6) 在途 run 状态（重启后端前必看）==="
+python3 - "$WS" <<'PY'
+import glob, json, os, sys
+WS = sys.argv[1]
+rows = []
+for f in glob.glob(os.path.join(WS, "var", "runs", "*", "run.json")):
+    try:
+        d = json.load(open(f, encoding="utf-8"))
+    except Exception:
+        continue
+    rows.append((d.get("createdAt") or 0, d.get("id", "?"), d.get("status", "?"), (d.get("title") or "")[:28]))
+def n(st):
+    return len([r for r in rows if r[2] == st])
+print("  共 %d 条 | running %d | waiting %d | failed %d | done %d" % (len(rows), n("running"), n("waiting"), n("failed"), n("done")))
+for ts, rid, st, t in sorted([r for r in rows if r[2] in ("running", "waiting")]):
+    print("   %-8s %s %s" % (st, rid, t))
+if n("running"):
+    print("  !! 有 run 正在跑：现在重启后端 = 它们会被判 failed(INTERRUPTED)；先等，或先在看板喊一声再动")
+if n("waiting"):
+    print("  !! 有 run 卡在 waiting：B1 旧伤（重启前留下的），重启也不会自己继续 —— 别当成「在跑」")
+PY
+
 if [ "$FAST" = "0" ]; then
   echo
-  echo "=== 6) 前端类型检查 ==="
+  echo "=== 7) 前端类型检查 ==="
   ( cd apps/papercast && timeout 150 npx vue-tsc --noEmit 2>&1 | tail -8 ) && echo "  ok: vue-tsc 通过" || echo "  !! vue-tsc 有错（看上面）"
 fi
 
