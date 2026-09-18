@@ -129,5 +129,20 @@ print(sorted(d['digest'].keys()))"
 - **LaTeX 通道没有用真实论文验证过**：本机无 TeX 引擎，LaTeX 输入只能走源码解析，
   只在合成的小样本上跑过语法级检查。等有真实 LaTeX 论文（或装了 TeX Live）再补验证。
 - **扫描件 PDF**：本机无 tesseract，纯扫描件会明确报 `CONTENT_TOO_SHORT` 并提示需要 OCR，未做 OCR。
-- 公众号 / B 站通道未实现（M3 只做小红书）。
+- 公众号通道未实现（`platforms.py` 里声明为 `unconfigured`，投递层未收录）。
+- **B 站「通道投递」未实测**：通道服务（`apps/bilibili-publisher`，:18080）已实现并通过离线/探测自检；
+  本机已装 biliup（`var/toolchains/bili-venv`）并以 YYDH54 登录（`var/home/.bilibili/`），渠道状态 `ready`。
+  项目里 B站 已有一次真实投稿成功（BV1DveU6GEPR），但走的是上游 `paper-share-skills` 直投，
+  **没经过渠道层**；走 `/api/v1/publish` 的第一次投递仍要人工盯。
 - 前端 `5178` 仍是 mock 数据；真机联调需要按 `docs/05-deployment.md` 起 `VITE_API_BASE` 后再刷新页面。
+
+## 7. 渠道层验证（2026-09-19）
+
+`apps/papercast-server/scripts/check_channels.py`（不依赖 LLM、不写真实 `var/`，可反复跑）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `python scripts/check_channels.py` | 25 项通过 / 0 失败：契约与别名、三渠道适配规则（小红书标题计重本地拦截、B 站缺视频如实不可投、知乎能力不含 video）、素材包齐全、未确认时三渠道全部 `blocked/NOT_CONFIRMED` |
+| `... --live --run --option draft` | 43 项通过 / 0 失败：真实探测（小红书 `login_required`、知乎 `ready` 账号 YYDH、B 站 `ready` 账号 YYDH54）+ 合成 run 真跑 M3（闸门 detail 列清各渠道、三份独立回执 + 素材包 + 兼容别名 `xhs_receipt.json`、`status=draft` 无真投） |
+| 故障演练：三通道指向死端口 + 闸门 `continue` | 37 项通过 / 0 失败：总表 `status=blocked`、`published=[]`，每渠道仍有独立回执与素材包，阶段不判死（失败隔离 + 不丢素材） |
+| `... --run --with-video --already-published` | 40 项通过 / 0 失败：埋入 B站 回执后，闸门 detail 出现重复投稿警告、`stage.checks` 出现 `历史投递`；顶层成片优先于嵌套目录里的中间产物。真数据校验：`run_a7b9460d3953/video/upload_result.json` → BV1DveU6GEPR |

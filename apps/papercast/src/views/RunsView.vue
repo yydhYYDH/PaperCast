@@ -98,7 +98,7 @@ function open(id: string) {
 .tbl th { text-align: left; padding: 9px 12px; color: var(--muted); font-weight: 600; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; border-bottom: 1px solid var(--line-soft); }
 .tbl td { padding: 10px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
 .tbl tr.on { background: var(--accent-soft); }
-.tbl tr:hover { background: rgba(255, 255, 255, 0.02); }
+.tbl tr:hover { background: var(--panel-2); }
 .tt { color: var(--text); margin-bottom: 3px; }
 .sub { color: var(--muted-2); font-size: 11px; }
 .stages { display: flex; gap: 3px; }

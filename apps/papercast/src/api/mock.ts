@@ -1,9 +1,23 @@
-import type { PipelineApi, CreateRunRequest } from './types'
+import type {
+  PipelineApi,
+  CreateRunRequest,
+  AppConfig,
+  ConfigItem,
+  ConfigPatchResult,
+  LlmTestResult,
+} from './types'
 import type {
   Artifact,
   ArtifactKind,
   LogLine,
   PaperRun,
+  PlatformChannel,
+  PlatformDraftBody,
+  PlatformLoginStart,
+  PlatformPublishRequest,
+  PlatformPublishResult,
+  PlatformQrcode,
+  PlatformState,
   RunConfig,
   Stage,
   StageId,
@@ -43,13 +57,12 @@ const LOGS: Record<StageId, Script> = {
     { text: '理解层落盘：下游 4 个产物共用这一份事实源', level: 'ok' },
   ],
   article: [
-    { text: '载入风格操作系统：微信×学术 / 微信×媒体 / 小红书×学术 / 小红书×媒体' },
-    { text: '微信×学术：贡献-证据链结构，保留公式与数字' },
-    { text: '微信×媒体：钩子前置，术语降维，类比引导' },
-    { text: '小红书×学术：6 张卡片，每张一个知识点' },
-    { text: '小红书×媒体：第二人称叙述，制造代入感' },
+    { text: '载入风格层：平台体裁 × 讲述者人格（styles.py）' },
+    { text: '小红书 × 作者自述：≤1000 字、无公式、标题计重 ≤38' },
+    { text: '知乎 × 技术解读：2000-4000 字、允许公式、结论前置' },
+    { text: '小红书：6 张卡片，每张一个知识点' },
     { text: '生成封面图 wechat-cover.svg / xhs-cover.svg', level: 'ok' },
-    { text: '4 篇文字稿完成，最长 1.6k 字', level: 'ok' },
+    { text: '2 个变体完成，最长 3.1k 字', level: 'ok' },
   ],
   poster: [
     { text: 'intake QA：会场 NeurIPS · 尺寸 36×48 in · 语言 en' },
@@ -72,8 +85,8 @@ const LOGS: Record<StageId, Script> = {
   publish: [
     { text: '小红书：xiaohongshu-mcp 健康检查 http://localhost:18060 ✓' },
     { text: '小红书：上传 6 张卡片 + 正文，等待人工确认' },
-    { text: '公众号：Markdown → 微信 HTML 排版（主题 default）' },
-    { text: '公众号：封面图上传 + 草稿箱接口调用' },
+    { text: '知乎：Markdown → 知乎正文骨架（结论前置）' },
+    { text: 'B 站：分镜表 + 口播稿 → 投稿元数据' },
     { text: 'B 站：biliup 元数据校验（标题/分区/封面/简介）', level: 'warn' },
     { text: '等待发布闸门放行', level: 'warn' },
   ],
@@ -102,7 +115,7 @@ const GATES: Partial<Record<StageId, Stage['gate']>> = {
   publish: {
     id: 'publish-gate',
     label: '发布前人工闸门',
-    detail: '选中的渠道将真实投递：小红书走 xiaohongshu-mcp，公众号进草稿箱，B 站走 biliup。',
+    detail: '选中的渠道将真实投递：小红书走 xiaohongshu-mcp、知乎走 zhihu-publisher、B 站走 biliup。',
     options: [
       { id: 'continue', label: '确认发布' },
       { id: 'draft', label: '仅存草稿' },
@@ -140,11 +153,8 @@ const ARTIFACTS: Record<StageId, Artifact[]> = {
     art('understand', 'note', 'markdown', '中文阅读笔记', 'paper2note_reading_note.md', undefined, { words: 6200 }),
   ],
   article: [
-    art('article', 'wechat-academic', 'markdown', '微信 × 学术', 'wechat-academic.md', '/samples/article/wechat-academic.md'),
-    art('article', 'wechat-media', 'markdown', '微信 × 媒体', 'wechat-media.md', '/samples/article/wechat-media.md'),
-    art('article', 'xhs-academic', 'markdown', '小红书 × 学术', 'xhs-academic.md', '/samples/article/xhs-academic.md'),
-    art('article', 'xhs-media', 'markdown', '小红书 × 媒体', 'xhs-media.md', '/samples/article/xhs-media.md'),
-    art('article', 'cover', 'image', '公众号封面', 'wechat-cover.svg', '/samples/covers/wechat-cover.svg'),
+    art('article', 'xhs-author', 'markdown', '小红书 × 作者自述', 'xhs.md', '/samples/article/xhs-academic.md'),
+    art('article', 'xhs-newsflash', 'markdown', '小红书 × 科技快讯', 'xhs-newsflash.md', '/samples/article/xhs-media.md'),
   ],
   poster: [
     art('poster', 'html', 'html', 'poster.html', 'poster.html', '/samples/poster/poster.html'),
@@ -158,7 +168,6 @@ const ARTIFACTS: Record<StageId, Artifact[]> = {
   ],
   publish: [
     art('publish', 'xhs', 'text', '小红书发布回执', 'xhs_receipt.json', undefined, { status: '待确认' }),
-    art('publish', 'wechat', 'html', '公众号草稿 HTML', 'wechat_draft.html', undefined, { target: '草稿箱' }),
   ],
 }
 
@@ -188,11 +197,83 @@ function makeStage(id: StageId, status: StageStatus = 'pending'): Stage {
   }
 }
 
+/** 演示用二维码：故意画成一眼可辨的占位图，避免被误当成真实登录码。 */
+const DEMO_QR = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
+  <rect width="240" height="240" fill="#f7f7f7"/>
+  <g fill="#111">
+    <rect x="16" y="16" width="56" height="56"/><rect x="24" y="24" width="40" height="40" fill="#f7f7f7"/>
+    <rect x="32" y="32" width="24" height="24"/>
+    <rect x="168" y="16" width="56" height="56"/><rect x="176" y="24" width="40" height="40" fill="#f7f7f7"/>
+    <rect x="184" y="32" width="24" height="24"/>
+    <rect x="16" y="168" width="56" height="56"/><rect x="24" y="176" width="40" height="40" fill="#f7f7f7"/>
+    <rect x="32" y="184" width="24" height="24"/>
+    <rect x="96" y="24" width="12" height="12"/><rect x="120" y="24" width="12" height="12"/>
+    <rect x="108" y="40" width="12" height="12"/><rect x="132" y="48" width="12" height="12"/>
+    <rect x="96" y="64" width="12" height="12"/><rect x="120" y="72" width="12" height="12"/>
+    <rect x="24" y="96" width="12" height="12"/><rect x="48" y="108" width="12" height="12"/>
+    <rect x="72" y="96" width="12" height="12"/><rect x="96" y="108" width="12" height="12"/>
+    <rect x="120" y="96" width="12" height="12"/><rect x="144" y="108" width="12" height="12"/>
+    <rect x="168" y="96" width="12" height="12"/><rect x="192" y="108" width="12" height="12"/>
+    <rect x="108" y="120" width="12" height="12"/><rect x="132" y="132" width="12" height="12"/>
+    <rect x="96" y="144" width="12" height="12"/><rect x="120" y="156" width="12" height="12"/>
+    <rect x="144" y="144" width="12" height="12"/><rect x="168" y="156" width="12" height="12"/>
+    <rect x="96" y="192" width="12" height="12"/><rect x="120" y="204" width="12" height="12"/>
+    <rect x="144" y="192" width="12" height="12"/><rect x="168" y="204" width="12" height="12"/>
+    <rect x="192" y="192" width="12" height="12"/>
+  </g>
+  <text x="120" y="124" font-size="15" font-family="sans-serif" text-anchor="middle" fill="#c00">演示二维码</text>
+</svg>`,
+)
+
+/** 模拟适配器下的渠道状态：只有小红书是「能用」的，其余如实标注未接通。 */
+const DEMO_CHANNELS: PlatformChannel[] = [
+  {
+    id: 'xhs',
+    name: '小红书',
+    kind: 'mcp',
+    login: 'qrcode',
+    state: 'ready',
+    account: 'momo',
+    detail: '已登录：momo（模拟）',
+    endpoint: 'http://127.0.0.1:18060',
+    needs: ['扫码登录', '6 张卡片图', '标题 ≤ 20 字'],
+    capabilities: ['图文发布', '话题标签'],
+    loginHint: '接上真后端（VITE_API_BASE）后这里会展示 MCP 真实二维码',
+  },
+  {
+    id: 'zhihu',
+    name: '知乎',
+    kind: 'playwright',
+    login: 'browser',
+    state: 'login_required',
+    account: '',
+    detail: '未登录（模拟）——点「打开浏览器登录」走桌面窗口人工登录',
+    endpoint: 'http://127.0.0.1:18070',
+    needs: ['桌面窗口人工登录（风控拦纯 HTTP 扫码）', '标题 + 纯文本正文'],
+    capabilities: ['文章发布', '话题标签'],
+    loginHint: '点「打开浏览器登录」→ 桌面窗口里扫码/账号登录；正式接口见 apps/zhihu-publisher',
+  },
+  {
+    id: 'bilibili',
+    name: 'B 站',
+    kind: 'cli',
+    login: 'cli',
+    state: 'offline',
+    account: '',
+    detail: 'biliup 未安装，视频投稿通道未启用',
+    endpoint: 'biliup CLI',
+    needs: ['横版 16:9 视频', '竖版封面'],
+    capabilities: ['视频投稿'],
+    loginHint: '安装 biliup 后执行 biliup login',
+  },
+]
+
 const DEFAULT_CONFIG: RunConfig = {
-  article: { variants: ['wechat-academic', 'wechat-media', 'xhs-academic', 'xhs-media'] },
+  article: { variants: ['xhs-author', 'zhihu-analyst'] },
   poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'en' },
   video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '16:9', narration: '中文' },
-  publish: { targets: ['xhs', 'wechat'], autoPublish: false },
+  publish: { targets: ['xhs', 'zhihu'], autoPublish: false },
 }
 
 let seq = 0
@@ -245,7 +326,7 @@ export class MockPipelineApi implements PipelineApi {
       title: 'Paper2Poster: Multimodal Poster Automation from Scientific Papers',
       source: { kind: 'pdf', value: 'paper2poster.pdf', pages: 12 },
       status: 'failed',
-      config: { ...DEFAULT_CONFIG, publish: { targets: ['wechat'], autoPublish: false } },
+      config: { ...DEFAULT_CONFIG, publish: { targets: ['zhihu'], autoPublish: false } },
       stages: STAGE_ORDER.map((id, i) => {
         if (i > 3) return makeStage(id, 'skipped')
         const s = makeStage(id, 'done')
@@ -317,6 +398,138 @@ export class MockPipelineApi implements PipelineApi {
     } else {
       this.finish(s)
     }
+  }
+
+  // ---------- 平台渠道与登录（模拟） ----------
+
+  private xhsState: PlatformState = 'ready'
+  private xhsAccount = 'momo'
+  private xhsLoggedInAt = 0
+  private zhihuState: PlatformState = 'login_required'
+  private zhihuAccount = ''
+  private zhihuLoggedInAt = 0
+
+  async listPlatforms(): Promise<PlatformChannel[]> {
+    // 演示扫码：取出二维码 6 秒后视为「扫上了」，让弹层的轮询真的有状态变化
+    if (this.xhsState !== 'ready' && this.xhsLoggedInAt && Date.now() >= this.xhsLoggedInAt) {
+      this.xhsState = 'ready'
+      this.xhsAccount = 'momo'
+    }
+    // 演示「桌面窗口登录」：调过 start 之后 4 秒视为登录完成
+    if (this.zhihuState !== 'ready' && this.zhihuLoggedInAt && Date.now() >= this.zhihuLoggedInAt) {
+      this.zhihuState = 'ready'
+      this.zhihuAccount = 'demo-zhihu'
+    }
+    return DEMO_CHANNELS.map((c) =>
+      c.id === 'zhihu'
+        ? {
+            ...c,
+            state: this.zhihuState,
+            account: this.zhihuState === 'ready' ? this.zhihuAccount : '',
+            detail:
+              this.zhihuState === 'ready'
+                ? `已登录：${this.zhihuAccount}（模拟）`
+                : c.detail,
+          }
+        : c.id === 'xhs'
+        ? {
+            ...c,
+            state: this.xhsState,
+            account: this.xhsState === 'ready' ? this.xhsAccount : '',
+            detail:
+              this.xhsState === 'ready'
+                ? `已登录：${this.xhsAccount}（模拟）`
+                : this.xhsState === 'login_required'
+                  ? '未登录（模拟）——点「扫码登录」看登录入口'
+                  : c.detail,
+          }
+        : { ...c },
+    )
+  }
+
+  async platformLoginQrcode(channelId: string): Promise<PlatformQrcode> {
+    if (this.xhsState === 'ready') {
+      return { channelId, isLoggedIn: true, img: '', timeout: '0s', expiresAt: Date.now(), account: this.xhsAccount }
+    }
+    this.xhsLoggedInAt = Date.now() + 6000
+    return {
+      channelId,
+      isLoggedIn: false,
+      img: DEMO_QR,
+      timeout: '4m0s',
+      expiresAt: Date.now() + 240_000,
+      account: '',
+    }
+  }
+
+  async platformLoginStart(channelId: string): Promise<PlatformLoginStart> {
+    if (channelId === 'zhihu') {
+      this.zhihuLoggedInAt = Date.now() + 4000
+      this.zhihuState = 'login_required'
+      return { channelId, method: 'browser', started: true, hint: '桌面上会弹出浏览器窗口，请在窗口里完成登录（模拟）' }
+    }
+    return { channelId, method: 'browser', started: false, hint: '模拟环境只演示知乎的桌面窗口登录' }
+  }
+
+  async platformExportDraft(channelId: string, body: PlatformDraftBody) {
+    return { dir: `var/artifacts/${channelId}/export/${body.runId ?? 'demo-run'}`, files: ['zhihu_article.md', 'zhihu_publish_request.json'] }
+  }
+
+  async platformPublish(channelId: string, body: PlatformPublishRequest): Promise<PlatformPublishResult> {
+    if (!body.confirmed) throw new Error('发布不可逆：需要 confirmed=true（人工闸门）')
+    await new Promise((r) => window.setTimeout(r, 900))
+    return {
+      url: 'https://zhuanlan.zhihu.com/p/2084432742410993947',
+      title: body.title,
+      publishedAt: new Date().toISOString(),
+      account: this.zhihuAccount || 'demo-zhihu',
+      transport: 'playwright',
+    }
+  }
+
+  async platformLogout(channelId: string) {
+    if (channelId === 'zhihu') {
+      this.zhihuState = 'login_required'
+      this.zhihuAccount = ''
+      this.zhihuLoggedInAt = 0
+      return
+    }
+    if (channelId !== 'xhs') return
+    this.xhsState = 'login_required'
+    this.xhsAccount = ''
+    this.xhsLoggedInAt = 0
+  }
+
+  /**
+   * 模拟器不连后端，给一份与后端 SPEC 同形状的假配置：字段名、分组、kind 都对齐，
+   * 这样「设置 → 模型与 API」在 mock 模式下也能完整渲染（值仅供示意，写入会抛错）。
+   */
+  async getConfig(): Promise<AppConfig> {
+    const mk = (key: string, group: string, label: string, kind: ConfigItem['kind'], value: string, desc: string): ConfigItem => ({
+      key, group, label, kind, value, desc, editable: true, restart: false, source: 'mock',
+    })
+    return {
+      envFile: '（模拟器：未连接后端）',
+      envFileExists: false,
+      items: [
+        mk('LLM_BASE_URL', '模型与 API', 'API 地址', 'str', 'https://example.invalid/v1', 'OpenAI 兼容的 base_url'),
+        mk('LLM_MODEL', '模型与 API', '模型名', 'str', 'mock-model', '请求体里的 model 字段'),
+        mk('LLM_API_KEY', '模型与 API', 'API 密钥', 'secret', 'sk-****mock', '留空 = 不修改'),
+        mk('LLM_TIMEOUT_SEC', '模型与 API', '单次调用超时（秒）', 'int', '600', '治卡死的关键旋钮'),
+        mk('LLM_MAX_TOKENS', '模型与 API', '默认输出上限（token）', 'int', '16000', '未指定时生效'),
+        mk('LLM_MAX_TOKENS_CAP', '模型与 API', '硬上限（0 = 不限）', 'int', '0', '对所有调用生效'),
+        mk('XHS_MCP_BASE', '投递渠道', '小红书 MCP 地址', 'str', 'http://127.0.0.1:18060', '渠道服务地址'),
+        mk('PAPERCAST_CHANNELS', '投递渠道', '启用的渠道', 'list', 'xiaohongshu,zhihu,bilibili', '逗号分隔'),
+      ],
+    }
+  }
+
+  async patchConfig(): Promise<ConfigPatchResult> {
+    throw new Error('模拟器不支持写入配置：请用 VITE_API_BASE 连接真实后端')
+  }
+
+  async testLlm(): Promise<LlmTestResult> {
+    return { ok: false, ms: 0, code: 'MOCK', message: '模拟器不连后端，无法探测', model: '—', baseUrl: '—' }
   }
 
   dispose() {

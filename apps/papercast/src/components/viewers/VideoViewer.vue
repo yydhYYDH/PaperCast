@@ -115,7 +115,7 @@ video { width: 100%; max-height: 320px; background: #000; border-radius: 10px; b
 .credit { font-size: 11.5px; }
 .script { flex: 1; overflow-y: auto; padding: 13px; display: flex; flex-direction: column; gap: 7px; }
 .slide { text-align: left; background: var(--bg-2); border: 1px solid var(--line-soft); border-radius: 9px; padding: 9px 11px; display: flex; flex-direction: column; gap: 6px; transition: 0.16s; }
-.slide:hover { border-color: #33405c; }
+.slide:hover { border-color: #cbd5e1; }
 .slide.on { border-color: var(--accent); background: var(--accent-soft); }
 .s-title { font-size: 12.5px; color: var(--text); }
 .s-narration { font-size: 12.5px; color: var(--text-2); line-height: 1.75; }

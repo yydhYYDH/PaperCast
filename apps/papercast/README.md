@@ -17,7 +17,7 @@ npm run build    # vue-tsc 类型检查 + 产物构建
 | --- | --- | --- |
 | 输入归一化 | PDF / arXiv / LaTeX → 统一 paper 模型（content.md + 图表） | `paper-share-skills/pdf-to-markdown`（MinerU）、`paper2anything/scripts/parse_pdf.py` |
 | 论文理解层 | 抽取贡献 / 方法 / 证据 / 图表，落一份 `digest.json` 作为**唯一事实源** | `pickxiguapi/paper2x → paper2note` |
-| 文章生成 | 微信 / 小红书 × 学术 / 媒体 四套风格文字稿 + 封面 | `kangw24/paper2content`、`paper2anything/paper2wechat`、`flyanx/paper-to-wechat` |
+| 文章生成 | 平台体裁（小红书 / 知乎 / B站 / 公众号）× 讲述者人格（作者自述 / 同行拆解 / 科技快讯 / 技术解读 / 审稿人）多套文字稿 + 卡片 | `kangw24/paper2content`、`paper2anything/paper2wechat`、`flyanx/paper-to-wechat`；人格规范见 `papercast-server/docs/09-voice-styles.md` |
 | Poster | Parser → Planner → Painter → 盲读校验，输出 `poster.html` / `poster.png` | `paper2anything/paper2poster`、`Paper2Poster/Paper2Poster` |
 | 视频 | Beamer 幻灯片 → 旁白 → TTS → 合成 + 封面（横竖双版本） | `yhbcode000/paper-share-skills`、`showlab/Paper2Video` |
 | 发布 | 小红书 MCP / 公众号草稿箱 / biliup，全部带人工闸门 | `xpzouying/xiaohongshu-mcp`、`aiworkskills/wechat-article-skills`、`biliup` |
@@ -32,10 +32,10 @@ npm run build    # vue-tsc 类型检查 + 产物构建
 ```
 src/
   api/            PipelineApi 接口 + mock（默认）与 http（接后端）两个实现
-  stores/         runs（运行状态、轮询）、ui（视图与预览 Tab）
+  stores/         runs（运行状态、轮询）、platforms（渠道登录态）、ui（视图与预览 Tab）
   components/     输入面板、流水线时间轴、阶段卡片、产物面板
     viewers/      理解层 / 文章 / Poster / 视频 / 发布 五个预览器
-  views/          运行历史、产物库、引擎与环境
+  views/          运行历史、产物库、平台账号、引擎与环境
   data/env.ts     环境依赖状态 + 阶段↔引擎映射
 public/samples/   演示用示例产物（见下方「示例数据」）
 ```
@@ -57,10 +57,38 @@ GET  /api/runs/:id                  -> PaperRun          轮询进度 / 日志 /
 GET  /api/runs/:id/events           -> SSE（可选，未接时退化为轮询）
 POST /api/runs/:id/stages/:sid/gate -> { optionId }      人工闸门放行
 POST /api/runs/:id/cancel           -> 204               中止
+GET  /api/platforms                 -> PlatformChannel[] 渠道账号与登录态
+GET  /api/platforms/:id/login/qrcode-> PlatformQrcode    扫码登录二维码
+POST /api/platforms/:id/login/logout-> 204               退出登录（清 cookies）
 ```
 
 后端只需把每个阶段的 `status / progress / logs[] / artifacts[] / gate` 填进 `PaperRun` 即可，
 产物的 `url` 指向可预览的静态地址（Markdown / HTML / 图片 / MP4）。
+
+## 平台登录入口
+
+发布渠道的账号 / 登录态收敛在「平台账号」页，三个入口共用同一套登录流程（`components/PlatformLoginDialog.vue`）：
+
+1. 左侧导航「平台账号」；
+2. 顶栏的小红书状态条（已登录显示账号，未登录点一下直接进登录页；**首屏探测期间显示「平台账号 · 探测中…」**，不是空白）；
+3. 发布页的「扫码登录」按钮 —— 勾选的渠道没就绪时，「确认发布」会禁用并说明原因（只能走「仅存草稿」）。
+
+四个渠道各自的登录形态（都由后端 `login` 字段驱动，前端按它选流程）：
+
+| 渠道 | 形态 | 页内操作 | 底层 |
+| --- | --- | --- | --- |
+| 小红书 | `qrcode` | 页内二维码 + 4 分钟倒计时 + 5s 轮询 | `xiaohongshu-mcp`（取码即建等待会话，扫上自动落 cookies） |
+| 知乎 | `browser` | 点「打开浏览器登录」→ 桌面弹出浏览器窗口（含人机验证）→ 页面轮询到 `ready` | `zhihu-publisher`（风控拦纯 HTTP 扫码，必须真人过窗口） |
+| B 站 | `qrcode` | 页内二维码（**biliup 出的真码**）+ 倒计时 + 轮询 | `bilibili-publisher`，后端顺手起一次 `biliup login` 并把 `qrcode.png` 取回来 |
+| 微信公众号 | `env` | 无（`unconfigured`） | 需要 AppID / AppSecret，本期只出草稿 |
+
+设计约定：
+
+- 前端不直连 `:18060` / `:18070` / `:18080`，只调后端 `/api/platforms/*`；凭证只落本机；
+- 小红书二维码**只在用户点击时取一次**（MCP 每次取码会新建一个 4 分钟等待会话，重复取会顶掉上一个），之后前端 5s 轮询登录态；B 站相反 —— 重复取码是安全的（biliup 覆盖旧码）；
+- 没接通的渠道（公众号缺凭证 / 通道服务没起 / 服务离线）如实显示成「未配置 / 服务离线」，并把接通命令放在卡片上可一键复制，不显示成可用；
+- 通道服务离线或未配置时，「扫码登录」按钮直接禁用（避免点出一个必然失败的请求）；
+- mock 适配器下弹层会明确标注「演示二维码，不会真的登录」。
 
 ## 示例数据
 

@@ -34,6 +34,7 @@ uv pip install --python .venv/bin/python -r requirements.txt
 | [`docs/04-api-contract.md`](docs/04-api-contract.md) | HTTP / SSE 契约与前端字段对照 |
 | [`docs/05-deployment.md`](docs/05-deployment.md) | 服务器部署：systemd / nginx / 排障 |
 | [`docs/06-verification.md`](docs/06-verification.md) | 真实论文端到端跑通记录 |
+| [`docs/07-poster-and-cards.md`](docs/07-poster-and-cards.md) | poster 阶段（HTML→PNG 海报）与卡片产物渲染 |
 
 ## 目录
 
@@ -51,7 +52,10 @@ app/
   intake/pdf_parser.py     PyMuPDF：正文/标题/图/表 → md + images
   intake/latex_parser.py   LaTeX 源 → md + images
   intake/arxiv.py          arXiv 元数据 + PDF + 源码包
+  modules/poster.py       海报渲染（HTML→PNG；**渲染器已实现，编排尚未接线，见 docs/07**）
+  platforms.py            渠道控制面：4 个渠道声明，R1 仅小红书可用（登录态 / 扫码 / 发布）
   cards/render.py         小红书卡片图（PIL，1080×1440）
+scripts/make_cards.py     卡片与海报的命令行入口
 <工作区>/var/runs/<runId>/         运行产物（不进 git）
 docs/                      设计文档
 scripts/                   开发与冒烟脚本

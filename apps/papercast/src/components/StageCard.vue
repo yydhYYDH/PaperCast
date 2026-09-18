@@ -110,11 +110,11 @@ const KIND_ICON: Record<string, string> = {
 
 <style scoped>
 .card { border: 1px solid var(--line-soft); border-radius: 11px; overflow: hidden; background: var(--panel); transition: 0.2s; }
-.card.running { border-color: rgba(90, 162, 255, 0.4); box-shadow: 0 0 0 1px rgba(90, 162, 255, 0.08); }
+.card.running { border-color: rgba(79, 70, 229, 0.4); box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.08); }
 .card.waiting { border-color: rgba(255, 180, 58, 0.45); }
 .card.failed { border-color: rgba(255, 95, 126, 0.4); }
 .card-head { display: flex; align-items: flex-start; gap: 10px; padding: 11px 13px; cursor: pointer; }
-.card-head:hover { background: rgba(255, 255, 255, 0.015); }
+.card-head:hover { background: var(--panel-2); }
 .idx { color: var(--muted-2); font-size: 11px; padding-top: 3px; }
 .c-title { font-size: 13.5px; }
 .gap { gap: 6px; }
@@ -124,8 +124,8 @@ const KIND_ICON: Record<string, string> = {
 .caret.open { transform: rotate(180deg); }
 .bar.thin { height: 2px; }
 .card-body { padding: 12px 13px 14px; display: flex; flex-direction: column; gap: 12px; border-top: 1px solid var(--line-soft); }
-.gate { background: rgba(255, 180, 58, 0.07); border: 1px solid rgba(255, 180, 58, 0.28); border-radius: 10px; padding: 11px 12px; display: flex; flex-direction: column; gap: 8px; }
-.gate-title { font-size: 13px; color: #ffd79a; }
+.gate { background: rgba(245, 158, 11, 0.08); border: 1px solid rgba(245, 158, 11, 0.28); border-radius: 11px; padding: 11px 12px; display: flex; flex-direction: column; gap: 8px; }
+.gate-title { font-size: 13px; color: #b45309; font-weight: 600; }
 .gate-detail { font-size: 12.5px; color: var(--text-2); }
 .gate-done { font-size: 11.5px; color: var(--ok); }
 .checks { display: flex; flex-direction: column; gap: 5px; }

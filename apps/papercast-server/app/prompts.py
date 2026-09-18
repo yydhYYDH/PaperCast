@@ -1,6 +1,13 @@
-"""M2 的提示词。所有反幻觉约束都写在这里，并在生成后由 generate.py 做机器校验。"""
+"""M2 的提示词。所有反幻觉约束都写在这里，并在生成后由 generate.py 做机器校验。
+
+文章生成提示词由三层拼装（见 docs/09-voice-styles.md）：
+    人格语气（styles.VOICES） + 平台硬约束（styles.PLATFORMS） + 事实源铁律（FACT_RULES）
+优先级：事实源 > 平台硬约束 > 人格语气。
+"""
 
 from __future__ import annotations
+
+from . import styles
 
 DIGEST_SYSTEM = """你是学术论文理解助手，为下游的中文传播内容建立唯一事实源。
 
@@ -60,31 +67,33 @@ def note_user(title: str, digest_json: str, figures: list[dict], content_md: str
     )
 
 
-XHS_SYSTEM = """你是小红书学术科普作者，把论文转成图文帖的可发布内容。语气像作者本人向同领域读者介绍自己的工作，克制、不标题党。
+# --------------------------------------------------------------------------- #
+# 文章生成：人格语气 + 平台硬约束 + 事实源铁律
+# --------------------------------------------------------------------------- #
 
-硬性规则（违反会被程序判错）：
-1. 正文绝对不能出现公式：不写 $...$、$$...$$、\\frac、\\begin{、_ 下标、^ 上标等 LaTeX 表达。
-   需要公式的地方，改成「优化什么、约束什么、为什么有效」的中文直觉表述。
-2. 推荐标题（含候选标题）按小红书计重 ≤38：中文字符与中文标点算 2，英文/数字/ASCII 标点算 1。
-3. 正文 3-4 段，合计 ≤1000 字。
-4. body 里出现的每个数字，都必须能在给定的事实源里找到对应数值，不能新增或四舍五入成别的数。
-   事实源里写「未给出具体数值」的内容，正文也不许给数。
-5. tags 8-12 个，不含 # 号，纯中文或中英混合短语。
-6. cards 里的 figureId 只能从给定图表清单里选，按小红书图集顺序（总览→方法→数据/训练→主结果→消融→定性）。
-7. 少用 emoji、引号、破折号。
-
-只输出 JSON，不要解释文字或 markdown 围栏。JSON 结构：
-{
-  "candidateTitles": ["5-8 个候选标题，20 字以内为主"],
-  "recommendedTitle": "推荐标题",
-  "tldr": "40 字以内一句话总结",
-  "body": "正文，用空行分段",
-  "tags": ["标签1", "标签2"],
-  "cards": [{"figureId": "fig-1", "badge": "1/6 · 问题", "headline": "卡片主标题（20 字内）", "captionCn": "这张图在说什么，45 字以内中文"}]
-}"""
+FACT_RULES = """事实源铁律（所有平台与人格都必须遵守，违反即视为失败）：
+1. 只依据给定的事实源（digest.json）与可用图表清单作答，不引入外部知识、不做推测性补充。
+2. 正文里出现的每个数字，都必须能在事实源里找到对应数值；不能新增，也不能四舍五入成别的数。
+   事实源里写「未给出具体数值」的内容，任何平台、任何人格都不许给数。
+3. 图表编号（figureId、图 N、表 N）只能取自给定清单，不得自造。
+4. 区分「论文声称」与「你的判断」，判断要显式标注。
+5. 不写「内部消息」「独家爆料」式口吻。"""
 
 
-def xhs_user(title: str, digest_json: str, figures: list[dict]) -> str:
+def article_system(platform: str, voice: str) -> str:
+    """拼装文章生成提示词。约束优先级：事实源 > 平台硬约束 > 人格语气。"""
+    p = styles.platform_spec(platform)
+    v = styles.voice_spec(voice)
+    rules = "\n".join(f"{i}. {r}" for i, r in enumerate(p.rules, 1))
+    return (
+        f"{v.persona}\n\n"
+        f"【平台硬约束 · {p.label}（不得放宽，违反会被程序判错）】\n{rules}\n\n"
+        f"【输出格式】\n{p.template}\n\n"
+        f"{FACT_RULES}"
+    )
+
+
+def article_user(title: str, digest_json: str, figures: list[dict]) -> str:
     fig_lines = "\n".join(f"- {f['id']}：{f['caption'][:200]}" for f in figures[:30]) or "（无可用图）"
     return (
         f"论文：{title}\n\n事实源（digest.json，唯一允许的信息来源）：\n{digest_json}\n\n"
@@ -92,10 +101,6 @@ def xhs_user(title: str, digest_json: str, figures: list[dict]) -> str:
     )
 
 
-WECHAT_SYSTEM = """你是学术公众号作者。基于给定事实源写一篇中文长文：贡献—证据链结构，保留关键数字与方法细节，
-允许出现公式（KaTeX 的 $...$ / $$...$$）。1500-2500 字，直接输出 Markdown。"""
-
-
-def wechat_user(title: str, digest_json: str, figures: list[dict]) -> str:
-    fig_lines = "\n".join(f"- {f['id']}：{f['caption'][:160]}" for f in figures[:20]) or "（无）"
-    return f"论文：{title}\n\n事实源：\n{digest_json}\n\n可用图表：\n{fig_lines}"
+# 兼容旧调用点：等价于 平台 xhs × 人格 author（公众号已下线，原来的 WECHAT_SYSTEM 一并移除）
+XHS_SYSTEM = article_system("xhs", "author")
+xhs_user = article_user

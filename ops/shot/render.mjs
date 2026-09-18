@@ -109,8 +109,10 @@ try {
       const r = el.getBoundingClientRect()
       return { name: el.getAttribute('data-region') || '', x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }
     })
+    const fs = (sel) => { const el = document.querySelector(sel); return el ? Math.round(parseFloat(getComputedStyle(el).fontSize)) : null }
+    const fonts = { h1: fs('h1'), body: fs('.panel li, .panel p'), caption: fs('figcaption') }
     return {
-      panels, images, regions,
+      panels, images, regions, fonts,
       docH: document.documentElement.scrollHeight,
       docW: document.documentElement.scrollWidth,
       bodyBg: getComputedStyle(document.body).backgroundColor,

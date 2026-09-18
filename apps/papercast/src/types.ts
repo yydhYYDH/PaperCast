@@ -1,6 +1,6 @@
 /** 领域模型：一条「论文 → 多形态产物」的运行 */
 
-export type ViewId = 'workbench' | 'runs' | 'library' | 'settings'
+export type ViewId = 'workbench' | 'runs' | 'library' | 'platforms' | 'settings'
 
 export type StageId = 'intake' | 'understand' | 'article' | 'poster' | 'video' | 'publish'
 
@@ -35,7 +35,7 @@ export interface Artifact {
   stageId: StageId
   kind: ArtifactKind
   label: string
-  /** 虚拟产物路径，如 .papercast/runs/<id>/article/wechat.md */
+  /** 虚拟产物路径，如 .papercast/runs/<id>/article/zhihu-analyst.md */
   path: string
   /** 前端预览地址（本地 samples 或后端静态目录） */
   url?: string
@@ -91,9 +91,10 @@ export interface PaperDigest {
 }
 
 export interface ArticleVariant {
+  /** "{platform}-{voice}"，例如 zhihu-analyst */
   id: string
-  platform: 'wechat' | 'xhs'
-  style: 'academic' | 'media'
+  platform: 'xhs' | 'zhihu' | 'bilibili'
+  voice: string
   label: string
   url: string
   words?: number
@@ -118,13 +119,83 @@ export interface PaperRun {
   articles?: ArticleVariant[]
 }
 
+/** 平台渠道与登录态（与后端 GET /api/platforms 一致） */
+export type PlatformState = 'ready' | 'login_required' | 'offline' | 'unconfigured' | 'blocked'
+
+/** 登录方式：qrcode=现场扫码 / browser=桌面窗口人工登录 / env=配置凭证 / cli=命令行登录 / none=无 */
+export type PlatformLogin = 'qrcode' | 'browser' | 'env' | 'cli' | 'none'
+
+export interface PlatformChannel {
+  id: string
+  name: string
+  kind: 'mcp' | 'playwright' | 'openapi' | 'cli'
+  login: PlatformLogin
+  state: PlatformState
+  /** 已登录账号；未登录为空串 */
+  account: string
+  /** 人类可读的一句话状态，直接显示 */
+  detail: string
+  /** 渠道服务地址（MCP base / API 域名 / CLI 名） */
+  endpoint: string
+  /** 投递这个渠道需要什么 */
+  needs: string[]
+  capabilities: string[]
+  /** 怎么把这个渠道接通（未接通时显示） */
+  loginHint: string
+}
+
+/** 桌面窗口人工登录（知乎）：调用后 state 变 ready 即成功 */
+export interface PlatformLoginStart {
+  channelId: string
+  method: 'browser'
+  started: boolean
+  pid?: number
+  hint: string
+}
+
+/** 待发布内容（知乎通道：标题 + 纯文本正文，可选图片/话题） */
+export interface PlatformDraftBody {
+  title: string
+  content: string
+  images?: string[]
+  tags?: string[]
+  /** 关联的 run id：给了就在通道侧落一份回执 */
+  runId?: string
+}
+
+/** 真实投递请求：**必须 confirmed=true**（人工闸门放行） */
+export interface PlatformPublishRequest extends PlatformDraftBody {
+  confirmed: boolean
+  /** 可选的账号二次校验：与当前登录账号不一致时通道侧拒绝发布 */
+  confirmAccount?: string
+}
+
+export interface PlatformPublishResult {
+  url: string
+  title: string
+  publishedAt: string
+  account: string
+  transport?: string
+  receipt?: string
+}
+
+/** 扫码登录二维码。timeout 是 MCP 给的字符串（"4m0s"），expiresAt 是毫秒时间戳 */
+export interface PlatformQrcode {
+  channelId: string
+  isLoggedIn: boolean
+  img: string
+  timeout: string
+  expiresAt: number
+  account: string
+}
+
 export const STAGE_ORDER: StageId[] = ['intake', 'understand', 'article', 'poster', 'video', 'publish']
 
 export const STAGE_META: Record<StageId, { label: string; engine: string; hint: string }> = {
   intake: { label: '输入归一化', engine: 'MinerU · arXiv source', hint: 'PDF / arXiv / LaTeX → 统一 paper 模型' },
   understand: { label: '论文理解层', engine: 'paper2note', hint: '唯一事实源：贡献 / 方法 / 证据 / 图表' },
-  article: { label: '文章生成', engine: 'paper2content · paper2wechat', hint: '4 套风格操作系统，微信 + 小红书' },
+  article: { label: '文章生成', engine: 'styles · platform × voice', hint: '平台体裁 × 讲述者人格（小红书 / 知乎 / B站）' },
   poster: { label: 'Poster 生成', engine: 'paper2poster · Paper2Poster', hint: 'Parser → Planner → Painter → 盲读校验' },
   video: { label: '视频合成', engine: 'paper-share-skills · Paper2Video', hint: 'Beamer → 旁白 → TTS → 合成 + 封面' },
-  publish: { label: '发布与运营', engine: 'xiaohongshu-mcp · 公众号草稿箱', hint: '小红书 / 公众号 / B 站，人工确认后发出' },
+  publish: { label: '发布与运营', engine: 'xiaohongshu-mcp · zhihu-publisher · biliup', hint: '小红书 / 知乎 / B 站，人工确认后发出' },
 }

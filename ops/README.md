@@ -2,12 +2,16 @@
 
 | 路径 | 说明 |
 | --- | --- |
-| `start_all.sh` | 起后端 `:8000` + 小红书 MCP `:18060` + 前端 `:5178`；幂等（端口占用即跳过）。用法：`./ops/start_all.sh [backend\|frontend\|mcp]` |
+| `start_all.sh` | 起后端 `:8000` + 三个发布通道（小红书 `:18060`、知乎 `:18070`、B站 `:18080`）+ 前端 `:5178`；幂等（端口占用即跳过）。用法：`./ops/start_all.sh [backend\|frontend\|mcp\|zhihu\|bilibili]` |
 | `start_all.sh` 的 MCP 分支 | 会自动 `cd apps/xiaohongshu-mcp/` 后再起进程 —— 原因见下面「启动约束」 |
+| `start_all.sh` 的 bilibili 分支 | 起 `apps/bilibili-publisher`（:18080，B 站投稿通道）。没装 biliup 也能起，服务会如实报 `unconfigured` |
+| `biliup_login_pty.py` | 用 pty 驱动 `biliup login`（扫码菜单），原始输出写 `var/logs/biliup_login_pty.log`。biliup 装在 `var/toolchains/bili-venv`（**不在 PATH 里**，通道服务会自己找），凭证由 biliup 自管在 `var/home/.bilibili/cookies.json`（HOME 重定向） |
 | `stop_all.sh` | 按 `var/pids/*.pid` 停服务 |
 | `build_mcp.sh` | 重建 `ops/bin/` 里的三个 Go 二进制（干净版 + 本地 auth 版 + 登录工具） |
 | `bin/` | 本地编译产物：`xiaohongshu-mcp`（上游 HEAD 干净版）、`xiaohongshu-mcp-auth`（含本地 `auth.go` 改动）、`xiaohongshu-login`（扫码登录工具）。**二进制，不要 `sed`/改内容，只能重建** |
 | `shot/` | HTML→PNG 渲染与截图脚本（chrome-headless-shell，来自 Playwright 缓存）；前端 10 张界面截图由 `shot.mjs` 生成 |
+| `shot/render.mjs` | **通用 HTML→PNG 渲染入口**（可被其它组件调用）：`node ops/shot/render.mjs --html <p> --out <png> --width W --height H [--check]`，输出单行 JSON（面板溢出、缺图、面积填充率），退出码 3 = 几何自检不过。海报走这条 |
+| `imagegen.sh` | **文生图入口**：调 `baoyu-image-gen` 的官方 API 后端（默认 dashscope/qwen-image-2.0-pro）。密钥放 `var/secrets/imagegen.env`；内置 `npm_config_cache` 指向 `var/`（沙箱下 `~/.npm` 只读，否则 `npx` 必挂） |
 | `sync_upstream.sh` | 按 `docs/research/upstream-repos.md` 的登记表复现/核对 `reference/upstream/`（`--list` 只核对，默认补齐缺失；幂等、非破坏） |
 | `skillsearch/` | 上游技能调研脚本（`clone.sh` 克隆 11 个参考仓库、`inspect/deep2/readmes` 提取 README 结构） |
 

@@ -1,4 +1,4 @@
-import type { RunStatus, StageStatus } from './types'
+import type { PlatformState, RunStatus, StageStatus } from './types'
 
 export function fmtBytes(n?: number) {
   if (!n) return '—'
@@ -44,12 +44,21 @@ export const STAGE_STATUS: Record<StageStatus, { label: string; cls: string }> =
   skipped: { label: '跳过', cls: '' },
 }
 
+/** 平台渠道登录态 → chip 文案与配色 */
+export const PLATFORM_STATE: Record<PlatformState, { label: string; cls: string }> = {
+  ready: { label: '已登录', cls: 'ok' },
+  login_required: { label: '需扫码登录', cls: 'warn' },
+  offline: { label: '服务离线', cls: 'err' },
+  unconfigured: { label: '未配置', cls: '' },
+  blocked: { label: '受限', cls: 'warn' },
+}
+
 /** 这一步复用了哪些开源实现 —— 直接来自本次调研结论 */
 export const REUSE_NOTE: Record<string, string> = {
   intake: 'paper-share-skills/pdf-to-markdown · paper2anything/scripts/parse_pdf.py',
   understand: 'pickxiguapi/paper2x → paper2note',
-  article: 'kangw24/paper2content · paper2anything/paper2wechat · flyanx/paper-to-wechat',
+  article: 'kangw24/paper2content · QuZhan51496/paper2anything',
   poster: 'paper2anything/paper2poster · Paper2Poster/Paper2Poster',
   video: 'yhbcode000/paper-share-skills · showlab/Paper2Video',
-  publish: 'xpzouying/xiaohongshu-mcp · aiworkskills/wechat-article-skills · biliup',
+  publish: 'xpzouying/xiaohongshu-mcp · zhihu-publisher · biliup',
 }

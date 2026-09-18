@@ -10,7 +10,7 @@ from pathlib import Path
 from ..cards import render as card_render
 from ..models import ArticleVariant, PaperDigest
 from ..pipeline import StageContext
-from .. import prompts
+from .. import prompts, styles
 
 
 class GenerateError(RuntimeError):
@@ -291,6 +291,11 @@ def _assemble_xhs_md(
 
 
 async def run_article(ctx: StageContext) -> None:
+    """按 config.article.variants 逐个生成变体。
+
+    platform 决定体裁与硬约束（长度 / 公式 / 标签 / 输出格式），voice 决定语气与结构；
+    约束优先级：事实源 > 平台硬约束 > 人格语气。人格不参与校验。
+    """
     data = ctx.shared.get("intake")
     if not data:
         raise GenerateError("INTAKE_MISSING", "缺少 M1 的解析结果")
@@ -319,16 +324,74 @@ async def run_article(ctx: StageContext) -> None:
         indent=1,
     )
 
-    ctx.log("info", "调用 LLM 生成小红书图文文案（JSON 结构）…")
-    ctx.progress(0.2)
+    requested = [v for v in (ctx.run.config.article.variants or []) if styles.parse_variant(v)]
+    variants = styles.normalize_variants(ctx.run.config.article.variants)
+    if len(variants) < len(set(requested)):
+        ctx.log("warn", f"变体数超过上限 {styles.MAX_VARIANTS}，只生成前 {len(variants)} 个（每个变体一次 LLM 调用）")
+    unknown = [v for v in (ctx.run.config.article.variants or []) if not styles.parse_variant(v)]
+    if unknown:
+        ctx.log("warn", f"无法识别的变体 id，已忽略：{unknown[:4]}")
+    ctx.log("info", "本次生成：" + "、".join(styles.variant_label(p, v) for p, v in variants))
+
+    ctx.run.articles = []
+    made_cards: list[str] = []
+    card_errors: list[str] = []
+    n = len(variants)
+    failures: list[str] = []
+
+    for idx, (platform, voice) in enumerate(variants):
+        spec = styles.platform_spec(platform)
+        ctx.progress(0.1 + 0.85 * idx / n)
+        try:
+            if spec.output == "json":
+                # 卡片与人格无关（同一批图），只在第一个 xhs 变体时渲染，其余复用
+                cards = await _gen_xhs_variant(
+                    ctx, spec, voice, digest, digest_json, data, figures, fig_by_id,
+                    render_cards=not made_cards, export=(idx == 0),
+                )
+                if cards:
+                    made_cards = cards
+            else:
+                await _gen_markdown_variant(ctx, spec, voice, digest, digest_json, figures)
+        except GenerateError as e:
+            failures.append(f"{styles.variant_label(platform, voice)}：{e.message[:120]}")
+            ctx.log("err", f"{styles.variant_label(platform, voice)} 生成失败：{e.message[:200]}")
+            ctx.check(f"{styles.variant_label(platform, voice)} · 生成", "fail", e.message[:200])
+        except Exception as e:  # 单个变体失败不拖垮其它变体（与渠道投递一致的策略）
+            failures.append(f"{styles.variant_label(platform, voice)}：{type(e).__name__} {str(e)[:100]}")
+            ctx.log("err", f"{styles.variant_label(platform, voice)} 异常：{type(e).__name__}: {str(e)[:200]}")
+            ctx.check(f"{styles.variant_label(platform, voice)} · 生成", "fail", f"{type(e).__name__}: {str(e)[:160]}")
+
+    if not ctx.run.articles:
+        raise GenerateError("ARTICLE_ALL_FAILED", "所有变体都生成失败：" + "；".join(failures[:3]))
+
+    if card_errors:
+        for e in card_errors:
+            ctx.log("warn", f"卡片：{e}")
+
+    ctx.progress(1.0)
+    summary = " / ".join(f"{a.label} {a.words} 字" for a in ctx.run.articles)
+    ctx.log("ok", f"M2 完成：{len(ctx.run.articles)} 个变体（{summary}），卡片 {len(made_cards)} 张")
+
+
+async def _gen_xhs_variant(
+    ctx: StageContext, spec: "styles.PlatformSpec", voice: str, digest: PaperDigest,
+    digest_json: str, data: dict, figures: list[dict], fig_by_id: dict, *,
+    render_cards: bool, export: bool,
+) -> list[str]:
+    """小红书图文变体：JSON 结构输出 + 标题计重 + 去公式 + 数字回溯 + 3:4 卡片。"""
+    label = styles.variant_label("xhs", voice)
+    stem = "xhs" if voice == styles.DEFAULT_VOICE else f"xhs-{voice}"
+    ctx.log("info", f"调用 LLM 生成「{label}」文案（JSON 结构）…")
     try:
         raw = await ctx.llm.chat_json(
-            prompts.XHS_SYSTEM, prompts.xhs_user(digest.title, digest_json, figures), max_tokens=16000
+            prompts.article_system("xhs", voice), prompts.article_user(digest.title, digest_json, figures),
+            max_tokens=16000,
         )
     except Exception as e:
-        raise GenerateError("LLM_XHS_FAILED", f"小红书文案生成失败：{e}") from e
+        raise GenerateError("LLM_XHS_FAILED", f"{label}文案生成失败：{e}") from e
     if not isinstance(raw, dict):
-        raise GenerateError("LLM_BAD_XHS", "模型返回的文案不是 JSON 对象")
+        raise GenerateError("LLM_BAD_XHS", f"{label}返回的文案不是 JSON 对象")
 
     # ---- 标题：按计重规则挑选 / 兜底 ----
     candidates = [str(t).strip() for t in (raw.get("candidateTitles") or []) if str(t).strip()]
@@ -349,21 +412,21 @@ async def run_article(ctx: StageContext) -> None:
             cut += ch
             acc += w
         ok_titles = [cut.strip() or digest.title[:19]]
-        ctx.log("warn", f"候选标题全部超长，已按计重规则截断为：{ok_titles[0]}")
+        ctx.log("warn", f"{label} 候选标题全部超长，已按计重规则截断为：{ok_titles[0]}")
     recommended = min(ok_titles, key=title_weight) if rec not in ok_titles else rec
     if title_weight(rec) > 38 and rec:
-        ctx.log("warn", f"推荐标题计重 {title_weight(rec)} > 38，改用 {title_weight(recommended)} 的候选")
+        ctx.log("warn", f"{label} 推荐标题计重 {title_weight(rec)} > 38，改用 {title_weight(recommended)} 的候选")
 
     # ---- 正文：去公式 → 数字回溯 → 长度 ----
     body = str(raw.get("body") or "").strip()
     body, formula_hits = strip_formulas(body)
     if formula_hits:
-        ctx.log("warn", f"正文出现 {len(formula_hits)} 处公式表达，已就地去除：{formula_hits[:2]}")
+        ctx.log("warn", f"{label} 正文出现 {len(formula_hits)} 处公式表达，已就地去除：{formula_hits[:2]}")
     haystack = json.dumps(raw, ensure_ascii=False) + digest_json + data["markdown"]
     body, dropped_nums = _drop_untraceable(body, haystack)
     if dropped_nums:
-        ctx.log("warn", f"删除含无法回溯数字的句子，涉及数字：{sorted(set(dropped_nums))[:8]}")
-    body = _truncate_body(body, 1000)
+        ctx.log("warn", f"{label} 删除含无法回溯数字的句子，涉及数字：{sorted(set(dropped_nums))[:8]}")
+    body = _truncate_body(body, spec.body_max)
 
     tags: list[str] = []
     for t in raw.get("tags") or []:
@@ -371,15 +434,15 @@ async def run_article(ctx: StageContext) -> None:
         if t and t not in tags:
             tags.append(t)
     for k in digest.keywords:
-        if len(tags) >= 8:
+        if len(tags) >= spec.tags_min:
             break
         if k not in tags:
             tags.append(k)
-    tags = tags[:12]
-    if len(tags) < 8:
-        ctx.log("warn", f"标签只有 {len(tags)} 个，少于 8 个的下限")
+    tags = tags[: spec.tags_max]
+    if len(tags) < spec.tags_min:
+        ctx.log("warn", f"{label} 标签只有 {len(tags)} 个，少于 {spec.tags_min} 个的下限")
 
-    # ---- 卡片 ----
+    # ---- 卡片：选图（与人格无关，取事实源已选定的图） ----
     raw_cards = [c for c in (raw.get("cards") or []) if isinstance(c, dict) and c.get("figureId") in fig_by_id]
     if not raw_cards:
         raw_cards = [
@@ -391,7 +454,7 @@ async def run_article(ctx: StageContext) -> None:
             }
             for i, f in enumerate(digest.figures, 1)
         ]
-        ctx.log("warn", "模型未给出有效卡片，已按事实源选图兜底")
+        ctx.log("warn", f"{label} 模型未给出有效卡片，已按事实源选图兜底")
     picks = []
     for i, c in enumerate(raw_cards[:6], 1):
         fig = fig_by_id[c["figureId"]]
@@ -405,11 +468,39 @@ async def run_article(ctx: StageContext) -> None:
             }
         )
 
+    # ---- 落盘 ----
+    xhs_md = _assemble_xhs_md(
+        title=recommended, candidates=ok_titles, tldr=str(raw.get("tldr") or "").strip(),
+        body=body, tags=tags, cards=picks, fig_by_id=fig_by_id,
+    )
+    (ctx.work / f"{stem}.md").write_text(xhs_md, encoding="utf-8")
+    (ctx.work / f"{stem}.raw.json").write_text(json.dumps(raw, ensure_ascii=False, indent=1), encoding="utf-8")
+    ctx.artifact("markdown", f"{label} 图文", f"{stem}.md", preview=True)
+    ctx.artifact("json", f"{label} 文案原始输出", f"{stem}.raw.json", preview=False)
+
+    # 待发布的纯文本（只导出主变体，避免多平台互相覆盖）
+    if export:
+        export_dir = ctx.work / "export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        (export_dir / "title.txt").write_text(recommended, encoding="utf-8")
+        (export_dir / "content.txt").write_text(body + "\n\n" + " ".join(f"#{t}" for t in tags), encoding="utf-8")
+        ctx.artifact("text", "标题（待发布）", "export/title.txt", preview=True)
+        ctx.artifact("text", "正文（待发布）", "export/content.txt", preview=True)
+
+    # ---- 校验（平台硬约束，人格不参与） ----
+    ctx.check(f"{label} · 标题计重", "pass" if title_weight(recommended) <= spec.title_weight_max else "fail",
+              f"「{recommended}」= {title_weight(recommended)}（上限 {spec.title_weight_max}）")
+    ctx.check(f"{label} · 无公式", "pass" if not FORMULA.search(body) else "fail",
+              "正文不含 LaTeX/公式表达" if not FORMULA.search(body) else "正文仍有公式痕迹")
+    ctx.check(f"{label} · 正文长度", "pass" if 0 < len(body) <= spec.body_max else "fail",
+              f"{len(body)} 字（上限 {spec.body_max}）")
+    ctx.check(f"{label} · 标签数量",
+              "pass" if spec.tags_min <= len(tags) <= spec.tags_max else "fail",
+              f"{len(tags)} 个（{spec.tags_min}-{spec.tags_max}）")
+
     made_cards: list[str] = []
-    card_errors: list[str] = []
-    if ctx.settings.cards_enabled:
+    if render_cards and ctx.settings.cards_enabled:
         ctx.log("info", f"渲染 {len(picks)} 张卡片（1080×1440）…")
-        ctx.progress(0.6)
         series = f"论文速读 · {digest.arxivId or digest.venue or 'arXiv'}"
         source_note = f"{digest.title[:60]} · {digest.authors[0] if digest.authors else ''}"
         made_cards, card_errors = await asyncio.to_thread(
@@ -421,62 +512,76 @@ async def run_article(ctx: StageContext) -> None:
             source_note=source_note,
             font_preferred=ctx.settings.cjk_font,
         )
-        for e in card_errors:
-            ctx.log("warn", f"卡片：{e}")
-    else:
+        ctx.check(f"{label} · 卡片渲染", "pass" if made_cards else "fail",
+                  f"{len(made_cards)} 张 3:4 卡片" if made_cards else "；".join(card_errors) or "未渲染")
+        for i, rel in enumerate(made_cards[:9], 1):
+            ctx.artifact("image", f"卡片 {i}", rel, preview=True, meta={"w": 1080, "h": 1440})
+    elif not ctx.settings.cards_enabled:
         ctx.log("warn", "PAPERCAST_CARDS=off，跳过卡片渲染（export/ 里只有文案）")
+    else:
+        ctx.log("info", f"卡片已在主变体渲染，{label} 复用同一批图")
 
-    # ---- 落盘 ----
-    xhs_md = _assemble_xhs_md(
-        title=recommended, candidates=ok_titles, tldr=str(raw.get("tldr") or "").strip(),
-        body=body, tags=tags, cards=picks, fig_by_id=fig_by_id,
-    )
-    (ctx.work / "xhs.md").write_text(xhs_md, encoding="utf-8")
-    (ctx.work / "xhs.raw.json").write_text(json.dumps(raw, ensure_ascii=False, indent=1), encoding="utf-8")
-
-    export = ctx.work / "export"
-    export.mkdir(parents=True, exist_ok=True)
-    (export / "title.txt").write_text(recommended, encoding="utf-8")
-    (export / "content.txt").write_text(body + "\n\n" + " ".join(f"#{t}" for t in tags), encoding="utf-8")
-
-    ctx.artifact("markdown", "小红书图文 xhs.md", "xhs.md", preview=True)
-    for i, rel in enumerate(made_cards[:9], 1):
-        ctx.artifact("image", f"卡片 {i}", rel, preview=True, meta={"w": 1080, "h": 1440})
-    ctx.artifact("json", "文案原始输出 xhs.raw.json", "xhs.raw.json", preview=False)
-    ctx.artifact("text", "标题（待发布）", "export/title.txt", preview=True)
-    ctx.artifact("text", "正文（待发布）", "export/content.txt", preview=True)
-
-    ctx.check("标题计重", "pass" if title_weight(recommended) <= 38 else "fail",
-              f"「{recommended}」= {title_weight(recommended)}（上限 38）")
-    ctx.check("无公式", "pass" if not FORMULA.search(xhs_md.split("## 正文")[-1]) else "fail",
-              "正文不含 LaTeX/公式表达" if not FORMULA.search(xhs_md.split("## 正文")[-1]) else "正文仍有公式痕迹")
-    ctx.check("正文长度", "pass" if 0 < len(body) <= 1000 else "fail", f"{len(body)} 字（上限 1000）")
-    ctx.check("标签数量", "pass" if 8 <= len(tags) <= 12 else "fail", f"{len(tags)} 个（8-12）")
-    ctx.check("卡片渲染", "pass" if made_cards else "fail",
-              f"{len(made_cards)} 张 3:4 卡片" if made_cards else "；".join(card_errors) or "未渲染")
-
-    ctx.run.articles = [
+    ctx.run.articles.append(
         ArticleVariant(
-            id="xhs-academic", platform="xhs", style="academic", label="小红书 × 学术",
-            url=f"/artifacts/{ctx.run.id}/article/xhs.md", words=len(body),
+            id=styles.variant_id("xhs", voice), platform="xhs", voice=voice, label=label,
+            url=f"/artifacts/{ctx.run.id}/article/{stem}.md", words=len(body),
         )
-    ]
+    )
+    return made_cards
 
-    # ---- 可选：公众号长文（同源派生） ----
-    if "wechat" in (ctx.run.config.article.variants or []):
-        try:
-            ctx.log("info", "派生素材：公众号长文 wechat.md …")
-            wtext = await ctx.llm.chat(
-                prompts.WECHAT_SYSTEM, prompts.wechat_user(digest.title, digest_json, figures), max_tokens=24000
-            )
-            (ctx.work / "wechat.md").write_text(wtext, encoding="utf-8")
-            ctx.artifact("markdown", "公众号长文", "wechat.md", preview=True, meta={"words": len(wtext)})
-            ctx.run.articles.append(
-                ArticleVariant(id="wechat-academic", platform="wechat", style="academic", label="公众号 × 学术",
-                               url=f"/artifacts/{ctx.run.id}/article/wechat.md", words=len(wtext))
-            )
-        except Exception as e:
-            ctx.log("warn", f"公众号长文生成失败（不影响小红书）：{e}")
 
-    ctx.progress(1.0)
-    ctx.log("ok", f"M2 完成：{len(body)} 字正文 / {len(made_cards)} 张卡片 / {len(tags)} 个标签")
+async def _gen_markdown_variant(
+    ctx: StageContext, spec: "styles.PlatformSpec", voice: str,
+    digest: PaperDigest, digest_json: str, figures: list[dict],
+) -> None:
+    """Markdown 平台变体：知乎长文 / B 站脚本。"""
+    label = styles.variant_label(spec.id, voice)
+    stem = spec.id if voice == styles.DEFAULT_VOICE else f"{spec.id}-{voice}"
+    budget = 24000 if spec.body_max >= 2000 else 16000
+    ctx.log("info", f"调用 LLM 生成「{label}」（max_tokens={budget}）…")
+    try:
+        text = await ctx.llm.chat(
+            prompts.article_system(spec.id, voice), prompts.article_user(digest.title, digest_json, figures),
+            max_tokens=budget,
+        )
+    except Exception as e:
+        raise GenerateError("LLM_ARTICLE_FAILED", f"{label}生成失败：{e}") from e
+    text = _strip_fence(text).strip()
+    if not text:
+        raise GenerateError("LLM_ARTICLE_EMPTY", f"{label}返回空内容")
+
+    (ctx.work / f"{stem}.md").write_text(text, encoding="utf-8")
+    ctx.artifact("markdown", f"{label} 长文", f"{stem}.md", preview=True, meta={"words": len(text)})
+
+    for check_label, state, detail in styles.validate_markdown(spec, text):
+        ctx.check(f"{label} · {check_label}", state, detail)
+
+    # 数字可回溯：软检查（长文里的格式差异会误报，如实标记为待人工复核）
+    haystack = re.sub(r"[\s,，]", "", digest_json + ctx.shared["intake"]["markdown"])
+    nums = numbers_in(text)
+    untraceable = [n for n in nums if re.sub(r"[\s,，]", "", n) not in haystack and n.rstrip("%") not in haystack]
+    if untraceable:
+        ctx.log("warn", f"{label} 有 {len(untraceable)} 个数字未在事实源里回溯到（保留，人工复核）：{sorted(set(untraceable))[:6]}")
+        ctx.check(f"{label} · 数字可回溯", "run",
+                  f"{len(untraceable)}/{len(nums)} 个数字未回溯到，待人工复核" if nums else "正文没有数字")
+    else:
+        ctx.check(f"{label} · 数字可回溯", "pass", f"{len(nums)} 个数字全部可在事实源中回溯")
+
+    ctx.run.articles.append(
+        ArticleVariant(
+            id=styles.variant_id(spec.id, voice), platform=spec.id, voice=voice, label=label,
+            url=f"/artifacts/{ctx.run.id}/article/{stem}.md", words=styles.cjk_len(text),
+        )
+    )
+    ctx.log("ok", f"{label} 完成：{styles.cjk_len(text)} 字")
+
+
+def _strip_fence(text: str) -> str:
+    """模型有时把整篇 Markdown 包在围栏里，去掉最外层围栏。"""
+    t = (text or "").strip()
+    tick = chr(96) * 3
+    if t.startswith(tick) and t.endswith(tick):
+        inner = t[len(tick): -len(tick)]
+        nl = inner.find("\n")
+        return inner[nl + 1:].strip() if nl >= 0 else t
+    return t

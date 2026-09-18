@@ -1,7 +1,9 @@
 # M2 · 内容生成（generate）
 
 **目标**：把 M1 的 `content.md` + `images/` 变成两样东西 —— 一份**唯一事实源** `digest.json`，
-和一份**可直接发布**的小红书图文（`xhs.md` + `cards/*.png`）。
+和一组**可直接发布**的平台文案（小红书图文 + 卡片 / 知乎长文 / B 站脚本 / 公众号长文）。
+
+平台与语气由 `app/styles.py` 的「**平台体裁 × 讲述者人格**」两层决定，见第 8 节与 `docs/09-voice-styles.md`。
 
 前端 `understand` 与 `article` 两个阶段都由本模块承担：先理解（digest），再生成（文案 + 卡片）。
 
@@ -41,9 +43,9 @@
 方法详解（顺读为主）→ 数据与训练 → 实验设计与主结果 → 消融 → 附录要点 → 可信度/局限 → 复现清单。
 公式用 `$...$` KaTeX 格式，图片嵌入对应小节。长文，供人精读/复习，不作为发布物。
 
-## 3. 小红书图文 `xhs.md`
+## 3. 小红书图文 `xhs.md`（platform = xhs）
 
-严格按 `repos/paper2x/paper2xhs/SKILL.md` 的规范产出：
+严格按 `repos/paper2x/paper2xhs/SKILL.md` 的规范产出（人格 voice 只改语气，不改下面的硬规则）：
 
 ```markdown
 # 小红书图文帖：{推荐标题}
@@ -97,10 +99,26 @@ cards/p1.png  = render_card(paper_image, caption_cn, "1/6 · 问题")
 三重校验，只认真的含中文字形的字体；本机命中 `~/.local/share/fonts/waic/msyh.ttc`（微软雅黑）。
 渲染失败或字体不含中文字形时不阻塞：`cards/` 留空、`checks` 里如实标 `fail` 并说明原因。
 
-## 5. 同源派生 `wechat.md`（可选）
+## 5. 变体循环：一份事实源 → 多个平台变体
 
-同一份 `digest.json` 派生的公众号长文（贡献-证据链结构，允许保留公式），
-由 `config.article.variants` 控制是否生成；实测不影响小红书路径。
+`config.article.variants` 里的每个 `{platform}-{voice}` 都会独立调用一次 LLM，产物写入
+`article/<platform>[-<voice>].md`：
+
+| 变体 id 示例 | 输出 | 校验（由 `styles.validate_markdown` / 内联校验执行） |
+| --- | --- | --- |
+| `xhs-author` | `xhs.md`（JSON 结构 + 卡片） | 计重 ≤38、无公式、≤1000 字、标签 8-12、数字可回溯 |
+| `xhs-newsflash` | `xhs-newsflash.md` | 同上（卡片复用主变体那批图） |
+| `zhihu-analyst` | `zhihu.md` | 标题 ≤40 字、2000-4000 字、允许公式、标签 3-6、数字可回溯 |
+| `bilibili-peer` | `bilibili-peer.md` | 无公式、口播稿 1200-2500 字、标签 3-8 |
+| `wechat-author` | `wechat.md` | 1500-2500 字、允许公式 |
+
+规则：
+
+- **单次上限 `styles.MAX_VARIANTS`（4 个）**，超出部分只记 `warn`（每个变体一次 LLM 调用，成本线性增长）；
+- 人格为 `author`（默认）时沿用旧文件名（`xhs.md` / `wechat.md`），其余人格加后缀，**不覆盖旧产物**；
+- `export/title.txt`、`export/content.txt` **只写主变体**（列表里的第一个），避免多平台互相覆盖；
+- 单个变体失败不拖垮其它变体：记 `err` + `check=fail` 继续跑，全部失败才让阶段 `failed`；
+- 卡片与人格无关（同一批图），只在第一个 xhs 变体渲染，其余复用。
 
 ## 6. LLM 调用
 
@@ -126,3 +144,35 @@ cards/p1.png  = render_card(paper_image, caption_cn, "1/6 · 问题")
 - `revise` → 把手填的批注（`POST .../gate` 的 `note` 字段）追加进 digest prompt 重跑本阶段。
 
 **下游产物在闸门放行前不会生成**：这是「单一理解层」原则的执行点，保证文案与笔记永远基于同一版理解。
+
+## 8. 平台体裁 × 讲述者人格（`app/styles.py`）
+
+风格层是**两条正交轴**，不是一张风格清单：
+
+```
+variant_id = "{platform}-{voice}"      例如 zhihu-analyst
+platform → 体裁与硬约束（长度 / 公式 / 标题计重 / 标签数 / 输出格式 / 是否出卡片）
+voice    → 语气、人称、句长节奏、归属强度、证据呈现方式
+```
+
+| 轴 | 取值 | 位置 |
+| --- | --- | --- |
+| platform | `xhs` 小红书 · `zhihu` 知乎 · `bilibili` B 站 · `wechat` 公众号 | `styles.PLATFORMS` |
+| voice | `author` 作者自述 · `peer` 同行拆解 · `newsflash` 科技快讯（新智元式） · `analyst` 技术解读（机器之心式） · `reviewer` 审稿人视角 | `styles.VOICES` |
+
+约定：
+
+1. **约束优先级：事实源 > 平台硬约束 > 人格语气**。人格不得放宽平台规则，也不参与校验。
+2. 提示词由 `prompts.article_system(platform, voice)` 拼装：人格片段 + 平台规则 + 输出模板 + `FACT_RULES`。
+3. 旧 id（`xhs`、`wechat`、`xhs-academic`、`xhs-media` …）在 `styles.parse_variant()` 里做兼容映射，
+   历史配置不会失效（`academic` → `author`，`media` → `newsflash`）。
+4. 新增人格的取样与归纳流程见 skill `paper-voice-styles`；`newsflash` / `analyst` 有 8 篇真实语料支撑，
+   `author` / `peer` / `reviewer` 目前是设计稿。
+
+调试用脚本（只跑 article 阶段，复用已有 run 的事实源，不碰原 run 目录）：
+
+```bash
+cd apps/papercast-server
+.venv/bin/python scripts/test_article_variants.py --list
+.venv/bin/python scripts/test_article_variants.py run_a7b9460d3953 xhs-analyst,zhihu-newsflash
+```

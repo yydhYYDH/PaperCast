@@ -35,7 +35,7 @@ STAGE_META: dict[str, dict[str, str]] = {
     "article": {
         "label": "文章生成",
         "engine": "paper2xhs · paper2x",
-        "hint": "小红书图文（+ 公众号长文），无公式、数字可追溯",
+        "hint": "小红书图文 + 知乎长文，无公式、数字可追溯",
     },
     "poster": {
         "label": "Poster 生成",
@@ -49,8 +49,8 @@ STAGE_META: dict[str, dict[str, str]] = {
     },
     "publish": {
         "label": "发布与运营",
-        "engine": "xiaohongshu-mcp",
-        "hint": "小红书，人工确认后发出",
+        "engine": "channels · 小红书 / 知乎 / B站",
+        "hint": "多平台投递，人工确认后逐个发出，失败不影响其它渠道",
     },
 }
 
@@ -143,16 +143,19 @@ class PaperDigest(BaseModel):
 
 
 class ArticleVariant(BaseModel):
+    """一个平台 × 人格的产出版本。id = "{platform}-{voice}"（见 app/styles.py）。"""
+
     id: str
-    platform: Literal["wechat", "xhs"]
-    style: Literal["academic", "media"]
+    platform: Literal["xhs", "zhihu", "bilibili"]
+    voice: str
     label: str
     url: str
     words: Optional[int] = None
 
 
 class ArticleConfig(BaseModel):
-    variants: list[str] = Field(default_factory=lambda: ["xhs"])
+    # "{platform}-{voice}"，例如 xhs-author / zhihu-analyst；兼容旧的 xhs 等写法
+    variants: list[str] = Field(default_factory=lambda: ["xhs-author"])
 
 
 class PosterConfig(BaseModel):
@@ -170,7 +173,8 @@ class VideoConfig(BaseModel):
 
 
 class PublishConfig(BaseModel):
-    targets: list[str] = Field(default_factory=lambda: ["xiaohongshu"])
+    # 投递渠道（app/channels/ 的规范 id；别名 xhs 也认）；留空 = 用 PAPERCAST_CHANNELS 的全部
+    targets: list[str] = Field(default_factory=lambda: ["xiaohongshu", "zhihu", "bilibili"])
     autoPublish: bool = False
 
 

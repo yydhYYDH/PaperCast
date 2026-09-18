@@ -101,7 +101,7 @@ watch(isXhs, (v) => { mode.value = v ? 'cards' : 'reader' }, { immediate: true }
       <div v-if="mode === 'reader'" class="reader prose" v-html="rendered" />
       <div v-else-if="mode === 'wechat'" class="phone-wrap">
         <div class="phone">
-          <div class="phone-bar">公众号 · 图文预览</div>
+          <div class="phone-bar">手机预览 · 图文排版</div>
           <div class="reader prose phone-body" v-html="rendered" />
         </div>
       </div>

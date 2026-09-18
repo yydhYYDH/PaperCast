@@ -1,5 +1,15 @@
 import type { PipelineApi, CreateRunRequest } from './types'
-import type { PaperRun, StageId } from '../types'
+import type {
+  PaperRun,
+  PlatformChannel,
+  PlatformDraftBody,
+  PlatformLoginStart,
+  PlatformPublishRequest,
+  PlatformPublishResult,
+  PlatformQrcode,
+  StageId,
+} from '../types'
+import type { AppConfig, ConfigPatchResult, LlmTestResult } from './types'
 
 /**
  * 真实后端适配器（骨架）。
@@ -11,6 +21,15 @@ import type { PaperRun, StageId } from '../types'
  *   POST   /api/runs/:id/cancel           -> 204
  *   POST   /api/runs/:id/stages/:sid/gate -> { optionId } -> 204
  *   GET    /api/runs/:id/events           -> SSE（可选，未接时退化为轮询）
+ *   GET    /api/platforms                 -> PlatformChannel[]（渠道登录态）
+ *   GET    /api/platforms/:id/login/qrcode-> PlatformQrcode（扫码登录）
+ *   POST   /api/platforms/:id/login/start -> PlatformLoginStart（桌面窗口人工登录）
+ *   POST   /api/platforms/:id/export      -> { dir, files }（只落盘，无副作用）
+ *   POST   /api/platforms/:id/publish     -> PlatformPublishResult（必须 confirmed=true）
+ *   POST   /api/platforms/:id/login/logout-> 204
+ *   GET    /api/config                    -> AppConfig（全部可配项，密钥打码）
+ *   PATCH  /api/config                    -> { values } -> ConfigPatchResult（写 .env 并热生效）
+ *   POST   /api/config/test               -> LlmTestResult（连通性探针）
  *
  * 运行前设置 VITE_API_BASE=http://127.0.0.1:8000 即自动切换到这个实现，
  * 前端组件与 store 无需改动。
@@ -52,6 +71,53 @@ export class HttpPipelineApi implements PipelineApi {
       method: 'POST',
       body: JSON.stringify({ optionId }),
     })
+  }
+
+  // ---------- 平台渠道与登录 ----------
+
+  listPlatforms(force = false) {
+    return this.json<PlatformChannel[]>(`/api/platforms${force ? '?force=1' : ''}`)
+  }
+
+  platformLoginQrcode(channelId: string) {
+    return this.json<PlatformQrcode>(`/api/platforms/${channelId}/login/qrcode`)
+  }
+
+  platformLoginStart(channelId: string) {
+    return this.json<PlatformLoginStart>(`/api/platforms/${channelId}/login/start`, { method: 'POST' })
+  }
+
+  platformExportDraft(channelId: string, body: PlatformDraftBody) {
+    return this.json<{ dir: string; files: string[] }>(`/api/platforms/${channelId}/export`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  platformPublish(channelId: string, body: PlatformPublishRequest) {
+    return this.json<PlatformPublishResult>(`/api/platforms/${channelId}/publish`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  async platformLogout(channelId: string) {
+    await this.json<void>(`/api/platforms/${channelId}/login/logout`, { method: 'POST' })
+  }
+
+  getConfig() {
+    return this.json<AppConfig>('/api/config')
+  }
+
+  patchConfig(values: Record<string, string>) {
+    return this.json<ConfigPatchResult>('/api/config', {
+      method: 'PATCH',
+      body: JSON.stringify({ values }),
+    })
+  }
+
+  testLlm() {
+    return this.json<LlmTestResult>('/api/config/test', { method: 'POST' })
   }
 
   dispose() {}

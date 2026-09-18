@@ -47,8 +47,8 @@ const runs = computed(() => store.runs)
 <style scoped>
 .list { display: flex; flex-direction: column; padding: 6px; gap: 3px; max-height: 300px; overflow-y: auto; }
 .item { display: flex; gap: 9px; align-items: flex-start; text-align: left; padding: 9px 10px; border-radius: 9px; border: 1px solid transparent; transition: 0.15s; }
-.item:hover { background: rgba(255, 255, 255, 0.025); }
-.item.on { background: var(--accent-soft); border-color: rgba(90, 162, 255, 0.28); }
+.item:hover { background: var(--panel-2); }
+.item.on { background: var(--accent-soft); border-color: rgba(79, 70, 229, 0.25); }
 .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; flex: none; background: var(--muted-2); }
 .dot.ok { background: var(--ok); }
 .dot.err { background: var(--err); }

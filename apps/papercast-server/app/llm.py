@@ -74,6 +74,10 @@ class LLMClient:
         if not self.available:
             raise LLMError("LLM_NOT_CONFIGURED", "没有可用的 LLM 凭据（LLM_API_KEY / GO_API_KEY）")
         budget = max_tokens or self.settings.llm_max_tokens
+        # 硬上限：设置页可调。默认 0 = 不干预，因此不改变既有行为。
+        cap = getattr(self.settings, "llm_max_tokens_cap", 0)
+        if cap and budget > cap:
+            budget = cap
         payload: dict[str, Any] = {
             "model": self.settings.llm_model,
             "messages": [

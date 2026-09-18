@@ -10,8 +10,10 @@ import RunHeader from './components/RunHeader.vue'
 import StageStepper from './components/StageStepper.vue'
 import PipelineTimeline from './components/PipelineTimeline.vue'
 import ArtifactPanel from './components/ArtifactPanel.vue'
+import PlatformLoginDialog from './components/PlatformLoginDialog.vue'
 import RunsView from './views/RunsView.vue'
 import LibraryView from './views/LibraryView.vue'
+import PlatformsView from './views/PlatformsView.vue'
 import SettingsView from './views/SettingsView.vue'
 
 const store = useRunsStore()
@@ -56,7 +58,11 @@ function jump(id: string) {
 
       <RunsView v-else-if="ui.view === 'runs'" />
       <LibraryView v-else-if="ui.view === 'library'" />
+      <PlatformsView v-else-if="ui.view === 'platforms'" />
       <SettingsView v-else />
     </div>
+
+    <!-- 扫码登录弹层：任何视图里都能打开（发布页也会调它） -->
+    <PlatformLoginDialog />
   </div>
 </template>

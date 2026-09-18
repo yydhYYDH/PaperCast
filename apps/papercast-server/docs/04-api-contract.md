@@ -33,7 +33,7 @@ curl -F file=@paper.pdf http://127.0.0.1:8000/api/uploads
 ```bash
 curl -X POST http://127.0.0.1:8000/api/runs -H 'Content-Type: application/json' -d '{
   "source": { "kind": "pdf", "value": "up_8f3a...", "title": "Paper2Video" },
-  "config": { "article": { "variants": ["xhs"] }, "publish": { "targets": ["xiaohongshu"], "autoPublish": false } }
+  "config": { "article": { "variants": ["xhs-author", "zhihu-analyst"] }, "publish": { "targets": ["xiaohongshu"], "autoPublish": false } }
 }'
 ```
 
@@ -56,6 +56,55 @@ GET /artifacts/<runId>/article/cards/p1.png
 
 给前端的「引擎与环境」视图用：M1 解析引擎、LaTeX 引擎、LLM 通道、小红书 MCP 健康与登录账号、
 Playwright/chrome-headless-shell 是否就绪。全部是**真实探测**结果，不写死。
+
+### `/api/platforms` — 渠道账号与登录入口
+
+前端「平台账号」页与发布页的登录入口都走这一组接口。**前端不直连 :18060**（少一处 CORS，也多一层闸门）。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/api/platforms` | 全部渠道状态；`?force=1` 绕过 5s 探测缓存 |
+| `GET` | `/api/platforms/:id` | 单个渠道（默认 force） |
+| `GET` | `/api/platforms/:id/login/qrcode` | 取扫码登录二维码（Base64 data URL + 过期时间）：`xhs` 走 MCP、`bilibili` 走通道服务里 biliup 写下的 `qrcode.png` |
+| `POST` | `/api/platforms/:id/login/start` | 起一次「非页内二维码」的登录流程：`zhihu` 弹桌面窗口等人登录、`bilibili` 起 `biliup login` |
+| `POST` | `/api/platforms/:id/login/logout` | 退出登录（清本机 cookies，不可逆）→ `204`；`xhs` / `zhihu` / `bilibili` 都支持 |
+
+`PlatformChannel` 形状（与前端 `src/types.ts` 一致）：
+
+```jsonc
+{
+  "id": "xhs",                       // xhs / wechat / zhihu / bilibili
+  "name": "小红书",
+  "kind": "mcp",                     // mcp / openapi / cli
+  "login": "qrcode",                 // qrcode / env / cli / none
+  "state": "ready",                  // ready / login_required / offline / unconfigured / blocked
+  "account": "momo",                 // 未登录为空串
+  "detail": "已登录：momo",
+  "endpoint": "http://127.0.0.1:18060",
+  "needs": ["扫码登录", "6 张卡片图"],
+  "capabilities": ["图文发布"],
+  "loginHint": "点「扫码登录」，用小红书 App 扫码…"
+}
+```
+
+三条实现约定：
+
+1. **只报真实探测结果**：没装工具 / 没配凭证的渠道返回 `unconfigured` / `blocked` / `offline`，不假装可用；
+2. **探测有 5s 缓存**：MCP 的 `/api/v1/login/status` 每次都要开一次无头浏览器（3–10s），缓存防止前端轮询把它打爆；
+3. **二维码一次只建一个会话**：MCP 侧 `GET /api/v1/login/qrcode` 会新建一个 4 分钟的等待会话并在扫码成功后写 cookies，
+   再取一次会关掉上一个。所以前端**只在用户点「扫码登录」时调一次**，之后用 `GET /api/platforms/xhs` 轮询（5s）判断是否扫上；
+4. **B 站的码是「顺手起一次」**：biliup 的交互菜单没有非交互开关，所以 `GET /api/platforms/bilibili/login/qrcode`
+   在没有可用二维码时**自己**去起一次 `biliup login`（并在菜单里替用户选「扫码登录」），等 `qrcode.png` 落盘再返回，
+   最多等约 24s。重复调用是安全的（biliup 会覆盖旧码），这与 MCP 侧「重复取会顶掉会话」正好相反；
+5. **登录态是真实探测**：`bilibili` 读通道服务的 `/api/v1/login/status`（底层打 B 站 nav 接口校验 cookies），
+   通道服务不在、biliup 没装、cookies 失效分别报 `offline` / `unconfigured` / `login_required`。
+
+```bash
+curl -s http://127.0.0.1:8000/api/platforms | jq '.[] | {id, state, account}'
+curl -s http://127.0.0.1:8000/api/platforms/xhs/login/qrcode | jq '{isLoggedIn, timeout}'
+curl -s http://127.0.0.1:8000/api/platforms/bilibili/login/qrcode | jq '{img: (.img|length), expiresAt}'   # B 站：真二维码 PNG
+curl -s -X POST http://127.0.0.1:8000/api/platforms/zhihu/login/start | jq '{started, pid, hint}'          # 知乎：弹桌面窗口
+```
 
 ### `GET /api/health` — 存活探针
 
@@ -103,3 +152,42 @@ HTTP 状态码：400 参数错 / 404 不存在 / 409 状态冲突（对已放行
 
 默认只允许 `http://127.0.0.1:5178` 与 `http://localhost:5178`（本机前端 dev server），
 由 `PAPERCAST_ALLOW_ORIGINS` 覆盖；生产环境走 nginx 同源反代时不需要 CORS。
+
+## 7. 渠道投递层（`app/channels/`，2026-09-19 新增）
+
+上面 §2 的 `/api/platforms` 是**账号视角**（谁登录了、怎么登录）；
+本节是**投递视角**（这份物料能不能投、缺什么），M3 发布阶段用这一层。
+
+### `GET /api/channels` — 三个渠道及其实时就绪状态
+
+```json
+[
+  {
+    "id": "xiaohongshu", "name": "小红书", "aliases": ["xhs"],
+    "capabilities": ["images", "text", "video"],
+    "login": "qrcode", "transport": "mcp-http", "endpoint": "http://127.0.0.1:18060",
+    "why": "图文/视频笔记：MCP 开无头浏览器操作网页版，扫码登录",
+    "restart": "./ops/start_all.sh mcp",
+    "state": "login_required", "account": "", "reachable": true,
+    "detail": "MCP 在线，但当前未登录（或登录已失效）",
+    "hint": "在「平台账号」页点扫码登录；注意 MCP 的 cookie 认启动目录（apps/xiaohongshu-mcp/）",
+    "enabled": true
+  }
+]
+```
+
+- `state ∈ ready | login_required | offline | unconfigured | blocked`；**非 ready 一定带 `hint`**。
+- 结果缓存 15s（探测会触达通道服务，知乎那次会开浏览器），`?force=true` 强制刷新。
+- `GET /api/channels/{id}` 取单个；未知 id → 404 `CHANNEL_NOT_FOUND`。
+- `capabilities` 如实声明：知乎没接视频通道，就不含 `video`。
+
+### 发布阶段的渠道语义
+
+- `RunConfig.publish.targets`（默认 `["xiaohongshu","zhihu","bilibili"]`）决定 M3 投哪些渠道，
+  别名 `xhs` 也认；**未知/停用的渠道不静默丢弃**，会写成 `stage.checks` 里的 `渠道：<id> = fail`。
+- 渠道级进展都在 `stage.checks`：`素材适配：<渠道>`、`渠道状态：<渠道>`、`可投递渠道`、`发布结果`。
+- 产物：`publish/<渠道>/export/`（素材包，闸门之前就落盘）、`publish/<渠道>/receipt.json`、
+  `publish/receipts.json`（总表，含 `published/failed/blocked`）、`publish/xhs_receipt.json`（兼容别名）。
+- 闸门 `publish-gate` 选项：`continue`（只向就绪渠道投递）/ `draft`（只准备）/ `skip`（本轮不发）。
+
+完整规格（新增平台四步、B 站选型、失败隔离的验收方式）见 `08-channels.md`。

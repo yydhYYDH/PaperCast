@@ -1,0 +1,84 @@
+"""渠道注册表：id/别名解析、按配置启用、给 M3 与 /api/channels 提供统一入口。
+
+新增一个平台只需要三步：
+1. 写一个 Channel 子类（放本包下，参照 bilibili.py）；
+2. 在 BUILTIN 里登记；
+3. 在 docs/conventions.md 的端口表里给它一个本机端口（通道服务）。
+"""
+
+from __future__ import annotations
+
+from typing import Any, Iterable, Optional
+
+from .base import Channel
+from .bilibili import BilibiliChannel
+from .xiaohongshu import XiaohongshuChannel
+from .zhihu import ZhihuChannel
+
+BUILTIN: tuple[type[Channel], ...] = (XiaohongshuChannel, ZhihuChannel, BilibiliChannel)
+
+# 渠道 id 与别名 → 规范 id。前端的「平台账号」页用 xhs，run 配置里写 xiaohongshu，都认。
+ALIASES: dict[str, str] = {}
+for _cls in BUILTIN:
+    ALIASES[_cls.id] = _cls.id
+    for _alias in _cls.aliases:
+        ALIASES[_alias] = _cls.id
+
+
+def canonical(channel_id: str) -> str:
+    key = (channel_id or "").strip().lower()
+    return ALIASES.get(key, key)
+
+
+def canonical_all(channel_ids: Iterable[str]) -> list[str]:
+    out: list[str] = []
+    for cid in channel_ids:
+        cid = canonical(cid)
+        if cid and cid not in out:
+            out.append(cid)
+    return out
+
+
+def build_all(settings: Any) -> list[Channel]:
+    """构造全部内置渠道（不探测、不触网）。"""
+    return [cls(settings) for cls in BUILTIN]
+
+
+def enabled_ids(settings: Any) -> list[str]:
+    """配置里启用的渠道（PAPERCAST_CHANNELS，默认三个全开）。"""
+    raw = getattr(settings, "channels", None) or [cls.id for cls in BUILTIN]
+    return canonical_all(raw)
+
+
+def get(settings: Any, channel_id: str) -> Optional[Channel]:
+    cid = canonical(channel_id)
+    for ch in build_all(settings):
+        if ch.id == cid:
+            return ch
+    return None
+
+
+def resolve_targets(settings: Any, targets: Optional[Iterable[str]]) -> tuple[list[Channel], list[dict[str, str]]]:
+    """把 run.config.publish.targets 解析成渠道实例。
+
+    返回 (渠道列表, 问题列表)。**未知或被停用的目标不静默丢弃** —— 它们会作为问题返回，
+    由 M3 写进 stage.checks，让人在 dashboard 上看见「你配的渠道没生效」。
+    """
+    wanted = canonical_all(targets or [])
+    if not wanted:
+        wanted = enabled_ids(settings)
+
+    enabled = set(enabled_ids(settings))
+    channels: list[Channel] = []
+    problems: list[dict[str, str]] = []
+    for cid in wanted:
+        if cid not in {cls.id for cls in BUILTIN}:
+            problems.append({"id": cid, "reason": "unknown", "message": f"未知渠道：{cid}"})
+            continue
+        if cid not in enabled:
+            problems.append({"id": cid, "reason": "disabled", "message": f"渠道已停用：{cid}（改 PAPERCAST_CHANNELS 可启用）"})
+            continue
+        channel = get(settings, cid)
+        if channel is not None:
+            channels.append(channel)
+    return channels, problems

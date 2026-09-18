@@ -170,7 +170,15 @@ class Settings:
     llm_api_key: str = ""
     llm_timeout_sec: int = 600
     llm_max_tokens: int = 16000
+    # 对所有 LLM 调用生效的硬上限；0 = 不限制（默认，等于保持既有行为）
+    llm_max_tokens_cap: int = 0
     xhs_mcp_base: str = "http://127.0.0.1:18060"
+    zhihu_publisher_base: str = "http://127.0.0.1:18070"
+    bilibili_publisher_base: str = "http://127.0.0.1:18080"
+    # 启用的投递渠道（规范 id，逗号分隔）；渠道实现见 app/channels/
+    channels: list[str] = field(default_factory=lambda: ["xiaohongshu", "zhihu", "bilibili"])
+    # 真实投递前的二次校验账号（可选）：填了的话渠道服务会比对该账号，防串号
+    publish_confirm_account: str = ""
 
     @classmethod
     def load(cls) -> "Settings":
@@ -196,7 +204,12 @@ class Settings:
         s.llm_api_key = pick("LLM_API_KEY", "") or _dsh_credential("GO_API_KEY")
         s.llm_timeout_sec = int(pick("LLM_TIMEOUT_SEC", str(s.llm_timeout_sec)))
         s.llm_max_tokens = int(pick("LLM_MAX_TOKENS", str(s.llm_max_tokens)))
+        s.llm_max_tokens_cap = int(pick("LLM_MAX_TOKENS_CAP", str(s.llm_max_tokens_cap)))
         s.xhs_mcp_base = pick("XHS_MCP_BASE", s.xhs_mcp_base).rstrip("/")
+        s.zhihu_publisher_base = pick("ZHIHU_PUBLISHER_BASE", s.zhihu_publisher_base).rstrip("/")
+        s.bilibili_publisher_base = pick("BILIBILI_PUBLISHER_BASE", s.bilibili_publisher_base).rstrip("/")
+        s.channels = [c.strip() for c in pick("PAPERCAST_CHANNELS", ",".join(s.channels)).split(",") if c.strip()]
+        s.publish_confirm_account = pick("PUBLISH_CONFIRM_ACCOUNT", s.publish_confirm_account)
 
         s.data_dir.mkdir(parents=True, exist_ok=True)
         s.upload_dir.mkdir(parents=True, exist_ok=True)

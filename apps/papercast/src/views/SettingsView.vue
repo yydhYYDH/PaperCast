@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { ENGINE_ROWS, ENV_DEPS } from '../data/env'
 import { useRunsStore } from '../stores/runs'
+import ModelApiPanel from '../components/ModelApiPanel.vue'
 
 const store = useRunsStore()
 </script>
 
 <template>
   <div class="page">
+    <ModelApiPanel />
+
     <section class="panel">
       <header class="panel-head">
         <span class="panel-title">六段流水线与复用的实现</span>

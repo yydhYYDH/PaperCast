@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watchEffect } from 'vue'
 import { useRunsStore } from '../stores/runs'
 import type { RunConfig, SourceInput, SourceKind } from '../types'
 
@@ -58,21 +58,39 @@ function onPick(e: Event) {
 }
 
 const config = reactive<RunConfig>({
-  article: { variants: ['wechat-academic', 'wechat-media', 'xhs-academic', 'xhs-media'] },
+  article: { variants: ['xhs-author'] },
   poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'en' },
   video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '16:9', narration: '中文' },
-  publish: { targets: ['xhs', 'wechat'], autoPublish: false },
+  publish: { targets: ['xhs', 'zhihu'], autoPublish: false },
 })
 
-const VARIANTS = [
-  { id: 'wechat-academic', label: '微信 × 学术' },
-  { id: 'wechat-media', label: '微信 × 媒体' },
-  { id: 'xhs-academic', label: '小红书 × 学术' },
-  { id: 'xhs-media', label: '小红书 × 媒体' },
+/** 平台 = 体裁与硬约束（可多选，每个平台调一次 LLM） */
+const PLATFORMS = [
+  { id: 'xhs', label: '小红书', hint: '图文 ≤1000 字 · 无公式 · 标题计重 38 · 3:4 卡片' },
+  { id: 'zhihu', label: '知乎', hint: '长文 2000-4000 字 · 允许公式 · 结论前置' },
+  { id: 'bilibili', label: 'B站', hint: '分镜表 + 口播稿 + 简介 · 无公式' },
 ]
+
+/** 人格 = 讲述者语气（单选，套用到每个选中的平台） */
+const VOICES = [
+  { id: 'author', label: '作者自述', hint: '第一人称，克制、主动交代局限' },
+  { id: 'peer', label: '同行拆解', hint: '实验室师兄口吻：先类比，再回到原文' },
+  { id: 'newsflash', label: '科技快讯（新智元式）', hint: '标题造势、短句推进、结尾行业外推' },
+  { id: 'analyst', label: '技术解读（机器之心式）', hint: '按论文骨架走，归属明确、全程克制' },
+  { id: 'reviewer', label: '审稿人视角', hint: '以 claim 是否被证据支撑为主线' },
+]
+
+const picked = ref<string[]>(['xhs'])
+const voice = ref('author')
+/** variant id = "{platform}-{voice}"，与后端 app/styles.py 的解析规则一致 */
+const variants = computed(() => picked.value.map((p) => `${p}-${voice.value}`))
+
+watchEffect(() => {
+  config.article.variants = variants.value
+})
 const TARGETS = [
   { id: 'xhs', label: '小红书' },
-  { id: 'wechat', label: '公众号草稿箱' },
+  { id: 'zhihu', label: '知乎' },
   { id: 'bilibili', label: 'B 站' },
 ]
 
@@ -158,19 +176,40 @@ function submit() {
 
       <div v-show="showConfig" class="stack cfg">
         <div class="cfg-block">
-          <div class="label">文章风格</div>
+          <div class="label">生成平台（体裁与硬约束，可多选）</div>
           <div class="row wrap">
             <button
-              v-for="v in VARIANTS"
+              v-for="p in PLATFORMS"
+              :key="p.id"
+              class="chip toggle"
+              :class="{ on: picked.includes(p.id) }"
+              :title="p.hint"
+              @click="toggle(picked, p.id)"
+            >
+              {{ p.label }}
+            </button>
+          </div>
+          <p class="panel-sub hint">{{ PLATFORMS.filter((p) => picked.includes(p.id)).map((p) => p.hint).join(" ｜ ") || "至少选一个平台" }}</p>
+        </div>
+
+        <div class="cfg-block">
+          <div class="label">讲述者人格（语气，单选）</div>
+          <div class="row wrap">
+            <button
+              v-for="v in VOICES"
               :key="v.id"
               class="chip toggle"
-              :class="{ on: config.article.variants.includes(v.id) }"
-              @click="toggle(config.article.variants, v.id)"
+              :class="{ on: voice === v.id }"
+              :title="v.hint"
+              @click="voice = v.id"
             >
               {{ v.label }}
             </button>
           </div>
+          <p class="panel-sub hint">{{ VOICES.find((v) => v.id === voice)?.hint }}</p>
         </div>
+
+        <p class="panel-sub">本次生成 {{ variants.length }} 个变体：{{ variants.join(" / ") || "（未选平台）" }}（每个变体一次 LLM 调用）</p>
 
         <div class="grid2">
           <label class="cfg-block">

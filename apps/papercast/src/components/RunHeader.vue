@@ -47,7 +47,7 @@ const live = computed(() => props.run.status === 'running' || props.run.status =
 </template>
 
 <style scoped>
-.head-card { background: linear-gradient(180deg, #131a28, #0c1018); }
+.head-card { background: linear-gradient(180deg, #fbfcff, var(--panel)); }
 .title { font-size: 15.5px; margin-top: 8px; line-height: 1.45; }
 .gap { gap: 6px; }
 .mt { margin-top: 14px; }

@@ -72,8 +72,8 @@ function openPng() {
 .toolbar { display: flex; align-items: center; gap: 7px; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
 .seg.sm button { padding: 4px 9px; font-size: 11.5px; }
 .split { flex: 1; display: grid; grid-template-columns: 1fr 232px; min-height: 0; }
-.frame-wrap { overflow: auto; padding: 16px; display: flex; justify-content: center; align-items: flex-start; background: repeating-linear-gradient(45deg, #0c1018, #0c1018 10px, #0e1320 10px, #0e1320 20px); }
-.frame { width: 100%; max-width: 460px; aspect-ratio: 3 / 4; background: #fff; border-radius: 6px; overflow: hidden; box-shadow: 0 16px 44px rgba(0, 0, 0, 0.5); transform-origin: top center; }
+.frame-wrap { overflow: auto; padding: 16px; display: flex; justify-content: center; align-items: flex-start; background: repeating-linear-gradient(45deg, #f1f5f9, #f1f5f9 10px, #e9eef5 10px, #e9eef5 20px); }
+.frame { width: 100%; max-width: 460px; aspect-ratio: 3 / 4; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 18px 44px -20px rgba(16, 24, 40, 0.45); transform-origin: top center; }
 .frame iframe { width: 100%; height: 100%; border: none; display: block; }
 .frame-wrap.actual .frame { max-width: 900px; aspect-ratio: auto; height: 1800px; }
 .side { border-left: 1px solid var(--line-soft); padding: 13px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
