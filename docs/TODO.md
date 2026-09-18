@@ -36,12 +36,14 @@
 | 小红书发布 | 🟡 仅 draft 验证 | 同上验证记录：`publish` 走 draft，**素材就绪但未真实投递** |
 | 知乎 OpenAPI | 🟡 签名与端点已通 | `apps/zhihu-publisher/docs/zhihu-official-notes.md`：假凭证返回 401、签名被正确解析；**真实发布未执行**（等 `APP_SECRET` 审核） |
 | 知乎真实发布（cookie+Playwright 通道） | ✅ 已真实投递成功 | <https://zhuanlan.zhihu.com/p/2084432742410993947>；账号 YYDH / `yydh-75`；证据 `docs/evidence/zhihu-test-post.png`；接口 `apps/zhihu-publisher` |
-| 参考仓库 | ✅ | `reference/upstream/` 15 个仓库（新增 zhihu / ZhihuPublisher / ip-publisher / PPTAgent 等） |
+| 参考仓库 | ✅ | `reference/upstream/` **28 个**仓库，全部与登记表一致（`./ops/sync_upstream.sh --list` 实测「共 28 个：一致 28 · 不符 0 · 缺失 0」）；清单 `docs/research/upstream-repos.md` |
 | 小红书 MCP 本地补丁 | ✅ | `docs/patches/xhs-mcp-local-2026-09-19/`（auth.go + 6 处改动 + diff 归档） |
 
 ### 当前服务状态
 
-三个服务**当前都在跑**（`8000` / `5178` / `18060` 均在监听，2026-09-19 复核）。启停用 `./ops/start_all.sh` / `./ops/stop_all.sh`（幂等，端口占用会跳过）。
+五个服务**当前都在跑**（`8000` 后端 / `5178` 前端 / `18060` 小红书 MCP / `18070` 知乎 / `18080` B站，2026-09-19 02:30 复核）。
+渠道实况（`GET /api/channels`）：知乎 `ready`（YYDH）、B站 `ready`（YYDH54）、小红书 `login_required`（MCP 在线，会话在当日测试中失效，需手机重扫）。
+启停用 `./ops/start_all.sh` / `./ops/stop_all.sh`（幂等，端口占用会跳过）。
 
 ---
 
@@ -104,7 +106,7 @@
 | ID | 任务 | P | 说明 | 状态 |
 | --- | --- | --- | --- | --- |
 | F1 | 补 `docs/conventions.md` | — | ✅ 已由另一 agent 建好（含 §7 上游规范、§8 脚本规范） | ✅ |
-| F2 | **版本控制** | P1 | `.gitignore` 已由另一 agent 建好（覆盖 `var/`、`node_modules`、`.venv`、`cookies.json`、`.env`、`reference/upstream/`）；**仍缺 `git init` + 首次提交** —— 现在全项目依然没有版本控制，误删不可恢复 | ⬜ |
+| F2 | **版本控制** | — | ✅ **已完成**：仓库已 `git init` 并推送（`origin` = `git@github.com:yydhYYDH/PaperCast.git`）；`ops/bin` 二进制与示例 mp4 已从历史抹除后强推（见文末 2026-09-20 那一行）。约束：只 `git add` 自己写的文件、推送前先 `fetch`、落后就 `merge`、不用 `--force` | ✅ |
 | F6 | **上游清单与复现机制** | — | ✅ `docs/research/upstream-repos.md` 已补「复现 / 状态核对」节 + 许可与合规节 + D 组；`ops/sync_upstream.sh` 可 `--list` 核对 / 按登记 commit 复现。当前 24 个全部一致。**新增上游仓库必须登记** | ✅ |
 | F3 | 补丁归档流程 | P2 | 已有 `docs/patches/xhs-mcp-local-2026-09-19/` 一例（base-commit + diff + status），把它固化为例行做法 | ⬜ |
 | F4 | 服务开机自启 | P2 | `start_all.sh` 能脱离终端但**开机不自启**；持久化需 root + systemd | ⬜ |
@@ -139,7 +141,7 @@ C1 (渠道抽象) ──► 多平台扩展不再是四份定制代码
 | 项 | 性质 | 应对 |
 | --- | --- | --- |
 | 知乎 `APP_SECRET` | ⛔ **需你本人操作** | 到知乎开放平台申请后填入 `apps/zhihu-publisher/.env`（或环境变量 `ZHIHU_OPENAPI_APP_SECRET`） |
-| 无版本控制（F2） | 高风险 | 尽快 init + 提交；当前任何误删都不可恢复 |
+| 小红书登录态失效 | 中 | MCP 在线但 `login_required`（会话在 09-19 的登出测试中失效）：需手机扫码重新登录；不影响发布闸门与 `export/` 兜底 |
 | 文档与实现漂移 | 中 | 前端 MinerU 一处**已修**（A5 ✅，前端已归零）；仍存 `05-deployment` 描述远端部署（本轮不做，见决策 2） |
 | 平台风控 / 账号安全 | 中 | 发布保留人工闸门；`export/` 兜底；凭证不进库 |
 | `narration.json` 契约若被视频侧改形 | 中 | 前端 A2 与 D1 必须按同一形状实现，改动需同步 TODO |
@@ -168,3 +170,4 @@ C1 (渠道抽象) ──► 多平台扩展不再是四份定制代码
 | 2026-09-20 | 前端 agent | **历史重写：把大文件从提交历史里抹掉（用户要求，已授权改 hash 且不许删文件）** —— `ops/bin` 5 个 Go 二进制（93 MB）+ 示例 `paper2video.mp4`（19 MB）原先在 `3277cd6`/`49c2596` 里，`.git` 达 92 MB。做法：镜像备份 → 在 `var/backup/rewrite-*` 副本里 `filter-branch --index-filter` 重写 → `git diff` 确认只少这 6 个文件 → `update-ref`（带旧值校验）原子切换 main → `git rm --cached` 只改索引。**结果：9 个提交主题全保留、.git 92M→7.6M、6 个文件仍留在磁盘、72 项未提交改动逐字节未受影响**；`--force-with-lease` 已强推（远程 main 旧 `9318087` → 新 `886ffe5`）。⚠️ **所有历史 hash 已变**，引用旧 hash 的会话请重新 `git log`。备份在 `var/backup/`（可删） |
 | 2026-09-19 | 前端 agent（master 角色） | **【收尾待办·用户要求】完成后 commit 并 push**：本轮产物 `ops/board.sh`（临时协作看板，多 agent 并行改两端时用：`say/ask/answer/read/render`，数据在 `var/board/`，`O_APPEND` 单次写入保证并发不互相覆盖）、`ops/check_api_contract.py`（前后端接口差集，`--live` 打真实服务、`--json` 可进 CI；**枚举后端路由必须用 `app.openapi()`，用 `app.routes` 会被 FastAPI 的 `_IncludedRouter` 静默漏掉整组路由 —— 已踩过**）、`ops/supervise.sh`（一轮监督六件事）。提交约束：只 `git add` 自己写的文件，**不扫别人正在改的在制品**（本工作区任何时候都有多个会话在写）；推送前先 `fetch`，落后就 `merge`，**不用 `--force`**。另：`board.sh`/`supervise.sh` 不符合 `docs/conventions.md` §8 的 verb-first 命名，入库前可改名（改名需重发一次看板协议）。 |
 | 2026-09-19 | 前端 agent | **A14 工作台改成对话式入口**：新增 WorkbenchView + components/chat/*（对话线程 / 消息 / 输入框 / 「谁在干活」名单）+ stores/chat.ts（消息由 run 推导，不新造状态）；入口统一支持 arXiv 链接、拖入 PDF（POST /api/uploads → uploadId）、直接问模型；后端新增 app/chat_api.py（POST /api/chat，只读该运行已落盘事实源，未配模型返回 LLM_NOT_CONFIGURED）；闸门变成对话里的一条提问且默认动作排第一；修掉查看器把相对产物地址直连（assetUrl）与 digest/narration 读内置示例的坑。核验：chat_check / chat_viewers / chat_drop 三个脚本 + 真提问返回真实局限，控制台 0 错误 |
+| 2026-09-19 | 文档整理 agent | **README 与文档一致性整理（用户要求：整理完 commit + push；只动文档，不扫别的轨道的在制品）**：① 上游仓库数从过期的「24 个」更正为登记表实际值 **28 个**（`README.md`、`INSTALL.md`×3、`01-implementation-plan.md`；依据 `./ops/sync_upstream.sh --list` 实测「共 28 个：一致 28 · 不符 0 · 缺失 0」）；② 根目录元文件口径「三个」→**四个**（`LICENSE` 是 09-19 可发布化时加的标准元文件，`README.md`/`AGENTS.md`/`conventions.md` §1/§9/§10 同步）；③ `docs/README.md` 补登漏项：`windows-deployment.md`、`xhs-account-safety.md`、`research/paper-share-skills-run-notes.md`、后端 `docs/07`–`11`、`zhihu-publisher`/`bilibili-publisher` 的 README；④ `INSTALL.md` 修三处与代码不符：poster/video 已随流水线跑（`models.py:18-22` `SKIPPED_STAGES` 为空）、ffmpeg/edge-tts 从「仅手工脚本」改为「流水线 video 阶段也要」、§11-5 标记已修；⑤ `conventions.md` §10 自检里写死的 `/home/yydh/hack` 改成 `<工作区根>`；⑥ F2（版本控制）与「阻塞与风险」按实况更新（已 init+推送，`origin` = `git@github.com:yydhYYDH/PaperCast.git`），§1 现状快照的上游数与服务状态改成实测值 |

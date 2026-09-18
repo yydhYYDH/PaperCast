@@ -12,8 +12,8 @@
 | 跑出来的数据、缓存、日志、venv、conda env、工具链 | `var/` |
 | 文档 | 全局的进 `docs/`，跟代码走的留在组件内（`apps/<组件>/docs/` 或 `README.md`） |
 
-根目录只允许 `README.md`、`AGENTS.md`、`.gitignore` 三个文件。
-**2026-09-19 收口完成：不再有任何例外目录** —— 根目录只允许那三个文件，其余一律进五层（历史见 `docs/conventions.md` §9）。
+根目录只允许 `README.md`、`AGENTS.md`、`.gitignore`、`LICENSE` 四个文件（`LICENSE` 是 2026-09-19 可发布化时加的标准元文件）。
+**2026-09-19 收口完成：不再有任何例外目录** —— 根目录只允许那四个文件，其余一律进五层（历史见 `docs/conventions.md` §9）。
 
 ## 2. 路径：一律不写死 /home/yydh/hack
 
@@ -38,6 +38,7 @@
 ./ops/start_all.sh                     # 起服务（幂等：端口占用会跳过）
 curl -s http://127.0.0.1:8000/api/health
 cd apps/papercast && npx vue-tsc --noEmit
+cd apps/papercast-server && .venv/bin/python -m pytest -q   # 后端单测（纯函数/契约，不联网，秒级）
 ./ops/stop_all.sh
 ```
 

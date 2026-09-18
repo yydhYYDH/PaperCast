@@ -13,6 +13,7 @@ hack/
 ├── README.md            工作区入口：是什么、怎么跑（唯一允许的说明入口）
 ├── AGENTS.md            给 AI/协作者的速查规则
 ├── .gitignore           忽略规则（运行态、依赖、密钥、上游克隆）
+├── LICENSE              MIT 许可（GitHub 公开发布需要）
 ├── docs/                文档：总纲、规范、调研、证据、补丁
 │   ├── 00-goal-and-architecture.md    跨子项目总纲
 │   ├── conventions.md                 本文件
@@ -50,7 +51,7 @@ hack/
 | 是上游/本地的一次性改动留档？ | `docs/patches/<主题>-<日期>/` |
 | 以上都不是，只是临时试一下？ | 放 `var/scratch/`，并在 24 小时内处理掉 |
 
-**根目录只允许 `README.md`、`AGENTS.md`、`.gitignore` 三个文件**（迁移期例外见第 9 节）。
+**根目录只允许 `README.md`、`AGENTS.md`、`.gitignore`、`LICENSE` 四个文件**（迁移期例外见第 9 节）。
 
 ---
 
@@ -211,7 +212,8 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 ## 9. 根目录收口（已完成，2026-09-19）
 
 迁移期为了不打断并发中的知乎/B站轨道，根目录曾留 8 个例外目录；**现在归零**，根目录只剩
-`README.md` / `AGENTS.md` / `.gitignore` 三个文件。全量对照：
+`README.md` / `AGENTS.md` / `.gitignore` / `LICENSE` 四个文件（`LICENSE` 是 09-19 可发布化时新增的
+标准元文件，不是目录例外）。全量对照：
 
 | 原路径 | 现在 | 备注 |
 | --- | --- | --- |
@@ -234,8 +236,8 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 ## 10. 自检清单
 
 ```bash
-cd /home/yydh/hack
-ls -la                                  # 根目录只有 3 个文件 + 5 个目录（+ 第 9 节的例外）
+cd <工作区根>                            # 例：cd ~/hack
+ls -la                                  # 根目录只有 4 个元文件（README.md/AGENTS.md/.gitignore/LICENSE）+ 5 个目录
 grep -rn 'hack/\.tools\|hack/\.cache\|hack/repos' apps ops docs   # 应为空：旧路径已改完
 grep -rniE 'secret|token=cookie' docs                              # 应无明文凭据
 du -sh var/* | sort -h                  # 运行态体积

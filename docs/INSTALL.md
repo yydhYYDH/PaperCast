@@ -24,7 +24,8 @@ sudo apt install -y curl iproute2 jq fontconfig fonts-noto-cjk
 #                  └─ start_all.sh 用 curl 探活
 ```
 
-**不需要**：Go（除非你要自己编小红书 MCP，见 §5.3）、Tesseract、TeX、ImageMagick、ffmpeg —— 这些只对应可选路径。
+**不需要**：Go（除非你要自己编小红书 MCP，见 §5.3）、Tesseract、TeX、ImageMagick —— 这些只对应可选路径。
+`ffmpeg` / `edge-tts` 只在 `video` 阶段用（见 §4.3）：不装则该阶段如实报 fail，其余阶段照常。
 
 ## 1. 三条命令（最小可用）
 
@@ -47,7 +48,7 @@ git clone <仓库地址> && cd <仓库目录>
 | 全部 | `./ops/install.sh --all` | 再加知乎、B站、小红书 MCP（要 Go）、截图工具 | 要真实投递，机器也齐 |
 | 单加 | `--with-zhihu` / `--with-bilibili` / `--with-mcp` / `--with-shot` | 分别对应上面几项 | 只缺一样 |
 
-其他开关：`--skip-upstream`（不克隆 24 个上游参考，省几百 MB）、`--skip-frontend`（只装后端）、
+其他开关：`--skip-upstream`（不克隆 28 个上游参考，省几百 MB）、`--skip-frontend`（只装后端）、
 `--no-lock`（用 `requirements.txt` 的下限而不是 `requirements.lock.txt` 的精确锁版）。
 
 Python 依赖有两份清单：
@@ -94,10 +95,10 @@ mkdir -p var/{runs,uploads,logs,pids,samples,cache,artifacts,secrets,scratch}
 | **CJK 中文字体** | 卡片图上的中文（核心产物之一） | 卡片文字变方块；文章仍正常产出（只记一条失败 check） | `sudo apt install fonts-noto-cjk`，或设 `PAPERCAST_CJK_FONT=` 指向已有字体 |
 | `tesseract` + 中文包 | 扫描件 PDF 的 OCR | 明确报 `CONTENT_TOO_SHORT` 并提示需要 OCR（不静默） | `sudo apt install tesseract-ocr tesseract-ocr-chi-sim` |
 | `mineru` + 可用 GPU | 想把解析引擎换成 mineru | 默认用 `pymupdf`；无 GPU 时显式回退并 warn | 见上游 mineru 文档 |
-| **chrome-headless-shell / chromium** | 只被 **poster 渲染**（默认不在流水线里跑，需手动触发）与 `ops/shot/` 截图脚本用 | 卡片与长文**不受影响**（卡片是纯 PIL 画的，不用浏览器） | `./ops/install.sh --with-zhihu`（带 chromium），或系统 `chromium`，或用 `PAPERCAST_CHROME=` 指定 |
+| **chrome-headless-shell / chromium** | 被 **poster 阶段**（在流水线里，缺了该阶段报 fail）与 `ops/shot/` 截图脚本用 | 卡片与长文**不受影响**（卡片是纯 PIL 画的，不用浏览器） | `./ops/install.sh --with-zhihu`（带 chromium），或系统 `chromium`，或用 `PAPERCAST_CHROME=` 指定 |
 | `npm --prefix ops/shot install` | `ops/shot/*.mjs` 截图/渲染脚本 | 截图工具跑不了 | `./ops/install.sh --with-shot` |
 
-### 4.3 手工视频脚本（流水线里 video 阶段是 skipped，只有脚本用）
+### 4.3 视频链路（流水线 `video` 阶段 + 手工脚本）
 
 | 依赖 | 用途 | 安装 |
 | --- | --- | --- |
@@ -114,7 +115,7 @@ mkdir -p var/{runs,uploads,logs,pids,samples,cache,artifacts,secrets,scratch}
 
 ## 5. 三个不在仓库里的东西
 
-### 5.1 上游只读参考：`reference/upstream/`（24 个仓库，未入库）
+### 5.1 上游只读参考：`reference/upstream/`（28 个仓库，未入库）
 
 `.gitignore` 故意忽略了它们（每个都带自己的 `.git`）。按登记表复现：
 
@@ -209,7 +210,7 @@ cd apps/papercast && npx vue-tsc --noEmit
 
 ## 10. 推到 GitHub 之前
 
-**① 许可**：仓库是 MIT（`LICENSE`）。`reference/upstream/` 里的 24 个上游各有自己的许可证，它们不入库，
+**① 许可**：仓库是 MIT（`LICENSE`）。`reference/upstream/` 里的 28 个上游各有自己的许可证，它们不入库，
 只以只读克隆存在（登记表 `docs/research/upstream-repos.md` 里逐条记了来源与许可证）。
 
 **② 体积**：`ops/bin/` 的二进制与 `apps/xiaohongshu-mcp/` 源码都已排除，仓库本体约 50 MB（比早先少了约 95 MB 的二进制），
@@ -225,9 +226,11 @@ git grep -nIE "SESSDATA|z_c0=|sk-[A-Za-z0-9]{20,}" $(git rev-list --all | head -
 **④ 推**：
 
 ```bash
-git remote add origin git@github.com:<你的账号>/<仓库名>.git
+git remote add origin git@github.com:yydhYYDH/PaperCast.git   # 本仓库当前的 origin
 git push -u origin main
 ```
+
+推之前先 `git fetch` 看有没有别人的提交；落后就 `merge` 回本地再推，**不要 `--force`**（本工作区常有多会话并行）。
 
 **⑤ CI**：仓库自带 `.github/workflows/ci.yml`，push 会跑后端渠道层自检（`scripts/check_channels.py`，不联网不投递）与前端 `vue-tsc`。
 
@@ -239,4 +242,4 @@ git push -u origin main
 | 2 | 视频脚本字体族硬编码 `Microsoft YaHei`，缺字体直接 `SystemExit`，且没有环境变量可覆盖 | `ops/make_portrait_video.py:41,76` | 手工视频链路 |
 | 3 | `make_run_video_artifacts.py` 用裸 `ffprobe`（只查 PATH，不像同目录脚本有 `resolve_tool` 回落） | `ops/make_run_video_artifacts.py:84` | 手工视频链路 |
 | 4 | `ops/shot/` 的 npm 依赖不在最小安装里 | `ops/install.sh`（`--with-shot` 才装） | 截图/海报 |
-| 5 | poster 阶段默认不在流水线里跑（`app/models.py:20-22` 标 skipped；正在接线中，以 `apps/papercast-server/app/modules/poster*.py` 的现状为准） | `app/models.py:20-22`、`app/modules/poster.py` | 默认不产出海报 |
+| 5 | ~~poster / video 阶段不在流水线里跑~~ —— **已修**（2026-09-19）：`models.py` 的 `IMPLEMENTED_STAGES` 已含 6 段、`SKIPPED_STAGES` 为空，poster 与 video 都随流水线跑 | `app/models.py:18-22` | —（保留此行仅为记录曾有的误解） |

@@ -2,7 +2,7 @@
 
 > 这里全是**别人的代码，只读**。用途是给 PaperCast 的设计找参考实现，不参与构建。
 > 规则见 [`../conventions.md`](../conventions.md) 第 7 节：不改上游、不用 submodule、结论写回 `docs/research/`。
-> 快照时间：2026-09-19 · 共 24 个 · 合计约 2.5G。删掉后可按下表来源重新克隆。
+> 快照时间：2026-09-19 · 共 28 个 · 合计约 2.6G。删掉后可按下表来源重新克隆。
 > 自查：`./ops/sync_upstream.sh --list` 会核对「本地目录数 vs 登记数」是否一致（多一个少一个都会报出来）。
 
 ## 复现 / 状态核对
@@ -64,6 +64,33 @@
 - 比上游更该读的是**我们自己的结论**：`reference/baoyu-research/docs/{image-generation.md, image-generation-tools.md, codex-imagegen-backend.md}`。
 - 该目录被 `.gitignore` 单独排除，且**不在 `sync_upstream.sh` 的同步范围**（它是调研包，不是只读参考仓库）。
 
+## E. 前端设计审美技能（2026-09-19 装入 DSH 技能根）
+
+> 用途：治「布局排版不够简洁美观 / 一眼模板感」。它们不是 PaperCast 的构建依赖，
+> 而是**当代码会话的 skill 加载**用的：由 `./ops/install_skills.sh` 拷到用户级
+> `~/.agents/skills/`（dsh 的 skill-filesystem provider 会扫 `<repo>/.dsh/skills` >
+> `<repo>/.agents/skills` > `~/.dsh/skills` > `~/.agents/skills`），所以不往仓库里塞目录。
+> 源仓库仍遵守「只读、不改」；升级 = 改下表 HEAD 再 `./ops/sync_upstream.sh` + 重跑安装脚本。
+
+| 目录 | 上游 | HEAD | 最后提交 | 体积 | 我们借用什么 |
+| --- | --- | --- | --- | --- | --- |
+| `anthropic-skills` | [anthropics/skills](https://github.com/anthropics/skills) | `34040c9` | 2026-09-10 | 16M | `skills/frontend-design`：**审美方向与反模板纪律**——把 AI 生成页面的默认味逐条点名（奶油底 + 陶土色、`#0B0B0B` 假黑、全大写 eyebrow、`A · B · C` 中黑点、卡片套件、`→` 挂按钮），并要求先定 subject/受众/首要任务再动手 |
+| `impeccable` | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) | `f2c7051` | 2026-09-16 | 3.8M | **审计 + 修复分册**（layout / typeset / quieter / distill / critique / polish / colorize…）+ 确定性检测 CLI（`scripts/impeccable detect --scope layout`）；关键是访客模式之分：Operate+Read（仪表盘）要稳定密度与可扫描性，Persuade+Experience 才允许夸张构图 |
+| `taste-skill` | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill) | `e79ca9e` | 2026-09-16 | 6.1M | 只取 `skills/minimalist-skill`（frontmatter `name: minimalist-ui`，*Premium Utilitarian Minimalism*）：简洁高级的**禁令清单**——禁 Inter/Roboto、禁 Lucide/Feather 细线图标、禁 `shadow-md/lg/xl`、禁大面积彩色背景与渐变、大容器禁 `rounded-full`、禁 emoji |
+| `spacing-skill` | [buidangminh23/spacing-skill](https://github.com/buidangminh23/spacing-skill) | `075d754` | 2026-09-17 | 504K | **间距与垂直韵律**（单文件 73KB）：先读现状再定三个旋钮 SPACING_STEP / DENSITY / ALIGNMENT_RIGOR，推出唯一一条刻度，让邻近性承担语义，覆盖光学对齐、密度纪律、无障碍下限 |
+
+`impeccable` 是**稀疏克隆**（`--filter=blob:none --sparse` + `sparse-checkout set .agent/skills/impeccable`），
+全仓 370M 里我们只要这一个技能目录；`sync_upstream.sh` 按登记 commit 复现时会取整棵树，介意体积就手动稀疏克隆。
+
+安装映射（`ops/install_skills.sh`，安装名 = SKILL.md 的 frontmatter `name`）：
+
+| 安装名 | 来源目录 |
+| --- | --- |
+| `frontend-design` | `anthropic-skills/skills/frontend-design` |
+| `impeccable` | `impeccable/.agent/skills/impeccable` |
+| `minimalist-ui` | `taste-skill/skills/minimalist-skill` |
+| `design-spacing-rhythm` | `spacing-skill/skills/spacing-skill` |
+
 ## C 组用途速查（按各仓库 README 实测摘录）
 
 | 目录 | 一句话 |
@@ -84,8 +111,8 @@
 
 | 许可 | 仓库 |
 | --- | --- |
-| MIT | `Paper2Poster`、`Paper2Slides`、`Paper2Video`、`PPTAgent`、`zhihu-cli`、`zhihu-automation-skill`、`zhihu-publisher`、`ip-publisher` |
-| Apache-2.0 | `paper2x`、`paper2anything`、`Paper2Any`、`paper-share-skills`、`wechat-article-skills`、`sustech-slides-template`、`zhihu-mcp-wingAGI` |
+| MIT | `Paper2Poster`、`Paper2Slides`、`Paper2Video`、`PPTAgent`、`zhihu-cli`、`zhihu-automation-skill`、`zhihu-publisher`、`ip-publisher`、`taste-skill`、`spacing-skill` |
+| Apache-2.0 | `paper2x`、`paper2anything`、`Paper2Any`、`paper-share-skills`、`wechat-article-skills`、`sustech-slides-template`、`zhihu-mcp-wingAGI`、`impeccable`、`anthropic-skills`（技能目录自带 `LICENSE.txt`） |
 | **AGPL-3.0** | `guizang-social-card-skill` —— ⚠️ 复制其代码会传染到整个分发物，动手前先评估 |
 | 未见 LICENSE 文件 | `ZhihuPublisher`、`paper-to-wechat`、`paper2content`、`zhihu-mcp`、`zhihu`、`zhihuMcpServer`、`zhihu_mcp_server`、`zhihu-mcp-server` —— 按默认版权「保留所有权利」对待，**只能读，不要抄进 `apps/`** |
 

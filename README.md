@@ -6,10 +6,12 @@
 - 安装：[`docs/INSTALL.md`](docs/INSTALL.md)
 - 总纲与目标：[`docs/00-goal-and-architecture.md`](docs/00-goal-and-architecture.md)
 - **目录与路径规范：[`docs/conventions.md`](docs/conventions.md)** ← 新增东西前先看这个
+- 任务板（谁在做什么）：[`docs/TODO.md`](docs/TODO.md)
+- 6 个 Agent 的覆盖、证据与边界：[`docs/02-six-agents-coverage.md`](docs/02-six-agents-coverage.md)
 - 文档总入口：[`docs/README.md`](docs/README.md)
 - 2026-09-19 的目录迁移对照（旧路径 → 新路径）：[`docs/migration-2026-09-19.md`](docs/migration-2026-09-19.md)
 
-## 目录地图（五层，根目录只放这五个目录 + 三个元文件）
+## 目录地图（五层，根目录只放这五个目录 + 四个元文件）
 
 | 目录 | 放什么 | 可删性 |
 | --- | --- | --- |
@@ -20,7 +22,7 @@
 | | `zhihu-publisher/` 知乎渠道适配器（Python + Playwright，HTTP :18070；契约见其 `README.md`） | |
 | | `bilibili-publisher/` B站渠道适配器（Python + biliup CLI，HTTP :18080） | |
 | `reference/` | **别人的代码，只读** | 可删可重克隆 |
-| | `upstream/` 24 个上游参考实现（只读；按登记 commit 复现：`./ops/sync_upstream.sh`） | |
+| | `upstream/` 28 个上游参考实现（只读；清单与登记 commit 见 `docs/research/upstream-repos.md`，按登记 commit 复现：`./ops/sync_upstream.sh`） | |
 | | `baoyu-research/` 出图后端调研（R2 素材增强） | |
 | `ops/` | **跨组件的脚本与工具** | 脚本不可删 |
 | | `install.sh` 一键安装；`start_all.sh` / `stop_all.sh` 起停服务；`build_mcp.sh` 重建 Go 二进制；`sync_upstream.sh` 核对/复现上游参考 | |
@@ -29,7 +31,7 @@
 | `var/` | **运行态**：runs / uploads / logs / pids / samples / cache / toolchains / secrets … | 可删（见 `var/README.md`） |
 | `docs/` | 文档：总纲、规范、调研、证据、补丁 | 不可删 |
 
-根目录只额外允许 `README.md`、`AGENTS.md`、`.gitignore` 三个文件。
+根目录只允许 `README.md`、`AGENTS.md`、`.gitignore`、`LICENSE` 四个文件，其余一律进五层。
 
 ## 安装
 
@@ -92,6 +94,6 @@ curl -s http://127.0.0.1:8000/api/env
 
 ## 根目录纪律
 
-根目录只允许 `README.md`、`AGENTS.md`、`.gitignore` 三个文件，其余一律进五层。
+根目录只允许 `README.md`、`AGENTS.md`、`.gitignore`、`LICENSE` 四个文件，其余一律进五层。
 2026-09-19 迁移期曾为并发开发的知乎轨道在根目录留了 8 个例外目录，**现已全部归位、例外归零**
 （旧路径 → 新路径的完整对照见 [`docs/conventions.md`](docs/conventions.md) §9）。

@@ -35,7 +35,7 @@
 | 后端 M1–M3 跑通一次全绿 | `apps/papercast-server/docs/06-verification.md`：run `run_224e72b5a672`，intake 11.4s / 68k 字符 / 12 图 / 23 章节；understand 11 条证据全可回溯；article 773 字 + 6 张 1080×1440 卡片；publish 走 draft |
 | 前端 × 真后端已连通 | 我跑的 `ops/shot/live_check.mjs`：页面渲染 6 张阶段卡 + 7 行历史，**200 /api/runs**，控制台 0 错误，后端日志里累计 100+ 次轮询 |
 | `/api/env` 真实探测可用 | 实测 200 / 755B：`intake{engine:pymupdf, gpu:false, mineru:false, ocr:false}`、`latex{engine:null, mode:source-only}`、`llm{configured:true, model:deepseek-v4.1-flash}`、`cards{chrome, cjkFont, cjkFontUsable:true}`、`publish.xiaohongshu{reachable:true, loggedIn:false}`、`dataDir`、`runs:3` |
-| 上游 24 个可复现 | `./ops/sync_upstream.sh --list` → 24 一致；登记表 `docs/research/upstream-repos.md` |
+| 上游 28 个可复现 | `./ops/sync_upstream.sh --list` → 28 一致；登记表 `docs/research/upstream-repos.md` |
 | 启停与运行态 | `ops/start_all.sh`（backend + frontend + mcp，幂等）；日志 `var/logs/`、pid `var/pids/`、数据 `var/runs/` |
 
 ### 3.2 正在飞（别的会话在做，本方案只对接）
@@ -170,7 +170,7 @@ M0 契约对齐 ──► M1 中文闭环 ──► M2 英文 + 多平台 ──
 | A2 | `VideoViewer` 旁白路径去硬编码 | 依赖 §5.6 |
 | A3 | 接 `GET /api/env`，替换 `src/data/env.ts` 里写死的 `ENV_DEPS` / `ENGINE_ROWS` | 后端已给真实探测结果（§3.1） |
 | A4 | 接 SSE `/api/runs/:id/events`，**保留轮询作为降级**（心跳 15s） | 可选增强 |
-| A5 | 文案纠正：界面里「走 MinerU 解析」与实际（PyMuPDF）不符 | 实测首页已无 MinerU 字样，**待复核**是已改还是没渲染到 |
+| A5 | 文案纠正：界面里「走 MinerU 解析」与实际（PyMuPDF）不符 | ✅ **已修完**（2026-09-19）：前端 `MinerU` 归零，6 处改 PyMuPDF；文档里剩下的 MinerU 都是「为什么不用它」的决策记录 |
 | A6 | `skipped` 语义：预览器「尚未产出」→「本轮跳过 · 原因」 | 阶段卡片已有「跳过」标签 |
 | A7 | 扫码 / 浏览器登录接入前端 | **已由另一会话基本实现**：`PlatformsView.vue`（渠道面板 + 探测 + 退出登录）+ `PlatformLoginDialog.vue`（二维码图 + 过期倒计时 + 状态轮询）。**待补**：知乎是 `browser` 形态（风控拦纯 HTTP 扫码），前端要能区分「页内显示二维码」与「唤起桌面窗口 + 轮询状态」两种 UX；且**另一会话已实证过**：证据在 `docs/evidence/platforms-qrcode-dialog.png`、`platforms-need-login.png`、`platforms-publish-integration.png`，含真实 MCP 探测「已登录 momo」。我那次没验成，只是因为当时 MCP 已停 —— **不要把「此刻我验不到」写成「功能没实现」** |
 | A8 | 英文传播展示（§5.3） | 语言分组 |
@@ -300,7 +300,7 @@ node ops/shot/live_check.mjs --shot var/scratch/dashboard-live.png   # 真渲染
 | 3 | `video/` 下中文目录名是否改 ASCII？ | **改成 ASCII**，避免 URL 编码与跨平台问题 |
 | 4 | 小红书 / 知乎登录入口接到前端 | ✅ **已决（用户决策 3）**：两者都要在 dashboard 里可完成登录。小红书＝页内二维码；**知乎＝唤起桌面窗口 + 状态轮询**（风控所限）。待起服务后实测 |
 | 5 | ~~知乎 APP_SECRET~~ | ❌ **作废**：知乎走扫码/桌面窗口路径（`zhihu-publisher`），不必等 APP_SECRET |
-| 6 | 版本控制（`git init` 仍缺） | 建议尽快 —— 多会话并行改同一批文件，没有版本兜底风险很高 |
+| 6 | ~~版本控制（`git init` 仍缺）~~ | ✅ **已解决（2026-09-19）**：仓库已 init 并推送（`origin` = `git@github.com:yydhYYDH/PaperCast.git`），大文件已从历史抹除后强推 |
 | 7 | `/api/platforms` 与 `/api/channels` 两套端点并存，职责边界未定 | 需后端 owner 拍板。建议 **platforms = 登录与账号状态、channels = 投递扇出与回执**，前端只认一套「发布」入口 |
 
 ---
