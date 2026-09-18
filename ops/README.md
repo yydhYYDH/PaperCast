@@ -3,6 +3,7 @@
 | 路径 | 说明 |
 | --- | --- |
 | `start_all.sh` | 起后端 `:8000` + 小红书 MCP `:18060` + 前端 `:5178`；幂等（端口占用即跳过）。用法：`./ops/start_all.sh [backend\|frontend\|mcp]` |
+| `start_all.sh` 的 MCP 分支 | 会自动 `cd apps/xiaohongshu-mcp/` 后再起进程 —— 原因见下面「启动约束」 |
 | `stop_all.sh` | 按 `var/pids/*.pid` 停服务 |
 | `build_mcp.sh` | 重建 `ops/bin/` 里的三个 Go 二进制（干净版 + 本地 auth 版 + 登录工具） |
 | `bin/` | 本地编译产物：`xiaohongshu-mcp`（上游 HEAD 干净版）、`xiaohongshu-mcp-auth`（含本地 `auth.go` 改动）、`xiaohongshu-login`（扫码登录工具）。**二进制，不要 `sed`/改内容，只能重建** |
@@ -14,6 +15,14 @@
 - 跨组件的才放这里；只服务单个组件的脚本放 `apps/<组件>/scripts/`（如 `run_dev.sh`、`smoke_test.sh`）；
 - 所有脚本自推导工作区根：`WS="$(cd "$(dirname "$0")/.." && pwd)"`，不写死 `/home/yydh/hack`；
 - 不在脚本里打印 cookie / token；发布类动作默认走「只出 `export/`，不真实投递」。
+
+## 启动约束（迁移时踩过的坑）
+
+| 约束 | 原因 | 表现 |
+| --- | --- | --- |
+| 小红书 MCP 必须在 `apps/xiaohongshu-mcp/` 目录里启动 | 它的 cookie 是**相对进程当前目录**的 `cookies.json`（`cookies/cookies.go` 的 `localCookiesPath`） | 换 cwd 后会在新目录新建一个空 `cookies.json`，`/api/v1/login/status` 直接返回 `is_logged_in: false` |
+| 后端 venv 不能整体搬目录（搬了要改 shebang） | `.venv/bin/*` 的 shebang 与 `activate*` 里写的是绝对路径 | 报 `env: '.../.venv/bin/uvicorn': No such file or directory`（文件其实在） |
+| 二进制只能重建，不能改内容 | Go 把源码路径编译进二进制，改字符串会破坏内部偏移 | 启动即 core dump |
 
 ## 重建 Go 二进制（`build_mcp.sh` 做什么）
 

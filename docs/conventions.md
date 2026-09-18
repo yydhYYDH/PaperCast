@@ -112,6 +112,18 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 - 跨组件引用写「工作区根相对路径」并加代码块，例如 ``apps/papercast-server/docs/04-api-contract.md``；
 - 文档里出现绝对路径只允许一种情况：给运维复制的 systemd/nginx 片段，且必须与 `apps/papercast-server/docs/05-deployment.md` 保持同步。
 
+### 3.5 进程工作目录（cwd）也是一条路径约定
+
+有状态的本机服务**必须在自己的组件目录里启动**，因为相对路径是按 cwd 解析的：
+
+| 服务 | 启动目录 | 原因 |
+| --- | --- | --- |
+| 小红书 MCP | `apps/xiaohongshu-mcp/` | cookie 文件是 cwd 下的 `cookies.json`（`cookies/cookies.go`）；cwd 不对就掉登录 |
+| 后端 | 任意（推荐工作区根） | 数据目录由 `PAPERCAST_DATA_DIR` 注入，`.env` 按模块自身位置解析 |
+| 前端 | `apps/papercast/`（`npm --prefix` 会切） | vite 配置与 `public/` 相对项目根解析 |
+
+统一入口 `ops/start_all.sh` 已经处理这些目录切换；**手工起服务时，记得先 `cd` 到对应组件目录**。
+
 ---
 
 ## 4. `var/` 运行态规范

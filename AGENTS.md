@@ -28,6 +28,7 @@
 - 别改 `reference/upstream/` 里的代码（要改就复制成 `apps/` 下的组件，或用 `docs/patches/` 记补丁）；
 - 别用 `git add` 把 `apps/xiaohongshu-mcp`（独立仓库）塞进根仓库；
 - 别用 `sed` 批量扫 `ops/bin/` 或任何二进制（会改坏内嵌路径，2026-09-19 已经踩过一次）；
+- 有状态服务按组件目录启动：小红书 MCP 必须在 `apps/xiaohongshu-mcp/` 里起（cookie 是 cwd 下的 `cookies.json`），后端 venv 不要整体 `mv`（shebang 写死绝对路径）；
 - 发行/发布类动作（真实投递）必须过人工闸门，脚本默认只出 `export/`。
 
 ## 4. 验证命令（改完随手跑）

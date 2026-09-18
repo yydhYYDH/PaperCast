@@ -4,6 +4,19 @@
 > 规则见 [`../conventions.md`](../conventions.md) 第 7 节：不改上游、不用 submodule、结论写回 `docs/research/`。
 > 快照时间：2026-09-19 · 共 23 个 · 合计约 2.5G。删掉后可按下表来源重新克隆。
 
+## 复现 / 状态核对
+
+本表**就是复现依据**（不维护第二份清单），脚本按表格的「目录 | 上游链接 | HEAD」三列解析：
+
+```bash
+./ops/sync_upstream.sh --list     # 只核对：登记 HEAD vs 本地 HEAD，不动任何文件
+./ops/sync_upstream.sh            # 缺失的按登记 commit 取回来（浅克隆 + 固定 commit）
+```
+
+- 取的是**登记的那个 commit**，不是上游默认分支的最新提交 —— 上游更新不会让我们的参考实现静默漂移；要升级就改本表 HEAD 再重跑。
+- **非破坏性**：已存在的目录只核对、不覆盖、不更新、不删除（防止冲掉并发会话的成果），不一致只报告并以非零码退出。
+- 为什么不是 submodule：见 [`../conventions.md`](../conventions.md) §7.4 —— 上游是纯参考资料，不是构建依赖；以 gitlink 嵌进版本库会带来 `grep`/`glob` 跳过内容、未 init 时目录为空、并发 agent 误提交等代价，而它的核心价值（记录「我们改过上游哪个 commit」）对我们用不上。
+
 ## A. 论文 → 多形态物料（PaperCast L2 的参考）
 
 | 目录 | 上游 | HEAD | 最后提交 | 体积 | 我们借用什么 |
@@ -42,8 +55,43 @@
 | `ZhihuPublisher` | [zhihu/ZhihuPublisher](https://github.com/zhihu/ZhihuPublisher) | `97ca422` | 2026-08-11 | 484K |
 | `ip-publisher` | [veeicwgy/ip-publisher](https://github.com/veeicwgy/ip-publisher) | `2121445` | 2026-04-23 | 28M |
 
+## D. 出图后端调研（不在 `upstream/` 下，单独克隆）
+
+- `reference/baoyu-research/` ← [JimLiu/baoyu-skills](https://github.com/JimLiu/baoyu-skills)，克隆在 `reference/baoyu-research/repo/`，HEAD `1567581`。
+  我们借用：**出图后端选择规则**（运行时自适应：Codex 原生 `imagegen` > Cursor `GenerateImage` > `baoyu-image-gen`）、`codex-imagegen` 方案（用 `codex exec` 驱动 Codex CLI 内置 `image_gen`，复用订阅出图、不需要图像 API key）、21 个 `baoyu-*` 技能（小红书组图 / 封面 / 信息图 / 幻灯片 / 漫画）。
+- 比上游更该读的是**我们自己的结论**：`reference/baoyu-research/docs/{image-generation.md, image-generation-tools.md, codex-imagegen-backend.md}`。
+- 该目录被 `.gitignore` 单独排除，且**不在 `sync_upstream.sh` 的同步范围**（它是调研包，不是只读参考仓库）。
+
+## C 组用途速查（按各仓库 README 实测摘录）
+
+| 目录 | 一句话 |
+| --- | --- |
+| `ZhihuPublisher` | 知乎**官方**发布 skill：validate→preview→publish；`zhihu-official/publish.py` 已按它的协议与 `X-Sign` 签名实现 |
+| `zhihu-cli` | 终端操作知乎（发布 / 浏览） |
+| `zhihu-automation-skill` | 浏览器操作知乎：发文章 / 写想法 / 回答问题 / 看热榜 |
+| `zhihu-publisher` | 一键发布文章到知乎专栏 |
+| `zhihu-mcp-wingAGI` | 最小知乎 MCP 服务 |
+| `zhihu-mcp` | 知乎 MCP 服务（258M，含浏览器依赖） |
+| `zhihu-mcp-server` | 基于 zhihu-plus-plus 的 MCP 服务器 |
+| `zhihuMcpServer` | Puppeteer MCP：抓网页转 markdown（通用抓取，非知乎专有） |
+| `zhihu_mcp_server` | 简化架构的知乎发布 HTTP API（与小红书 / 头条同构） |
+| `zhihu` | 知乎自动发布 OpenClaw Skills 封装 |
+| `ip-publisher` | IP Publisher（README 首屏是徽章，用途待知乎轨道补充登记） |
+
+## 许可与合规（抄代码前必读）
+
+| 许可 | 仓库 |
+| --- | --- |
+| MIT | `Paper2Poster`、`Paper2Slides`、`Paper2Video`、`PPTAgent`、`zhihu-cli`、`zhihu-automation-skill`、`zhihu-publisher`、`ip-publisher` |
+| Apache-2.0 | `paper2x`、`paper2anything`、`Paper2Any`、`paper-share-skills`、`wechat-article-skills`、`zhihu-mcp-wingAGI` |
+| **AGPL-3.0** | `guizang-social-card-skill` —— ⚠️ 复制其代码会传染到整个分发物，动手前先评估 |
+| 未见 LICENSE 文件 | `ZhihuPublisher`、`paper-to-wechat`、`paper2content`、`zhihu-mcp`、`zhihu`、`zhihuMcpServer`、`zhihu_mcp_server`、`zhihu-mcp-server` —— 按默认版权「保留所有权利」对待，**只能读，不要抄进 `apps/`** |
+
+> 特别注意：`paper2content`（4 套风格操作系统，前端文章 4 变体就来自它）和 `paper-to-wechat` 我们**真在用其结论**，但这两个仓库都没有 LICENSE 文件 —— 所以边界是「读思路、自己实现」，不能复制代码。
+
 ## 注意
 
-- **许可证**：多数仓库带 `LICENSE`（Apache-2.0/dev 类）；`ZhihuPublisher`、`paper-to-wechat`、`paper2content`、`zhihu-mcp-server`、`zhihu-mcp`、`zhihu`、`zhihuMcpServer` 未见 `LICENSE` 文件，**要抄代码前先确认授权**。
+- **许可证**：逐仓库清单见上面「许可与合规」一节（含 AGPL 与无 LICENSE 的名单）。
 - **不要在这里改代码**。需要改的上游（如 `xiaohongshu-mcp`）已经复制成 `apps/` 下的组件，补丁留档在 `docs/patches/`。
-- 重新克隆：`ops/skillsearch/clone.sh` 是早期的一次性脚本（只覆盖 11 个），新增克隆请手工 `git clone --depth 1` 到 `reference/upstream/<name>/` 并更新本表。
+- **重新克隆**：用 `./ops/sync_upstream.sh`（以本表为依据，覆盖全部登记项）。`ops/skillsearch/clone.sh` 是早期一次性脚本、只覆盖前 11 个，已不代表现状。
+- **新增克隆**：`git clone --depth 1` 到 `reference/upstream/<name>/`，然后**必须在本表登记一行**（登记 = 来源 / HEAD / 日期 / 借用点）；只克隆不登记视为违规。

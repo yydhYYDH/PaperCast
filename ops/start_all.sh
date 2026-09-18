@@ -52,10 +52,15 @@ start_frontend() {
 
 start_mcp() {
   # 本机服务必须清掉代理变量，否则请求会被 http_proxy 吃掉；
-  # 浏览器登录态与缓存统一落在工作区 var/cache（XDG_CACHE_HOME）。
-  detach mcp 18060 env XDG_CACHE_HOME="$WS/var/cache" \
+  # 三个必须注意的点（2026-09-19 踩过）：
+  # 1. 必须在 apps/xiaohongshu-mcp/ 里起：它的 cookie 是**相对当前目录**的 cookies.json
+  #    （见 apps/xiaohongshu-mcp/cookies/cookies.go 的 localCookiesPath），换 cwd 会新建空文件并掉登录；
+  # 2. 清掉代理变量，否则请求会被 http_proxy 吃掉；
+  # 3. XDG_CACHE_HOME 指向工作区 var/cache —— 浏览器 profile 与登录态在那里。
+  detach mcp 18060 sh -c 'cd "$1" && exec env XDG_CACHE_HOME="$2" \
     env -u http_proxy -u https_proxy -u all_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
-    "$WS/ops/bin/xiaohongshu-mcp" -headless=true -port 127.0.0.1:18060
+    "$3" -headless=true -port 127.0.0.1:18060' _ \
+    "$WS/apps/xiaohongshu-mcp" "$WS/var/cache" "$WS/ops/bin/xiaohongshu-mcp"
 }
 
 MODE=all

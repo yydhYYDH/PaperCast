@@ -57,13 +57,27 @@
 | `apps/papercast/src/views/SettingsView.vue`、`apps/papercast/README.md`、`apps/papercast-server/docs/02-module-generate.md`、`docs/00-goal-and-architecture.md` | 文案里的 `repos/` → `reference/upstream/` |
 | **新增**：`README.md`、`AGENTS.md`、`.gitignore`、`docs/{README,conventions,migration-2026-09-19}.md`、`docs/research/upstream-repos.md`、`reference/README.md`、`ops/README.md`、`var/README.md`、`ops/build_mcp.sh` | — |
 
-## 4. 一个事故与它的修复（值得记住）
+## 4. 迁移暴露的三个坑（都已修，值得记住）
 
-批量 `sed` 改写路径时，通配命中了 `ops/bin/` 下三个 Go 二进制——Go 把源码路径编译进二进制，改写后字符串长度变化导致内部偏移错位，`xiaohongshu-mcp -h` 直接 core dump。
+### 4.1 Go 二进制被 `sed` 改坏（我造成的）
 
-修复：源码本来就完好，用 `var/toolchains` 里的 Go 工具链重建（干净版从 `git archive HEAD` 导出到 `var/build/` 构建），并把过程固化成 `ops/build_mcp.sh`。
+批量 `sed` 改写路径时通配命中了 `ops/bin/` 下三个 Go 二进制——Go 把源码路径编译进二进制，改写后字符串长度变化导致内部偏移错位，`xiaohongshu-mcp -h` 直接 core dump。
 
-**教训（已写进 `AGENTS.md`）：永远不要对二进制跑 `sed`/`grep -r` 式的批量改写。**
+修复：源码本来就完好，用 `var/toolchains` 里的 Go 工具链重建（干净版从 `git archive HEAD` 导出到 `var/build/` 构建），并把过程固化成 `ops/build_mcp.sh`（顺带补上了此前完全没记录的编译方法）。
+
+### 4.2 venv 不能整体搬目录
+
+`apps/papercast-server/.venv/bin/*` 的 shebang 与 `activate*` 脚本里写的是绝对路径，`mv` 之后 18 个文件仍指向 `papercast-server/.venv`，启动报 `env: '.../uvicorn': No such file or directory`（文件其实存在，是解释器路径失效）。
+
+修复：把 18 个文本文件里的旧前缀改成新前缀（不要碰 venv 里的二进制）。
+
+### 4.3 小红书 MCP 的 cookie 认 cwd
+
+MCP 的 cookie 是**相对当前目录**的 `cookies.json`（`apps/xiaohongshu-mcp/cookies/cookies.go`），迁移后从工作区根启动，它在根目录新建了一个空 `cookies.json`，`login/status` 变成 `is_logged_in: false`（账号 momo 的登录态其实一直在组件目录里）。
+
+修复：`ops/start_all.sh` 的 MCP 分支改为先 `cd apps/xiaohongshu-mcp/` 再起进程；登录态恢复。
+
+**教训（已写进 `AGENTS.md` 与 `ops/README.md`）：永远不要对二进制跑 `sed`；有状态服务要按组件目录启动。**
 
 ## 5. 未归位：并发中的知乎轨道
 
