@@ -10,6 +10,7 @@
 #   5) 合并冲突标记残留（两边同时写同一文件的直接痕迹）
 #   6) 最近 10 分钟被改的文件（谁在动哪块，判断是否撞车）
 #   7) 在途 run 状态（重启后端前必看：02:35 真发生过一次重启，把别人的在途 run 判死了）
+#   8) 后端单测（AGENTS.md §4 的口径；红要重跑一次再判定，中途状态很常见）
 #
 # 用法：./ops/supervise.sh [--fast]     --fast 跳过 vue-tsc（约 40s），只做接口与增量
 set -euo pipefail
@@ -86,9 +87,20 @@ if n("waiting"):
     print("  !! 有 run 卡在 waiting：B1 旧伤（重启前留下的），重启也不会自己继续 —— 别当成「在跑」")
 PY
 
+echo
+echo "=== 7) 后端单测（AGENTS.md §4 的口径）==="
+# 并发改动中「红」常是改到一半的中间态：红一次不算数，隔开重跑仍红才报。
+BACK="$WS/apps/papercast-server"
+if [ -x "$BACK/.venv/bin/python" ]; then
+  ( cd "$BACK" && timeout 150 .venv/bin/python -m pytest -q 2>&1 | tail -3 | sed 's|^|  |' )
+  echo "  （提示：若红，先隔一两分钟重跑再判定 —— 实测有过 2 failed→14 passed 的中间态）"
+else
+  echo "  !! 找不到 .venv/bin/python，跳过"
+fi
+
 if [ "$FAST" = "0" ]; then
   echo
-  echo "=== 7) 前端类型检查 ==="
+  echo "=== 8) 前端类型检查 ==="
   ( cd apps/papercast && timeout 150 npx vue-tsc --noEmit 2>&1 | tail -8 ) && echo "  ok: vue-tsc 通过" || echo "  !! vue-tsc 有错（看上面）"
 fi
 
