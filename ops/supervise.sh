@@ -12,6 +12,7 @@
 #   7) 在途 run 状态（重启后端前必看：02:35 真发生过一次重启，把别人的在途 run 判死了）
 #   8) 后端单测（AGENTS.md §4 的口径；红要重跑一次再判定，中途状态很常见）
 #   9) 静默时长（按源码量「谁还在改」，排除我跑 pytest 产生的 __pycache__）
+#  10) 问了 master 却没被正式答复的问题（盯「广播 != 回答」这个形式缺口）
 #
 # 用法：./ops/supervise.sh [--fast]     --fast 跳过 vue-tsc（约 40s），只做接口与增量
 set -euo pipefail
@@ -145,6 +146,38 @@ for label, rel, exts in areas:
         print("  %-10s 无文件" % label)
         continue
     print("  %-10s %s（%d 分钟前）%s" % (label, time.strftime("%H:%M:%S", time.localtime(newest)), int((now - newest) // 60), path))
+PY
+
+echo
+echo "=== 10) 有没有「问了 master 却没被正式答复」的问题 ==="
+# 为什么单列：我犯过这个 —— 裁决内容都发了，但用的是广播 say（收件人为空），
+# 于是「问 master 的人」按收件人查不到答复。广播恰好覆盖 != 回答。这条检查盯的就是这个形式缺口。
+python3 - "$WS" <<'PY'
+import json, os, sys
+NL = chr(10)
+p = os.path.join(sys.argv[1], "var", "board", "messages.jsonl")
+try:
+    msgs = [json.loads(l) for l in open(p, encoding="utf-8") if l.strip()]
+except OSError:
+    print("  没有看板数据"); raise SystemExit
+open_q = []
+for m in msgs:
+    if m.get("kind") != "ask" or m.get("to") != "master" or m.get("from") == "master":
+        continue
+    asker, ts = m.get("from"), m.get("ts", "")
+    ok = any(
+        x.get("from") == "master" and x.get("kind") == "answer" and x.get("to") == asker and x.get("ts", "") > ts
+        for x in msgs
+    )
+    if not ok:
+        open_q.append((ts, asker, m.get("text", "").replace(NL, " ")[:88]))
+if open_q:
+    print("  !! %d 条问了 master 却没有正式答复（广播 say 不算，收件人对不上）:" % len(open_q))
+    for ts, asker, txt in open_q:
+        print("     %s %-9s %s" % (ts, asker, txt))
+    print("  → 补：./ops/board.sh answer master <问的人> '<答复>'")
+else:
+    print("  ok: 没有悬空提问（有 ask 就有 answer 回给提问者）")
 PY
 
 echo
