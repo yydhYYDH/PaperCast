@@ -258,4 +258,4 @@ curl -F file=@var/uploads/up_eef613c136c1/paper2video.pdf \
 | `apps/xiaohongshu-mcp` | 已登录（账号 momo）；二进制在 `ops/bin/xiaohongshu-mcp`（配套 `-auth` 版与 `xiaohongshu-login`），`./ops/build_mcp.sh` 可重建 |
 | `ops/` · `var/` · `reference/` | 2026-09-19 完成五层分层：代码 / 参考 / 工具 / 运行态 / 文档；规范见 `docs/conventions.md` |
 | 前端 ↔ 后端 | 仍可切 mock 或真后端；W1（接线）状态以 `apps/papercast/src/api/` 为准 |
-| 并行轨道 | 知乎发布（`zhihu-official/` 等 8 个目录，见 README 迁移期例外）正在开发中 |
+| 并行轨道 | 知乎发布 / B站发布 / 视频分享轨道；迁移期留在根目录的 8 个例外目录 **2026-09-19 已全部归位**（见 `docs/conventions.md` §9） |

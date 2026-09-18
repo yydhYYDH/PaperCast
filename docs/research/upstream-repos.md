@@ -68,7 +68,7 @@
 
 | 目录 | 一句话 |
 | --- | --- |
-| `ZhihuPublisher` | 知乎**官方**发布 skill：validate→preview→publish；`zhihu-official/publish.py` 已按它的协议与 `X-Sign` 签名实现 |
+| `ZhihuPublisher` | 知乎**官方**发布 skill：validate→preview→publish；`apps/zhihu-publisher/scripts/publish.py` 已按它的协议与 `X-Sign` 签名实现 |
 | `zhihu-cli` | 终端操作知乎（发布 / 浏览） |
 | `zhihu-automation-skill` | 浏览器操作知乎：发文章 / 写想法 / 回答问题 / 看热榜 |
 | `zhihu-publisher` | 一键发布文章到知乎专栏 |

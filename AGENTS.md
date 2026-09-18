@@ -13,7 +13,7 @@
 | 文档 | 全局的进 `docs/`，跟代码走的留在组件内（`apps/<组件>/docs/` 或 `README.md`） |
 
 根目录只允许 `README.md`、`AGENTS.md`、`.gitignore` 三个文件。
-当前有 8 个例外目录（并发中的知乎轨道），已写进 `.gitignore`，别在它们旁边再加新目录。
+**2026-09-19 收口完成：不再有任何例外目录** —— 根目录只允许那三个文件，其余一律进五层（历史见 `docs/conventions.md` §9）。
 
 ## 2. 路径：一律不写死 /home/yydh/hack
 

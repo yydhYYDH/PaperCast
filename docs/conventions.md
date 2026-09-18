@@ -105,6 +105,8 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 | 8000 | 后端 API（`apps/papercast-server`，契约见其 `docs/04-api-contract.md`） |
 | 5178 | 前端 dev（`apps/papercast`；preview 用 4178） |
 | 18060 | 小红书 MCP（`ops/bin/xiaohongshu-mcp`） |
+| 18070 | 知乎发布通道（`apps/zhihu-publisher`） |
+| 18080 | B站发布通道（`apps/bilibili-publisher`，底层 biliup CLI） |
 
 ### 3.4 文档里引用路径
 
@@ -130,18 +132,30 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 
 | 子目录 | 内容 | 删掉的后果 |
 | --- | --- | --- |
-| `var/runs/<runId>/` | 每条流水线的 `run.json` 与产物（intake/understand/article/publish） | 历史运行不可复现，需重跑 |
+| `var/runs/<runId>/` | **产出主目录**：`run.json` + 各阶段产物（intake/understand/article/publish）+ `publish/<渠道>/export/`、`receipt.json` | 历史运行不可复现，验收证据丢失 |
 | `var/uploads/<uploadId>/` | 上传的原始论文 | 已建 run 会缺源文件 |
-| `var/logs/` | `backend.log` / `frontend.log` / `mcp.log` | 无 |
+| `var/logs/` | 各服务日志（backend / frontend / mcp / zhihu / bilibili / 登录 pty 日志） | 无 |
+| `var/secrets/` | **凭证**：`zhihu/cookies.json`、`bilibili/cookies.json`（均 chmod 600） | 要重新登录 |
+| `var/artifacts/<平台>/` | **只放投递中转**：`export/<runId>/`、登录二维码截图、下载日志；**不放凭证** | 重跑发布阶段即可 |
+| `var/home/` | HOME 重定向目录（`zhihu-home`、biliup 自管的 `.bilibili/`） | 第三方 CLI 的凭证/缓存丢失，要重登录 |
 | `var/pids/` | `*.pid`，`stop_all.sh` 据此停服务 | 只能用端口/进程名手动清 |
-| `var/samples/` | 固定样例论文（`paper2video.pdf`） | 冒烟脚本要重新准备样例 |
+| `var/samples/` | 固定样例（`paper2video.pdf`、`papercast-lab/`） | 冒烟脚本要重新准备样例 |
 | `var/cache/` | 包缓存、浏览器登录态、fontconfig、tectonic | **`var/cache/xiaohongshu-mcp/browser` 删掉就要重新扫码登录** |
-| `var/toolchains/` | Go 工具链 + 模块缓存（347M） | `ops/build_mcp.sh` 需要重新联网拉依赖 |
+| `var/toolchains/` | Go 工具链、`bili-venv`（biliup）、`zhihu-*-venv`、`p2b`（TeX/conda） | 重建成本高，且要重新联网 |
+| `var/scratch/` | 一次性探索产物：临时截图、调试输出、临时数据 | 无 |
+| `var/tmp/` · `var/build/` · `var/npm-tmp/` | 脚本临时文件、`build_mcp.sh` 的编译工作区、npm 临时目录 | 无（可随时清） |
 
 规则：
 1. `var/` 整体不入库（`.gitignore` 已忽略），可在需要时整体删除重建；
-2. 唯一“贵重”的是 `var/cache/xiaohongshu-mcp/browser`（账号登录态）与 `var/runs/`（验收证据）；
-3. 清理时用 ``du -sh var/* | sort -h`` 先看体积，别 `rm -rf var` 一把梭。
+2. **产出去哪**：凡是要在 dashboard 里预览/下载的，一律写进 `var/runs/<runId>/<stage>/`
+   —— 后端只把这里挂到 `/artifacts/<runId>/<stage>/<rel>`，写到别处就是 404；
+3. **权威副本只有一份**：run 内 `publish/<渠道>/export/` 是权威；`var/artifacts/<平台>/export/<runId>/`
+   是通道服务自留的中转目录，可随时删，不参与验收；
+4. **凭证不进 `var/artifacts/`**：统一放 `var/secrets/`（见 §5）；第三方工具自管凭证位置的
+   （biliup 的 `$HOME/.bilibili/`、小红书 MCP 的 cwd `cookies.json`）不必搬，用 `HOME`/cwd 重定向
+   把它圈进 `var/` 或组件目录即可，**不要复制第二份**；
+5. 唯一“贵重”的是凭证/登录态（`var/secrets/`、`var/home/`、`var/cache/xiaohongshu-mcp/browser`）与 `var/runs/`；
+6. 清理时用 ``du -sh var/* | sort -h`` 先看体积，别 `rm -rf var` 一把梭。
 
 ---
 
@@ -149,7 +163,9 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 
 | 东西 | 位置 | 规则 |
 | --- | --- | --- |
-| 小红书 cookie | `apps/xiaohongshu-mcp/cookies.json`、`var/cache/xiaohongshu-mcp/browser/` | 已在 `.gitignore`/上游 `.gitignore` 覆盖，**永不入库、永不外传** |
+| 小红书 cookie | `apps/xiaohongshu-mcp/cookies.json`、`var/cache/xiaohongshu-mcp/browser/` | 已在 `.gitignore`/上游 `.gitignore` 覆盖，**永不入库、永不外传**；位置由 MCP 按 cwd 决定，不要搬 |
+| 知乎 cookie | `var/secrets/zhihu/cookies.json`（chmod 600） | 由 `zhihu-publisher` 写；2026-09-19 从 `var/artifacts/zhihu/` 迁出（服务仍兼容读旧路径） |
+| B站 cookie | `var/home/.bilibili/cookies.json`（chmod 600） | biliup **自管**位置：用 `HOME=var/home` 圈进 `var/`，不复制第二份 |
 | 后端本地配置 | `apps/papercast-server/.env` | 同上；只提交 `.env.example` |
 | LLM 凭据 | `~/.dsh/.credentials.yaml`（工作区外） | 代码只读不写，不复制到工作区 |
 | 调研过程中拿到的 token | 不许落在 `docs/` 或 `var/logs/` | 引用响应时先删 `xsecToken` 等字段 |
@@ -192,20 +208,24 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 
 ---
 
-## 9. 迁移期例外（并发中的知乎轨道）
+## 9. 根目录收口（已完成，2026-09-19）
 
-2026-09-19 迁目录时，另一条会话正在开发**知乎发布轨道**，其目录保留在根目录未动（动了会打断它）：
+迁移期为了不打断并发中的知乎/B站轨道，根目录曾留 8 个例外目录；**现在归零**，根目录只剩
+`README.md` / `AGENTS.md` / `.gitignore` 三个文件。全量对照：
 
-| 现在的路径 | 是什么 | 收尾后应该去 |
+| 原路径 | 现在 | 备注 |
 | --- | --- | --- |
-| `zhihu-official/` | 知乎官方接口发布脚本（`publish.py`、`qr_login.py`） | `apps/zhihu-publisher/` |
-| `p2b/` | arXiv 源码与 TeX 试编译输入 | `var/scratch/p2b/` |
-| `.p2b/` | conda 环境（TeΧ/幻灯片工具链，743M） | `var/toolchains/p2b-env/`（注意 shebang/prefix 需重写） |
-| `.venv-zhihu/` | 知乎 CLI 的 Python venv（116M） | `var/venvs/zhihu/` |
-| `.home-zhihu/` | HOME 重定向目录（`.zhihu-cli` 缓存） | `var/home-zhihu/` |
-| `.conda-pkgs/` | conda 包缓存（1.1G） | `var/cache/conda-pkgs/` |
-| `.tectonic-cache/` | tectonic（TeX 引擎）缓存 | `var/cache/tectonic/` |
-| `example-papers/` | 输入样例（`deeprare.pdf`） | `var/samples/` |
+| `zhihu-official/` | `apps/zhihu-publisher/scripts/`（脚本）+ `apps/zhihu-publisher/docs/zhihu-official-notes.md`（笔记） | 归位时同步改了 `ZHIHU_LOGIN_SCRIPT` 默认值、`login-headed.sh` 的 `WS` 推导深度（`../../..`）、以及三条提示文案 |
+| `zhihu-official/sample-article.md` | `var/samples/zhihu-sample-article.md` | 测试稿属输入样例 |
+| `zhihu-official/.zhihu-publish-output/` | `var/artifacts/zhihu/publish-output/` | 原来是 **cwd 相对**的隐藏产物目录（换目录就找不到），现在由 `publish.py` 按 `PAPERCAST_WS` 推导 |
+| `example-papers/deeprare.pdf` | `var/samples/deeprare.pdf` | 输入样例 |
+| `.p2b/`、`p2b/` | `var/toolchains/p2b/` | TeX/conda 工具链 |
+| `.venv-zhihu/`、`.home-zhihu/` | `var/toolchains/zhihu-cli-venv/`、`var/home/zhihu-home/` | venv 的 shebang 是绝对路径，**只能重建不能 mv** |
+| `.conda-pkgs/`、`.tectonic-cache/` | `var/cache/{conda-pkgs,tectonic}/` | 包缓存 |
+| `biliup` 相关 | `var/toolchains/bili-venv/`、`var/home/.bilibili/` | B站轨道新增：biliup venv + 凭证（HOME 重定向） |
+
+**下次往根目录放东西前**：先想清楚它属于哪一层；真要开例外，必须在 §9 加一行 + 在 `.gitignore` 加一条，
+并在标题里写明**打算什么时候收口**。
 
 这些都已在 `.gitignore` 里。归位时**不要直接 `mv` venv/conda 目录**：先看清楚里面有没有写死的绝对路径（venv 的 `bin/*` shebang、conda 的 `prefix`），必要时重建而不是搬移。
 

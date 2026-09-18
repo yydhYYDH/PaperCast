@@ -25,17 +25,13 @@ cookies.json
 # —— 独立仓库的组件（有自己的 git 历史，不作为子树提交）——
 /apps/xiaohongshu-mcp/
 
-# —— 迁移期例外：并发中的知乎轨道（收尾后归位）——
-/zhihu-official/
-/p2b/
-/.p2b/
-/.home-zhihu/
-/.venv-zhihu/
-/.conda-pkgs/
-/.tectonic-cache/
-/example-papers/
+# —— 通用工具目录：万一有工具往根目录写，别让它入库 ——
 /.cache/
 /.tools/
+
+# —— 工具误写到根目录的临时文件（根目录只允许 3 个文件，这些别入库）——
+*.ses
+:memory:*
 
 # —— 编辑器 / 系统 ——
 .DS_Store

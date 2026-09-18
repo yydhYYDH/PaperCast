@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | [`TODO.md`](TODO.md) | **项目级任务板**：本轮目标、分组任务、谁负责、变更记录 | 活 |
 | [`00-goal-and-architecture.md`](00-goal-and-architecture.md) | 跨子项目总纲：意图、R1 目标、五层架构、ADR、验收标准 | 有效 |
+| [`01-implementation-plan.md`](01-implementation-plan.md) | **实现方案**：集成契约冻结、模块实现细节、里程碑与验收、开放问题 | 草案 v1 |
 | [`conventions.md`](conventions.md) | **目录 / 路径 / 命名 / 密钥规范**（本工作区的法律） | 有效 |
 | [`migration-2026-09-19.md`](migration-2026-09-19.md) | 2026-09-19 目录分层迁移：旧→新对照、影响、回滚 | 记录 |
 | [`research/`](research/) | 调研结论与上游清单 | — |

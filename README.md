@@ -17,6 +17,7 @@
 | | `papercast/` Vue 3 前端（六阶段 dashboard，mock/http 双适配器） | |
 | | `papercast-server/` FastAPI 后端（L0–L3 + 横切控制面/证据审计） | |
 | | `xiaohongshu-mcp/` 小红书渠道适配器（Go，**独立 git 仓库**，含本地 auth 改动） | |
+| | `zhihu-publisher/` 知乎渠道适配器（Python + Playwright，HTTP :18070；契约见其 `README.md`） | |
 | `reference/` | **别人的代码，只读** | 可删可重克隆 |
 | | `upstream/` 23 个上游参考实现（清单见 `docs/research/upstream-repos.md`） | |
 | | `baoyu-research/` 出图后端调研（R2 素材增强） | |
@@ -32,9 +33,9 @@
 ## 快速开始
 
 ```bash
-# 起三个服务：后端 :8000 + 小红书 MCP :18060 + 前端 :5178（日志在 var/logs/）
+# 起全部服务：后端 :8000 + 三个发布通道（小红书 :18060 / 知乎 :18070 / B站 :18080）+ 前端 :5178
 ./ops/start_all.sh
-./ops/start_all.sh backend        # 也可以只起一个：backend | frontend | mcp
+./ops/start_all.sh backend        # 也可以只起一个：backend | frontend | mcp | zhihu | bilibili
 
 # 存活与引擎环境
 curl -s http://127.0.0.1:8000/api/health
@@ -61,10 +62,12 @@ curl -s http://127.0.0.1:8000/api/env
 | 后端 API | 8000 | `apps/papercast-server/.venv/bin/uvicorn` | `var/logs/backend.log` |
 | 前端 dev | 5178 | `npm --prefix apps/papercast run dev` | `var/logs/frontend.log` |
 | 小红书 MCP | 18060 | `ops/bin/xiaohongshu-mcp` | `var/logs/mcp.log` |
+| 知乎发布通道 | 18070 | `apps/zhihu-publisher`（uvicorn，用 `var/toolchains/zhihu-mcp-venv`） | `var/logs/zhihu.log` |
+| B站发布通道 | 18080 | `apps/bilibili-publisher`（uvicorn，底层 biliup CLI） | `var/logs/bilibili.log` |
 | （DSH Web GUI） | 3080 | `dsh web`，不属于本工作区 | — |
 
 ## 迁移期例外（并发中的知乎轨道）
 
 知乎发布轨道正在并行开发，其目录暂时留在根目录，**未纳入上面的五层结构**：
-`zhihu-official/`、`p2b/`、`.p2b/`、`.home-zhihu/`、`.venv-zhihu/`、`.conda-pkgs/`、`.tectonic-cache/`、`example-papers/`。
+迁移期曾有 8 个例外目录，2026-09-19 已全部归位（见 `docs/conventions.md` §9），现在一个都不剩。
 它们已全部写进 `.gitignore`；那条轨道收尾后按 `docs/conventions.md` 第 9 节归位。
