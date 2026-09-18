@@ -221,30 +221,11 @@ a { color: var(--accent); text-underline-offset: 3px; }
 .prose pre { background: var(--surface-2); border: 1px solid var(--hairline); border-radius: 10px; padding: 14px; overflow: auto; }
 .prose blockquote { margin: 0 0 14px; padding: 10px 16px; border-left: 2px solid var(--hairline); background: var(--surface-2); color: var(--ink-3); }
 
-/* ---------- 运营维护 / 数据看板 ---------- */
-.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
-.stat-card {
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: 18px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.stat-card:hover { border-color: #dcdbd6; }
-.stat-card .k { font-size: 12.5px; color: var(--ink-3); }
-.stat-card .v { font-family: var(--serif); font-size: 30px; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--ink); }
-.stat-card .s { font-size: 11.5px; color: var(--ink-4); }
-.stat-card.accent .v, .stat-card.ok .v, .stat-card.warn .v, .stat-card.err .v { color: var(--ink); }
-
-.svc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(276px, 1fr)); gap: 14px; }
-.svc {
-  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius);
-  padding: 16px 18px; display: flex; flex-direction: column; gap: 10px;
-}
-.svc.down { background: #fffafa; }
-.svc .name { font-family: var(--serif); font-size: 15px; font-weight: 500; color: var(--ink); }
+/* ---------- 运营维护：只留结论（统计卡已删，2026-09-19） ----------
+   原来这里有一整套 .stat-grid / .stat-card / .svc-grid / .svc 的看板样式；
+   用户要「去仪表盘化、尽量简洁、只留结论」，运营页改成
+   「一句结论 + 最多三个数字 + 每个平台一行 + 服务折叠」，所以这些规则整块删掉，
+   避免以后有人顺手又把卡片墙拼回来。 */
 
 .logbox {
   background: var(--surface-2);

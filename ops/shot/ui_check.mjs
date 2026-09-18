@@ -65,9 +65,14 @@ await page.locator('.page-head .btn', { hasText: '更新数据' }).click()
 await page.waitForSelector('.toast', { timeout: 240000 })
 const toast = await page.locator('.toast').first().innerText().catch(() => null)
 await page.screenshot({ path: WS + '/docs/evidence/ui-ops-toast.png' })
-await page.locator('.seg button', { hasText: '看服务状态' }).click()
+// 运营页改成「只留结论」后：服务默认收起，要点展开条；日志再点一次才出现。
+// 更细的断言在 ops_conclusion_check.mjs，这里只保证入口仍然点得通、有回执。
+await page.locator('.fold').click()
+await page.waitForTimeout(800)
+const serviceRows = await page.locator('.lines li').count()
+await page.locator('.btn.ghost', { hasText: '看日志' }).last().click()
 await page.waitForTimeout(1500)
-const services = { cards: await page.locator('.svc').count(), logbox: await page.locator('.logbox').count() }
+const services = { serviceRows, logbox: await page.locator('.logbox').count() }
 await page.screenshot({ path: WS + '/docs/evidence/ui-ops-services.png' })
 
 pages.push(await visit('运行记录', 'ui-runs.png'))
