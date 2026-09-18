@@ -3,11 +3,15 @@
 #
 # 用法：
 #   ./ops/install.sh                     # 最小可用：后端 venv + 前端依赖 + 上游参考克隆
-#   ./ops/install.sh --all               # 加上两个发布通道（知乎 Playwright / B站 biliup）
-#   ./ops/install.sh --with-zhihu        # 只加知乎通道
-#   ./ops/install.sh --with-bilibili     # 只加 B站通道
+#   ./ops/install.sh --all               # 全都装上：两个发布通道 + 小红书 MCP（要 Go）+ 截图工具
+#   ./ops/install.sh --with-zhihu        # 只加知乎通道（Playwright + chromium）
+#   ./ops/install.sh --with-bilibili     # 只加 B站通道（biliup 独立 venv）
+#   ./ops/install.sh --with-mcp          # 只加小红书 MCP（clone 源码 + 打补丁 + Go 编译）
+#   ./ops/install.sh --with-shot         # 只加截图/海报渲染工具（ops/shot 的 npm 依赖）
 #   ./ops/install.sh --skip-upstream     # 不克隆 reference/upstream/（不需要上游时）
 #   ./ops/install.sh --no-lock           # 用 requirements.txt（跟随下限）而不是 requirements.lock.txt
+#
+# 二进制不入库：小红书 MCP 需要自己编（--with-mcp，要 Go >= 1.24），见 docs/INSTALL.md §5.2。
 #
 # 幂等：已存在的 venv / 已装的依赖 / 已克隆的上游都跳过，不覆盖、不删除。
 # 非破坏性：脚本只写 var/ 与组件内的 .venv/、node_modules/，不动你的代码与 git 状态。
@@ -22,15 +26,19 @@ PYTHON_MIN="3.11"
 
 WITH_ZHIHU=0
 WITH_BILIBILI=0
+WITH_MCP=0
+WITH_SHOT=0
 SKIP_FRONTEND=0
 SKIP_UPSTREAM=0
 USE_LOCK=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --all)            WITH_ZHIHU=1; WITH_BILIBILI=1 ;;
+    --all)            WITH_ZHIHU=1; WITH_BILIBILI=1; WITH_MCP=1; WITH_SHOT=1 ;;
     --with-zhihu)     WITH_ZHIHU=1 ;;
     --with-bilibili)  WITH_BILIBILI=1 ;;
+    --with-mcp)       WITH_MCP=1 ;;
+    --with-shot)      WITH_SHOT=1 ;;
     --skip-frontend)  SKIP_FRONTEND=1 ;;
     --skip-upstream)  SKIP_UPSTREAM=1 ;;
     --no-lock)        USE_LOCK=0 ;;
@@ -71,6 +79,17 @@ if [ "$SKIP_FRONTEND" = 0 ]; then
   NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
   [ "$NODE_MAJOR" -ge 20 ] || die "Node 版本过低（当前 $(node -v)），需要 >= 20"
   ok "Node: $(node -v) / npm $(npm -v)"
+fi
+
+# 软依赖：缺了不阻断安装，但会影响某些路径（见 docs/INSTALL.md §4）
+MISSING=""
+for c in curl jq fc-list ss; do command -v "$c" >/dev/null 2>&1 || MISSING="$MISSING $c"; done
+if [ -n "$MISSING" ]; then
+  printf '   · 建议补装（可选）：%s\n' "$MISSING"
+  printf '     sudo apt install -y curl jq iproute2 fontconfig   # jq 给冒烟脚本用，fontconfig 帮后端找中文字体\n'
+fi
+if command -v fc-list >/dev/null 2>&1; then
+  fc-list :lang=zh >/dev/null 2>&1 || printf '   · 没找到中文字体：卡片上的中文会是方块 → sudo apt install fonts-noto-cjk\n'
 fi
 
 # ---------- 1. 目录骨架 ----------
@@ -136,12 +155,18 @@ else
 fi
 
 # ---------- 5. 本地二进制（小红书 MCP） ----------
-say "本地二进制（ops/bin/）"
+say "本地二进制（ops/bin/ —— 不入库，需要自己编）"
 chmod +x "$WS"/ops/bin/* 2>/dev/null || true
+HAVE_MCP=1
 for b in xiaohongshu-mcp xiaohongshu-mcp-auth xiaohongshu-login; do
-  if [ -x "$WS/ops/bin/$b" ]; then ok "ops/bin/$b 可执行"; else skip "缺少 ops/bin/$b"; fi
+  [ -x "$WS/ops/bin/$b" ] || HAVE_MCP=0
 done
-printf '   · 重新编译（可选，需要 Go）：./ops/build_mcp.sh —— 见 docs/INSTALL.md「重编小红书 MCP」\n'
+if [ "$HAVE_MCP" = 1 ]; then
+  ok "ops/bin/ 三个 Linux 二进制都在"
+elif [ "$WITH_MCP" = 0 ]; then
+  skip "还没有 ops/bin/xiaohongshu-mcp（小红书通道用不了，其它不受影响）"
+  printf '   · 想要小红书通道：./ops/install.sh --with-mcp（要 Go >= 1.24，会 clone 源码并编译）\n'
+fi
 
 # ---------- 6. 知乎通道 ----------
 if [ "$WITH_ZHIHU" = 1 ]; then
@@ -178,7 +203,57 @@ if [ "$WITH_BILIBILI" = 1 ]; then
   printf '   · 没登录时服务如实报 unconfigured，素材包照常导出\n'
 fi
 
-# ---------- 8. 收尾 ----------
+# ---------- 8. 小红书 MCP（源码编译，二进制不入库） ----------
+if [ "$WITH_MCP" = 1 ]; then
+  say "小红书 MCP（clone 源码 + 打补丁 + 编译）"
+  SRC="$APPS/xiaohongshu-mcp"
+  PATCH_DIR="$WS/docs/patches/xhs-mcp-local-2026-09-19"
+  UPSTREAM_URL="${XHS_MCP_REPO_URL:-https://github.com/xpzouying/xiaohongshu-mcp}"
+  if [ -d "$SRC/.git" ]; then
+    skip "源码已存在：$SRC（要重来：rm -rf apps/xiaohongshu-mcp 后重跑）"
+  else
+    command -v git >/dev/null 2>&1 || die "缺 git"
+    git clone --quiet "$UPSTREAM_URL" "$SRC" || die "clone 失败：$UPSTREAM_URL"
+    ok "clone 上游：$UPSTREAM_URL"
+    if [ -f "$PATCH_DIR/base-commit.txt" ]; then
+      ( cd "$SRC" && git checkout --quiet "$(cat "$PATCH_DIR/base-commit.txt")" ) \
+        && ok "切到登记 commit：$(cat "$PATCH_DIR/base-commit.txt" | cut -c1-7)"
+    fi
+    if [ -f "$PATCH_DIR/tracked.diff" ]; then
+      if ( cd "$SRC" && git apply "$PATCH_DIR/tracked.diff" ); then
+        ok "已打上本地补丁（auth / guard 等改动）"
+      else
+        printf '   ! 补丁没打上（可能已包含或冲突）——看 %s/status.txt\n' "$PATCH_DIR"
+        printf '     小红书"带鉴权/护栏"的那一版需要这个补丁；不打也能编，只是少了本地改动。\n'
+      fi
+    fi
+  fi
+  if [ -x "$WS/var/toolchains/go/bin/go" ] || command -v go >/dev/null 2>&1; then
+    ok "Go 就绪"
+  else
+    die "缺 Go（需要 >= 1.24）：https://go.dev/dl/ 装好后重跑，或把工具链解压到 var/toolchains/go"
+  fi
+  "$WS/ops/build_mcp.sh" || die "编译失败（看上面的输出；docs/INSTALL.md §5.2）"
+  ok "ops/bin/ 已产出：xiaohongshu-mcp / -auth / xiaohongshu-login（+ 两个 Windows .exe）"
+  printf '   · 首次运行 MCP 会自动下载内置 Chromium（约 150MB）到 var/cache/xiaohongshu-mcp/browser/\n'
+fi
+
+# ---------- 9. 截图 / 海报渲染工具（ops/shot） ----------
+if [ "$WITH_SHOT" = 1 ]; then
+  say "截图 / 海报渲染工具（ops/shot）"
+  command -v npm >/dev/null 2>&1 || die "缺 npm（Node >= 20）"
+  if [ -d "$WS/ops/shot/node_modules/playwright" ]; then
+    skip "ops/shot 依赖已装"
+  else
+    npm --prefix "$WS/ops/shot" install --no-audit --no-fund --silent \
+      || die "ops/shot 依赖安装失败（npm_config_cache=$npm_config_cache）"
+    ok "ops/shot 依赖装好（含 playwright）"
+  fi
+  printf '   · 还需要一个 chromium：node ops/shot/render.mjs 会告诉你缺什么；\n'
+  printf '     或 var/toolchains/zhihu-mcp-venv/bin/python -m playwright install chromium\n'
+fi
+
+# ---------- 10. 收尾 ----------
 say "完成"
 printf '   后端 venv   : %s\n' "$VENV"
 printf '   启动全部    : ./ops/start_all.sh\n'

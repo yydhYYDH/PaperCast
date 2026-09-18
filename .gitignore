@@ -5,6 +5,13 @@
 /var/
 
 # —— 依赖与构建产物 ——
+# ops/bin 是本地编译出来的二进制（小红书 MCP 等），**不入库**：
+# 别人 clone 后自己编，见 docs/INSTALL.md §5.2 与 ./ops/build_mcp.sh
+/ops/bin/
+
+# 演示媒体同样是大文件（19 MB），入库会让 .git 爆到 90 MB+：
+# 真产物在 var/ 里（本就不入库），示例片源按需从上游重新获取
+apps/papercast/public/samples/video/*.mp4
 node_modules/
 dist/
 __pycache__/

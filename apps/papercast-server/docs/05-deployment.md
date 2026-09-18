@@ -93,8 +93,9 @@ systemctl status papercast-api --no-pager
 
 ```bash
 # 小红书发布能力（M3 需要；不装则 M3 退化为 export-only，不影响 M1/M2）
-# 二进制由 ./ops/build_mcp.sh 从 apps/xiaohongshu-mcp 重建；日常起停用 ./ops/start_all.sh mcp
-cd /home/yydh/hack && ./ops/bin/xiaohongshu-mcp -port :18060
+# 二进制不入库：先 ./ops/install.sh --with-mcp 编出来（clone 源码 + Go 编译），详见 docs/INSTALL.md §5.2/§5.3
+# 日常起停用 ./ops/start_all.sh mcp（它会在组件目录里起，cookie 是 cwd 相对路径）
+cd <仓库根> && ./ops/bin/xiaohongshu-mcp -port :18060
 curl -s http://127.0.0.1:18060/health
 ```
 

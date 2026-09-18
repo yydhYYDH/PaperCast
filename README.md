@@ -24,7 +24,7 @@
 | | `baoyu-research/` 出图后端调研（R2 素材增强） | |
 | `ops/` | **跨组件的脚本与工具** | 脚本不可删 |
 | | `install.sh` 一键安装；`start_all.sh` / `stop_all.sh` 起停服务；`build_mcp.sh` 重建 Go 二进制；`sync_upstream.sh` 核对/复现上游参考 | |
-| | `shot/` HTML→PNG 渲染（chrome-headless-shell）；`bin/` 本地编译的发布二进制 | |
+| | `shot/` HTML→PNG 渲染（chrome-headless-shell）；`bin/` 本地编译的发布二进制（**不入库**，见 `docs/INSTALL.md` §5.2） | |
 | | `skillsearch/` 上游技能调研脚本 | |
 | `var/` | **运行态**：runs / uploads / logs / pids / samples / cache / toolchains / secrets … | 可删（见 `var/README.md`） |
 | `docs/` | 文档：总纲、规范、调研、证据、补丁 | 不可删 |
@@ -33,14 +33,15 @@
 
 ## 安装
 
-需要 **Python ≥ 3.11**（推荐 3.13）与 **Node ≥ 20**；不需要 Go（发布二进制已随仓库提供）。
+需要 **Python ≥ 3.11**（推荐 3.13）与 **Node ≥ 20**。
+不需要 Go —— 除非你要自己编小红书 MCP（二进制不入库，`--with-mcp` 会用 Go 编译它）。
 逐项说明、可选依赖与排查见 [`docs/INSTALL.md`](docs/INSTALL.md)。
 
 ```bash
 git clone <这个仓库> && cd <仓库目录>
 
 ./ops/install.sh          # 最小可用：后端 venv + 前端依赖 + 上游只读克隆
-./ops/install.sh --all    # 一并装两个发布通道（知乎 Playwright + B站 biliup，体积更大）
+./ops/install.sh --all    # 全都装上：两个发布通道 + 小红书 MCP（要 Go）+ 截图工具
 
 # 安装脚本会自动从 .env.example 生成 .env，记得填 LLM 密钥
 vi apps/papercast-server/.env
@@ -76,7 +77,7 @@ curl -s http://127.0.0.1:8000/api/env
 | 端到端冒烟（上传 PDF → 建 run → 过闸门） | `apps/papercast-server/scripts/smoke_test.sh <paper.pdf>` |
 | 真实投递小红书（默认只出 `export/` 不投递） | `PUBLISH=1 apps/papercast-server/scripts/smoke_test.sh <paper.pdf>` |
 | 前端类型检查 / 构建 | `cd apps/papercast && npx vue-tsc --noEmit && npx vite build` |
-| 重建发布二进制 | `./ops/build_mcp.sh` |
+| 编译发布二进制（小红书 MCP，二进制不入库） | `./ops/install.sh --with-mcp`（或已 clone 源码后 `./ops/build_mcp.sh`） |
 
 ## 服务与端口
 
@@ -84,7 +85,7 @@ curl -s http://127.0.0.1:8000/api/env
 | --- | --- | --- | --- |
 | 后端 API | 8000 | `apps/papercast-server/.venv/bin/uvicorn` | `var/logs/backend.log` |
 | 前端 dev | 5178 | `npm --prefix apps/papercast run dev` | `var/logs/frontend.log` |
-| 小红书 MCP | 18060 | `ops/bin/xiaohongshu-mcp` | `var/logs/mcp.log` |
+| 小红书 MCP | 18060 | `ops/bin/xiaohongshu-mcp`（**需自建**：`./ops/install.sh --with-mcp`） | `var/logs/mcp.log` |
 | 知乎发布通道 | 18070 | `apps/zhihu-publisher`（uvicorn，用 `var/toolchains/zhihu-mcp-venv`） | `var/logs/zhihu.log` |
 | B站发布通道 | 18080 | `apps/bilibili-publisher`（uvicorn，底层 biliup CLI） | `var/logs/bilibili.log` |
 | （DSH Web GUI） | 3080 | `dsh web`，不属于本工作区 | — |

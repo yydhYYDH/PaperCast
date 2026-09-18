@@ -8,7 +8,7 @@
 | `biliup_login_pty.py` | 用 pty 驱动 `biliup login`（扫码菜单），原始输出写 `var/logs/biliup_login_pty.log`。biliup 装在 `var/toolchains/bili-venv`（**不在 PATH 里**，通道服务会自己找），凭证由 biliup 自管在 `var/home/.bilibili/cookies.json`（HOME 重定向） |
 | `stop_all.sh` | 按 `var/pids/*.pid` 停服务 |
 | `build_mcp.sh` | 重建 `ops/bin/` 里的三个 Go 二进制（干净版 + 本地 auth 版 + 登录工具） |
-| `bin/` | 本地编译产物：`xiaohongshu-mcp`（上游 HEAD 干净版）、`xiaohongshu-mcp-auth`（含本地 `auth.go` 改动）、`xiaohongshu-login`（扫码登录工具）。**二进制，不要 `sed`/改内容，只能重建** |
+| `bin/` | 本地编译产物：`xiaohongshu-mcp`（上游 HEAD 干净版）、`xiaohongshu-mcp-auth`（含本地 `auth.go` 改动）、`xiaohongshu-login`（扫码登录工具）。**不入库**（`.gitignore` 已忽略整个目录）：别人 clone 后要自己编，`./ops/install.sh --with-mcp` 一条命令搞定。**二进制，不要 `sed`/改内容，只能重建** |
 | `shot/` | HTML→PNG 渲染与截图脚本（chrome-headless-shell，来自 Playwright 缓存）；前端 10 张界面截图由 `shot.mjs` 生成 |
 | `shot/render.mjs` | **通用 HTML→PNG 渲染入口**（可被其它组件调用）：`node ops/shot/render.mjs --html <p> --out <png> --width W --height H [--check]`，输出单行 JSON（面板溢出、缺图、面积填充率），退出码 3 = 几何自检不过。海报走这条 |
 | `imagegen.sh` | **文生图入口**：调 `baoyu-image-gen` 的官方 API 后端（默认 dashscope/qwen-image-2.0-pro）。密钥放 `var/secrets/imagegen.env`；内置 `npm_config_cache` 指向 `var/`（沙箱下 `~/.npm` 只读，否则 `npx` 必挂） |
@@ -35,5 +35,7 @@
 ./ops/build_mcp.sh          # 用 var/toolchains 里的 Go 工具链与模块缓存（离线可编译）
 ```
 
-编译环境：`GOROOT=var/toolchains/go`、`GOPATH=var/toolchains/gopath`、`GOCACHE=var/toolchains/gocache`、`GOPROXY=off`、`CGO_ENABLED=1`（与原二进制一致，动态链接）。
+编译环境：`GOPATH=var/toolchains/gopath`、`GOCACHE=var/toolchains/gocache`、`CGO_ENABLED=1`（与原二进制一致，动态链接）。
+Go 工具链优先用工作区自带的 `var/toolchains/go`（此时 `GOPROXY=off`，离线可编）；
+新机器上没有它就回落到系统 `go`（需要 >= 1.24，`GOPROXY` 默认走 proxy.golang.org）。
 干净版是把 `git archive HEAD` 导出到 `var/build/xhs-clean` 后再编译，避免把本地未提交的 `auth.go` 混进主二进制。

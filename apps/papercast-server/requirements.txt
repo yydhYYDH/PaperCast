@@ -17,3 +17,4 @@ pillow>=10
 python-dotenv>=1.0
 psutil>=5.9            # /api/ops 的服务与进程信息
 pyyaml>=6.0            # 语音风格等配置
+fonttools>=4.0         # app/config.py 用它精确判断字体是否真有中文字形（没装会退化成 PIL 粗判）
