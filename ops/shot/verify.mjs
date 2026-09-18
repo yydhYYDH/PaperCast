@@ -1,5 +1,18 @@
 import { chromium } from 'playwright'
-const EXE = '/home/yydh/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell'
+// 浏览器路径自己探测（与 live_check.mjs 同一套逻辑，不写死机器）
+import { existsSync, readdirSync } from 'node:fs'
+function findShell() {
+  if (process.env.SHOT_CHROME) return process.env.SHOT_CHROME
+  const base = (process.env.PLAYWRIGHT_BROWSERS_PATH || process.env.HOME + '/.cache/ms-playwright')
+  if (!existsSync(base)) return undefined
+  for (const d of readdirSync(base)) {
+    if (!d.startsWith('chromium_headless_shell')) continue
+    const p = base + '/' + d + '/chrome-headless-shell-linux64/chrome-headless-shell'
+    if (existsSync(p)) return p
+  }
+  return undefined
+}
+const EXE = findShell()
 const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] })
 const page = await browser.newPage({ viewport: { width: 1720, height: 1040 } })
 const errors = []

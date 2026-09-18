@@ -1,6 +1,9 @@
 
 import { readdirSync, statSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+const WS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const UP = process.env.UPSTREAM_DEST || WS + "/reference/upstream";
 function list(d, depth = 2, base = "") {
   const out = [];
   let es = []; try { es = readdirSync(d); } catch { return out; }
@@ -13,10 +16,10 @@ function list(d, depth = 2, base = "") {
   return out;
 }
 console.log("===== paper2anything skills =====");
-console.log(list("/home/yydh/hack/reference/upstream/paper2anything/skills", 1).slice(0, 60).join("\n"));
+console.log(list(UP + "/paper2anything/skills", 1).slice(0, 60).join("\n"));
 console.log("\n===== paper2x =====");
-console.log(list("/home/yydh/hack/reference/upstream/paper2x", 2).slice(0, 60).join("\n"));
-const rd = "/home/yydh/hack/reference/upstream/paper2anything/README.md";
+console.log(list(UP + "/paper2x", 2).slice(0, 60).join("\n"));
+const rd = UP + "/paper2anything/README.md";
 if (existsSync(rd)) {
   const t = readFileSync(rd, "utf8");
   const i = t.indexOf("| Skill |");

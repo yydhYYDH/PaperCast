@@ -5,8 +5,9 @@ cd "$(dirname "$0")/.."
 
 if [ ! -x .venv/bin/python ]; then
   echo "缺少 .venv，先执行：" >&2
-  echo "  export UV_CACHE_DIR=/home/yydh/hack/var/cache/uv" >&2
-  echo "  uv venv --python 3.13 .venv && uv pip install --python .venv/bin/python -r requirements.txt" >&2
+  echo "  # 推荐直接跑仓库根的安装脚本（幂等）：./ops/install.sh --skip-frontend" >&2
+  echo "  # 或者手工：cd <仓库根> && python3 -m venv apps/papercast-server/.venv && \\" >&2
+  echo "  #   apps/papercast-server/.venv/bin/pip install -r apps/papercast-server/requirements.lock.txt" >&2
   exit 1
 fi
 

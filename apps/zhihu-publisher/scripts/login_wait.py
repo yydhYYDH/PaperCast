@@ -10,7 +10,7 @@
     WS="$(cd "$(dirname "$0")/../../.." && pwd)"
     cd "$WS/reference/upstream/zhihu-mcp"
     HOME="$WS/var/home/zhihu-home" \
-    PLAYWRIGHT_BROWSERS_PATH=/home/yydh/.cache/ms-playwright \
+    PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}" \
     COOKIES_PATH="$WS/var/secrets/zhihu/cookies.json" \
     LOGIN_TIMEOUT=900 \
     "$WS/var/toolchains/zhihu-mcp-venv/bin/python" "$WS/apps/zhihu-publisher/scripts/login_wait.py"

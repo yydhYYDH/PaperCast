@@ -1,17 +1,33 @@
 import { chromium } from 'playwright'
 import { mkdirSync } from 'node:fs'
 
-const EXE = '/home/yydh/.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell'
-const OUT = '/home/yydh/hack/apps/papercast/screenshots'
+// 路径与浏览器都自己推导，不写死机器（换台机器 clone 下来也能跑）
+import { existsSync, readdirSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+const WS = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
+function findShell() {
+  if (process.env.SHOT_CHROME) return process.env.SHOT_CHROME
+  const base = (process.env.PLAYWRIGHT_BROWSERS_PATH || process.env.HOME + '/.cache/ms-playwright')
+  if (!existsSync(base)) return undefined
+  for (const d of readdirSync(base)) {
+    if (!d.startsWith('chromium_headless_shell')) continue
+    const p = base + '/' + d + '/chrome-headless-shell-linux64/chrome-headless-shell'
+    if (existsSync(p)) return p
+  }
+  return undefined
+}
+const EXE = findShell()
+const OUT = process.env.SHOT_OUT || WS + '/apps/papercast/screenshots'
 mkdirSync(OUT, { recursive: true })
 
 const browser = await chromium.launch({ executablePath: EXE, args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] })
 
 // ---- 1. 用真实浏览器渲染 poster.html → poster.png（补上流水线里「待渲染」的那一格）----
 const poster = await browser.newPage({ viewport: { width: 1080, height: 1440 } })
-await poster.goto('file:///home/yydh/hack/apps/papercast/public/samples/poster/poster.html', { waitUntil: 'load' })
+await poster.goto('file://' + WS + '/apps/papercast/public/samples/poster/poster.html', { waitUntil: 'load' })
 await poster.waitForTimeout(400)
-await poster.screenshot({ path: '/home/yydh/hack/apps/papercast/public/samples/poster/poster.png' })
+await poster.screenshot({ path: WS + '/apps/papercast/public/samples/poster/poster.png' })
 console.log('poster.png rendered')
 await poster.close()
 

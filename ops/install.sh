@@ -40,6 +40,13 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# 缓存一律收进 var/（规范 §2）：工作区自包含，也避免家目录缓存只读时整个安装失败
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$WS/var/cache/pip}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$WS/var/cache/uv}"
+export npm_config_cache="${npm_config_cache:-$WS/var/cache/npm}"
+export npm_config_tmp="${npm_config_tmp:-$WS/var/npm-tmp}"
+mkdir -p "$PIP_CACHE_DIR" "$UV_CACHE_DIR" "$npm_config_cache" "$npm_config_tmp"
+
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()   { printf '   ✓ %s\n' "$*"; }
 skip() { printf '   · %s\n' "$*"; }
@@ -87,22 +94,32 @@ else
 fi
 REQ="$APPS/papercast-server/requirements.txt"
 [ "$USE_LOCK" = 1 ] && [ -f "$APPS/papercast-server/requirements.lock.txt" ] && REQ="$APPS/papercast-server/requirements.lock.txt"
-"$VENV/bin/python" -m pip install --quiet --upgrade pip
-"$VENV/bin/python" -m pip install --quiet -r "$REQ"
+"$VENV/bin/python" -m pip install --quiet --upgrade pip \
+  || die "pip 升级失败（缓存目录不可写？PIP_CACHE_DIR=$PIP_CACHE_DIR）"
+"$VENV/bin/python" -m pip install --quiet -r "$REQ" || die "装依赖失败：$REQ"
 ok "安装依赖：$(basename "$REQ")（$(grep -cve '^\s*#' -e '^\s*$' "$REQ") 行）"
 "$VENV/bin/python" -c "import fastapi, fitz, pymupdf4llm, httpx, PIL, psutil; print('   ✓ 关键依赖可导入: fastapi / pymupdf / pymupdf4llm / httpx / pillow / psutil')"
 
 # ---------- 3. 前端 ----------
 if [ "$SKIP_FRONTEND" = 0 ]; then
   say "前端依赖（apps/papercast）"
-  if [ -d "$APPS/papercast/node_modules" ]; then
-    skip "node_modules 已存在（要重装：rm -rf apps/papercast/node_modules 后重跑）"
-  elif [ -f "$APPS/papercast/package-lock.json" ]; then
-    npm --prefix "$APPS/papercast" ci --silent
-    ok "npm ci 完成"
+  # 判断"装好了"要看哨兵文件，不能只看目录在不在：npm 中途失败会留下半个 node_modules，
+  # 只看目录就会把坏环境当好的（第一次跑这个脚本正好踩到）。
+  if [ -x "$APPS/papercast/node_modules/.bin/vite" ]; then
+    skip "node_modules 看起来完整（要重装：rm -rf apps/papercast/node_modules 后重跑）"
   else
-    npm --prefix "$APPS/papercast" install --silent
-    ok "npm install 完成"
+    if [ -d "$APPS/papercast/node_modules" ]; then
+      rm -rf "$APPS/papercast/node_modules"
+      skip "清掉上一次没装完的 node_modules"
+    fi
+    if [ -f "$APPS/papercast/package-lock.json" ]; then
+      npm --prefix "$APPS/papercast" ci --no-audit --no-fund --silent \
+        || die "npm ci 失败（网络问题，或缓存目录不可写：npm_config_cache=$npm_config_cache）"
+      ok "npm ci 完成（缓存：$npm_config_cache）"
+    else
+      npm --prefix "$APPS/papercast" install --no-audit --no-fund --silent || die "npm install 失败"
+      ok "npm install 完成"
+    fi
   fi
 fi
 

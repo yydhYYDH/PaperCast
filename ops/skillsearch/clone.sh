@@ -1,5 +1,8 @@
 #!/bin/sh
-cd /home/yydh/hack/reference/upstream || exit 1
+# 调研用：把上游技能仓库 clone 到 reference/upstream/（只读参考，不入库）。
+# 注意：正式复现上游请用 ops/sync_upstream.sh（它按 docs/research/upstream-repos.md 固定 commit）。
+DEST="${UPSTREAM_DEST:-$(cd "$(dirname "$0")/../.." && pwd)/reference/upstream}"
+mkdir -p "$DEST" && cd "$DEST" || exit 1
 export GIT_TERMINAL_PROMPT=0
 repos="
 flyanx/paper-to-wechat
@@ -25,4 +28,4 @@ for r in $repos; do
   fi
 done
 echo "=== ALL CLONES FINISHED ==="
-du -sh /home/yydh/hack/reference/upstream/* 2>/dev/null
+du -sh "$DEST"/* 2>/dev/null

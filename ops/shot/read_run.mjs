@@ -1,6 +1,28 @@
+// 打印一条 run 的阶段/产物/闸门概览。
+// 用法：node ops/shot/read_run.mjs [runId 或 run.json 路径]   缺省看最新一条 run
+import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { dirname, resolve, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { readFileSync } from "node:fs";
-const j = JSON.parse(readFileSync("/home/yydh/hack/apps/papercast-server/data/runs/run_87aeca6d7d33/run.json", "utf8"));
+const WS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const RUNS = process.env.PAPERCAST_DATA_DIR || WS + "/var/runs";
+
+function newestRun() {
+  const ds = readdirSync(RUNS).filter((d) => statSync(join(RUNS, d)).isDirectory());
+  return ds.sort((a, b) => statSync(join(RUNS, b)).mtimeMs - statSync(join(RUNS, a)).mtimeMs)[0];
+}
+
+const arg = process.argv[2];
+const file = !arg
+  ? join(RUNS, newestRun(), "run.json")
+  : arg.endsWith(".json")
+    ? arg
+    : join(RUNS, arg, "run.json");
+if (!existsSync(file)) {
+  console.error("找不到 run.json：" + file + "（用法：node ops/shot/read_run.mjs [runId]）");
+  process.exit(1);
+}
+const j = JSON.parse(readFileSync(file, "utf8"));
 console.log("run:", j.id, "|", j.status, "|", j.title);
 console.log("source:", JSON.stringify(j.source));
 console.log("createdAt:", new Date(j.createdAt).toISOString(), "digest?", !!j.digest, "articles?", (j.articles ?? []).length);

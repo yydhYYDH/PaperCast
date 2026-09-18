@@ -1,7 +1,11 @@
 
 import { readdirSync, statSync, readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
-const root = "/home/yydh/hack/reference/upstream";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+// 工作区根由脚本位置推导（ops/skillsearch/*.mjs → 上两级）
+const WS = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const root = process.env.UPSTREAM_DEST || WS + "/reference/upstream";
 function walk(dir, depth, out, base) {
   if (depth > 2) return;
   let ents = [];
