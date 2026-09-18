@@ -14,7 +14,8 @@ app/config_api.py、app/chat_api.py（APIRouter）；前端调用集中在 apps/
 用法：
     python3 ops/check_api_contract.py            # 人读报告
     python3 ops/check_api_contract.py --json     # 机器可用
-退码：0 = 对齐；1 = 前端调了后端没有的接口；2 = 导不出后端路由表
+    python3 ops/check_api_contract.py --shapes   # 字段/枚举层面的漂移检查（看真实 payload）
+退码：0 = 对齐；1 = 前端调了后端没有的接口（或 --shapes 发现字段/枚举漂移）；2 = 导不出后端路由表
 """
 
 from __future__ import annotations
@@ -139,7 +140,101 @@ def live_probe(paths: list[str]) -> None:
                 print(f"     --- {p:26} 打不通: {type(e).__name__}")
 
 
+def frontend_enums() -> dict[str, set[str]]:
+    """从 apps/papercast/src/types.ts 抠出联合类型（ArtifactKind / RunStatus / StageStatus …）。
+
+    为什么要抠而不是写死：写死就变成「我以为前端要什么」，而这里要回答的是
+    「前端真的声明了什么」—— 前端类型文件是唯一来源。
+    """
+    src = (WS / "apps" / "papercast" / "src" / "types.ts").read_text(encoding="utf-8")
+    out: dict[str, set[str]] = {}
+    # 不能用「必须分号结尾」的写法：types.ts 里 ArtifactKind 是多行联合、结尾没有分号，
+    # 于是正则会一路吞到后面几个声明里去（我第一版就踩了这个，只抠到 1 个类型）。
+    # 正确终止条件是「分号 | 空行 | 下一个 export」，取最早出现的那个。
+    pat = re.compile(r"^export type (\w+)\s*=\s*(.*?)(?:;|\n\s*\n|^export )", re.MULTILINE | re.DOTALL)
+    for m in pat.finditer(src):
+        name, body = m.group(1), m.group(2)
+        vals = {x.strip().strip("'\"") for x in body.split("|")}
+        vals = {v for v in vals if re.fullmatch(r"[A-Za-z0-9_-]+", v)}
+        if 1 <= len(vals) <= 24:
+            out[name] = vals
+    return out
+
+
+# 前端 types.ts 里 PaperRun / Stage / Artifact 的必备字段（少一个，页面上就是空/报错）
+REQUIRED = {
+    "run": ("id", "title", "status", "createdAt", "stages", "config"),
+    "stage": ("id", "status", "artifacts"),
+    "artifact": ("id", "stageId", "kind", "label", "path"),
+}
+
+
+def shape_check(as_json: bool = False) -> int:
+    """字段与枚举层面的漂移检查：路由对得上，不等于字段与状态值对得上。
+
+    只看**跑着的服务真实返回的 payload**，不看后端代码 —— 要看的是「现在发出去的是什么」。
+    """
+    import urllib.request
+
+    base = os.environ.get("PAPERCAST_BASE", "http://127.0.0.1:8000")
+    with urllib.request.urlopen(base + "/api/runs", timeout=20) as r:
+        runs = json.loads(r.read().decode())
+    if not runs:
+        print("[i] /api/runs 为空，没有样本可比对，跳过形状检查")
+        return 0
+    rid = runs[0].get("id")
+    with urllib.request.urlopen(base + "/api/runs/" + rid, timeout=20) as r:
+        run = json.loads(r.read().decode())
+
+    problems: list[str] = []
+    miss = [k for k in REQUIRED["run"] if k not in run]
+    if miss:
+        problems.append(f"run 缺字段 {miss}")
+    stages = run.get("stages") or []
+    for s in stages:
+        m = [k for k in REQUIRED["stage"] if k not in s]
+        if m:
+            problems.append(f"stage {s.get('id')} 缺字段 {m}")
+    arts = [a for s in stages for a in (s.get("artifacts") or [])]
+    for a in arts:
+        m = [k for k in REQUIRED["artifact"] if k not in a]
+        if m:
+            problems.append(f"artifact {a.get('id')} 缺字段 {m}")
+
+    enums = frontend_enums()
+    kinds = sorted({a.get("kind") for a in arts if a.get("kind")})
+    st_status = sorted({s.get("status") for s in stages if s.get("status")})
+    rn_status = sorted({run.get("status")} - {None})
+    for name, values, what in (
+        ("ArtifactKind", kinds, "artifact.kind"),
+        ("StageStatus", st_status, "stage.status"),
+        ("RunStatus", rn_status, "run.status"),
+    ):
+        allowed = enums.get(name)
+        if allowed is None:
+            problems.append(f"前端 types.ts 里抠不到 {name} 联合类型（检查提取规则是否失效）")
+            continue
+        unknown = [v for v in values if v not in allowed]
+        if unknown:
+            problems.append(f"{what} 出现前端没声明的值 {unknown}（{name}={sorted(allowed)}）")
+
+    if as_json:
+        print(json.dumps({"runId": rid, "problems": problems}, ensure_ascii=False, indent=1))
+        return 1 if problems else 0
+    print(f"[shapes] 样本 {rid}：核对必备字段与枚举（声明来源 apps/papercast/src/types.ts）")
+    print(f"  抠到的联合类型 {len(enums)} 个：{', '.join(sorted(enums))}")
+    print(f"  实测值 kind={kinds} stage.status={st_status} run.status={rn_status}")
+    if problems:
+        for p in problems:
+            print("  [!!]", p)
+    else:
+        print("  ok: run/stage/artifact 必备字段齐全，且实测枚举值都在前端声明的联合类型里")
+    return 1 if problems else 0
+
+
 def main() -> int:
+    if "--shapes" in sys.argv:
+        return shape_check("--json" in sys.argv)
     be_paths = backend_routes()
     fe = frontend_calls()
     # 必须比 (路径, 方法) 二元组：只比路径会永远求不出交集（踩过）
