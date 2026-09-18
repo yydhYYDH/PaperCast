@@ -94,7 +94,7 @@ mkdir -p var/{runs,uploads,logs,pids,samples,cache,artifacts,secrets,scratch}
 | **CJK 中文字体** | 卡片图上的中文（核心产物之一） | 卡片文字变方块；文章仍正常产出（只记一条失败 check） | `sudo apt install fonts-noto-cjk`，或设 `PAPERCAST_CJK_FONT=` 指向已有字体 |
 | `tesseract` + 中文包 | 扫描件 PDF 的 OCR | 明确报 `CONTENT_TOO_SHORT` 并提示需要 OCR（不静默） | `sudo apt install tesseract-ocr tesseract-ocr-chi-sim` |
 | `mineru` + 可用 GPU | 想把解析引擎换成 mineru | 默认用 `pymupdf`；无 GPU 时显式回退并 warn | 见上游 mineru 文档 |
-| **chrome-headless-shell / chromium** | 只被 **poster 渲染**（流水线里 poster 阶段尚未接线）与 `ops/shot/` 截图脚本用 | 卡片与长文**不受影响**（卡片是纯 PIL 画的，不用浏览器） | `./ops/install.sh --with-zhihu`（带 chromium），或系统 `chromium`，或用 `PAPERCAST_CHROME=` 指定 |
+| **chrome-headless-shell / chromium** | 只被 **poster 渲染**（默认不在流水线里跑，需手动触发）与 `ops/shot/` 截图脚本用 | 卡片与长文**不受影响**（卡片是纯 PIL 画的，不用浏览器） | `./ops/install.sh --with-zhihu`（带 chromium），或系统 `chromium`，或用 `PAPERCAST_CHROME=` 指定 |
 | `npm --prefix ops/shot install` | `ops/shot/*.mjs` 截图/渲染脚本 | 截图工具跑不了 | `./ops/install.sh --with-shot` |
 
 ### 4.3 手工视频脚本（流水线里 video 阶段是 skipped，只有脚本用）
@@ -239,4 +239,4 @@ git push -u origin main
 | 2 | 视频脚本字体族硬编码 `Microsoft YaHei`，缺字体直接 `SystemExit`，且没有环境变量可覆盖 | `ops/make_portrait_video.py:41,76` | 手工视频链路 |
 | 3 | `make_run_video_artifacts.py` 用裸 `ffprobe`（只查 PATH，不像同目录脚本有 `resolve_tool` 回落） | `ops/make_run_video_artifacts.py:84` | 手工视频链路 |
 | 4 | `ops/shot/` 的 npm 依赖不在最小安装里 | `ops/install.sh`（`--with-shot` 才装） | 截图/海报 |
-| 5 | poster 阶段在流水线里是 skipped（未接线），代码在但跑不到 | `app/models.py:20-22`、`app/modules/poster.py` | 功能未启用 |
+| 5 | poster 阶段默认不在流水线里跑（`app/models.py:20-22` 标 skipped；正在接线中，以 `apps/papercast-server/app/modules/poster*.py` 的现状为准） | `app/models.py:20-22`、`app/modules/poster.py` | 默认不产出海报 |
