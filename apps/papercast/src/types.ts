@@ -117,6 +117,8 @@ export interface ChannelReceipt {
   error?: { code: string; message: string }
   /** 秒级时间戳 */
   at: number
+  /** 谁投的：run = 这一轮发布（M3），work-library = 作品库直投；老回执可能没有这个字段 */
+  via?: string
 }
 
 /** 一次运行的发布总表：后端 publish/receipts.json */

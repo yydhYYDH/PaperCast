@@ -19,10 +19,10 @@ import { assetUrl } from '../api'
 import { useRunsStore } from '../stores/runs'
 import { usePublishStore } from '../stores/publish'
 import { useUiStore } from '../stores/ui'
-import type { PaperRun, RunReceipts } from '../types'
+import type { ChannelReceipt, PaperRun, RunReceipts } from '../types'
 import { PLATFORM_META, relativeTime } from '../data/library'
 import { STATE_CHIP, buildWorks, headline, sectionsOf } from '../data/works'
-import type { Extras, Work } from '../data/works'
+import type { Extras, ReceiptNote, Work } from '../data/works'
 
 const store = useRunsStore()
 const ui = useUiStore()
@@ -42,13 +42,35 @@ function artifactUrl(run: PaperRun, stageId: string, re: RegExp): string {
 }
 
 /**
- * 每个运行拉两样小文件：发布回执总表（这件发了没有、投的是哪份标题）与待发布标题。
+ * 每个运行拉三样小文件：发布回执总表（这件发了没有、投的是哪份标题）、
+ * **每个渠道自己的回执**（本轮投递 / 作品库直投各一条，谁投的、什么时候、原文都在里面）
+ * 与待发布标题。
  * 回执读不到就不读 —— 状态退回「发布阶段走到哪一步」，标题退回论文标题，都是实话。
  */
 async function loadExtras(runs: PaperRun[]) {
   const receipts: Record<string, RunReceipts | null> = {}
   const titles: Record<string, string> = {}
+  const channelReceipts: Record<string, Record<string, ReceiptNote[]>> = {}
   await Promise.all(runs.map(async (run) => {
+    // 渠道明细回执：publish/<渠道>/receipt.json（本轮投递）与 publish/direct/<渠道>/receipt.json（作品库直投）
+    const arts = run.stages.find((s) => s.id === 'publish')?.artifacts ?? []
+    const perChannel = arts.filter((a) => /publish\/(direct\/)?[a-z]+\/receipt\.json$/i.test(a.path) && a.url)
+    if (perChannel.length) {
+      const notes: Record<string, ReceiptNote[]> = {}
+      await Promise.all(perChannel.map(async (a) => {
+        try {
+          const res = await fetch(assetUrl(a.url as string))
+          if (!res.ok) return
+          const rec = (await res.json()) as ChannelReceipt
+          if (!rec?.channel) return
+          const route: ReceiptNote['route'] = /\/direct\//.test(a.path) || rec.via === 'work-library' ? 'library' : 'run'
+          ;(notes[rec.channel] ??= []).push({ receipt: rec, route, rawUrl: assetUrl(a.url as string), rawPath: a.path })
+        } catch (e) { /* 这条读不到就少一条，宁可缺也不编 */ }
+      }))
+      for (const k of Object.keys(notes)) notes[k].sort((x, y) => (y.receipt.at || 0) - (x.receipt.at || 0))
+      if (Object.keys(notes).length) channelReceipts[run.id] = notes
+    }
+
     const recUrl = artifactUrl(run, 'publish', /publish\/receipts\.json$/)
     if (recUrl) {
       try {
@@ -66,7 +88,7 @@ async function loadExtras(runs: PaperRun[]) {
       if (res.ok) titles[run.id] = (await res.text()).trim()
     } catch (e) { /* 标题读不到就用论文标题兜底 */ }
   }))
-  extras.value = { receipts, titles }
+  extras.value = { receipts, titles, channelReceipts }
   loading.value = false
 }
 
@@ -103,6 +125,17 @@ function toggleOlder(id: string) { unfolded.value = { ...unfolded.value, [id]: !
 
 function chipOf(w: Work) { return STATE_CHIP[w.state] }
 function when(w: Work) { return relativeTime(w.at) }
+
+/** 回执里的状态词：比作品卡上的状态更细一档（同一个渠道可以既失败过、又直投成功过） */
+const RECEIPT_WORD: Record<ChannelReceipt['status'], { label: string; cls: string }> = {
+  published: { label: '已发布', cls: 'ok' },
+  failed: { label: '投递失败', cls: 'err' },
+  draft: { label: '只落了素材包', cls: '' },
+  blocked: { label: '渠道不可用', cls: 'warn' },
+  skipped: { label: '这轮没投', cls: '' },
+}
+function receiptWord(s: ChannelReceipt['status']) { return RECEIPT_WORD[s] ?? RECEIPT_WORD.draft }
+function whenAt(sec: number) { return sec ? relativeTime(sec * 1000) : '' }
 function coverOf(w: Work) { return w.cover?.url ? assetUrl(w.cover.url) : '' }
 function shelfStyle(s: { min: number }) {
   return { gridTemplateColumns: 'repeat(auto-fill, minmax(' + s.min + 'px, 1fr))' }
@@ -360,6 +393,32 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
                   >去平台账号看看登录态</button>
                 </div>
 
+                <!-- 回执：这个渠道投过的每一次都摆出来（新的在上）。
+                     「已发布」背后是哪一次投的、有没有失败过、原文长什么样，都要看得见。 -->
+                <div v-if="current.receipts.length" class="side-block">
+                  <div class="label">回执</div>
+                  <ul class="rcpts">
+                    <li v-for="(n, i) in current.receipts" :key="n.rawPath || i">
+                      <div class="rcpt-head">
+                        <span class="chip" :class="receiptWord(n.receipt.status).cls"><i class="dot" />{{ receiptWord(n.receipt.status).label }}</span>
+                        <span class="rcpt-route">{{ n.route === 'library' ? '作品库直投' : '本轮发布' }}</span>
+                        <span v-if="n.receipt.at" class="rcpt-when">{{ whenAt(n.receipt.at) }}</span>
+                      </div>
+                      <p class="rcpt-line">
+                        投的是「{{ n.receipt.title }}」<template v-if="n.receipt.contentChars"> · {{ n.receipt.contentChars }} 字</template><template v-if="n.receipt.imageCount"> · {{ n.receipt.imageCount }} 张图</template><template v-if="n.receipt.account"> · 账号 {{ n.receipt.account }}</template>
+                      </p>
+                      <p v-if="n.receipt.error?.message" class="rcpt-line">{{ n.receipt.error.message }}</p>
+                      <p v-if="n.receipt.status === 'failed' || n.receipt.status === 'blocked'" class="rcpt-quiet">素材包还在本地，可以照「手动发布指引」自己发。</p>
+                      <p v-else-if="!n.receipt.url" class="rcpt-quiet">这份回执里没有链接（这个渠道没回地址）。</p>
+                      <div class="rcpt-links">
+                        <a v-if="n.receipt.url" class="rcpt-link" :href="n.receipt.url" target="_blank" rel="noreferrer">打开这条 →</a>
+                        <a v-if="n.rawUrl" class="rcpt-raw" :href="n.rawUrl" target="_blank" rel="noreferrer">原回执</a>
+                        <span v-if="n.rawPath" class="rcpt-path mono">{{ n.rawPath }}</span>
+                      </div>
+                    </li>
+                  </ul>
+                </div>
+
                 <div class="side-block">
                   <div class="label">这一件</div>
                   <ul class="kv">
@@ -415,6 +474,19 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
 /* 小字专用墨色：--ink-4 / --ink-3 在白底上过不了 4.5:1，这里用一个 5.4:1 的灰 */
 .page, .dlg { --small-ink: #6b6963; }
 .quiet { color: var(--small-ink); }
+
+/* 回执：每条之间只用一条发丝线分开，状态靠 chip，正文用墨色，别做成一堆彩色的块 */
+.rcpts { list-style: none; margin: 2px 0 0; padding: 0; }
+.rcpts li { padding: 9px 0 3px; border-top: 1px solid var(--line-soft); }
+.rcpts li:first-child { border-top: 0; padding-top: 2px; }
+.rcpt-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.rcpt-route, .rcpt-when { font-size: 11.5px; color: var(--small-ink); }
+.rcpt-line { margin: 5px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-2); }
+.rcpt-quiet { margin: 4px 0 0; font-size: 12px; line-height: 1.55; color: var(--small-ink); }
+.rcpt-links { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 5px; }
+.rcpt-link { font-size: 12.5px; color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
+.rcpt-raw { font-size: 12px; color: var(--small-ink); text-decoration: underline; text-underline-offset: 2px; }
+.rcpt-path { font-size: 11px; color: var(--small-ink); word-break: break-all; }
 
 /* 平台跳转：一眼看到有几个平台、各几件 */
 .jump { display: flex; flex-wrap: wrap; gap: 6px; margin: -8px 0 -4px; }

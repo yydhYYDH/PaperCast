@@ -463,3 +463,20 @@ node ops/shot/interactions_check.mjs   # 发送卡出现但**不自动执行**�
 > ② Playwright 的代理来自环境变量 `HTTP_PROXY/NO_PROXY`（`--no-proxy-server` 盖不住它）——
 > 访问 127.0.0.1 一直没问题是因为 `NO_PROXY` 里有 127.*，测局域网 IP 时必须把那个 IP 也加进 `NO_PROXY`，
 > 否则会被代理拦成 502（`mobile_check.mjs` 已在脚本里自动补上）。
+
+## 16. 发布回执在界面上的落点（2026-09-19）
+
+一件内容可能投过不止一次：**这一轮的发布**（回执 `publish/<渠道>/receipt.json`）与**作品库直投**
+（`publish/direct/<渠道>/receipt.json`）。后端会把直投结果并进总表 `publish/receipts.json`
+（`channels.<渠道>` 被替换、留下 `updatedBy: work-library`），所以只看总表**看不出这一轮投失败过**。
+
+界面现在的做法（`LibraryView.vue` + `data/works.ts`）：
+
+- 作品卡状态取**最新**回执，状态说明带上出处（`本轮发布` / `作品库直投`）；
+- 详情里一块「回执」：这个渠道投过的每一条都在（新的在上），状态 + 出处 + 时间 + 投的标题 +
+  字数/图数/账号 + 原文链接 + 失败原文 + 原回执文件（点开是原始 JSON）；
+- 回执里没有链接就明说「这个渠道没回地址」，失败的那条给出路「素材包还在本地，可以手动发」；
+- 核验：`node ops/shot/receipt_check.mjs`（逐件点开已发布的件，量回执块/条数/链接/原回执 + 控制台错误）。
+
+实例（`run_862a366d5d2f`）：小红书这一轮投视频笔记失败（`PUBLISH_VIDEO_FAILED`，点击发布后没跳转），
+之后从作品库直投图文帖成功；界面上两条都看得见，知乎那条带 `zhuanlan.zhihu.com` 链接。

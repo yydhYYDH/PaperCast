@@ -50,6 +50,10 @@ export interface Work {
   /** 最多三个数字，别的细节收进详情 */
   stats: string[]
   at: number
+  /** 这个渠道投过的每条回执（新的在前）—— 详情里逐条摆出来，「已发布」背后是哪一次、有没有失败过都看得见 */
+  receipts: ReceiptNote[]
+  /** 最新那条回执是谁投的（'' = 没有回执） */
+  receiptRoute: 'run' | 'library' | ''
 }
 
 export interface WorkSection {
@@ -242,11 +246,24 @@ function resolveState(run: PaperRun, p: PlatformId, rec?: ChannelReceipt): { sta
 
 /* ---------------------------------------------------------------- 组装 */
 
+/** 一条回执 + 它的出处：同一件东西可能投过好几次（本轮投递失败、之后从作品库直投成功…），
+ *  列表按时间倒序，界面上要**每条都看得见**，不能只留最后一条。 */
+export interface ReceiptNote {
+  receipt: ChannelReceipt
+  /** run = 这一轮的发布（M3），library = 作品库直投 */
+  route: 'run' | 'library'
+  /** 原回执文件：点开能看原始 JSON（可追溯） */
+  rawUrl: string
+  rawPath: string
+}
+
 export interface Extras {
   /** run.id -> 发布回执总表 */
   receipts: Record<string, RunReceipts | null>
   /** run.id -> article/export/title.txt 的内容（回执没有时的兜底标题） */
   titles: Record<string, string>
+  /** run.id -> 渠道 id -> 这个渠道投过的每条回执（新的在前）；缺省表示没读到明细，退回总表 */
+  channelReceipts?: Record<string, Record<string, ReceiptNote[]>>
 }
 
 export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
@@ -269,6 +286,15 @@ export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
       const channelRec = channelId ? rec?.channels?.[channelId] : undefined
       const { state, note, link } = resolveState(run, p, channelRec)
 
+      // 明细回执（publish/<渠道>/receipt.json 与 publish/direct/<渠道>/receipt.json）优先；
+      // 只有总表时，用总表里这一条兜一个 Note —— 界面上至少能看到「谁投的、什么时候」。
+      const detail = channelId ? extras.channelReceipts?.[run.id]?.[channelId] : undefined
+      const receipts: ReceiptNote[] = detail?.length
+        ? detail
+        : channelRec
+          ? [{ receipt: channelRec, route: channelRec.via === 'work-library' ? 'library' : 'run', rawUrl: '', rawPath: '' }]
+          : []
+
       const exportTitle = (extras.titles[run.id] ?? '').trim()
       const titleFrom: Work['titleFrom'] = channelRec?.title ? 'receipt' : exportTitle ? 'export' : 'paper'
       const title = (channelRec?.title || exportTitle || run.title).trim()
@@ -279,6 +305,10 @@ export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
           ? '这个平台没有专属文案，这份借的是「' + PLATFORM_META[platformTokenOf(reader.path)].label + '」的稿子'
           : ''
 
+      // 「已发布」要能看出是哪一次投的：本轮发布 / 作品库直投
+      const routeWord = receipts[0]?.route === 'library' ? '作品库直投' : receipts[0]?.route === 'run' ? '本轮发布' : ''
+      const stateNote = state === 'published' && routeWord ? (note ? note + ' · ' + routeWord : routeWord) : note
+
       out.push({
         key: run.id + ':' + p,
         run, platform: p,
@@ -287,11 +317,13 @@ export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
         titleFrom,
         variant: channelRec?.variant || '',
         borrowed,
+        receipts,
+        receiptRoute: receipts[0]?.route ?? '',
         cover: l.cover,
         shots: l.shots,
         reader,
         video: l.video,
-        state, note, link,
+        state, note: stateNote, link,
         stats: statsFor(run, p, l, channelRec),
         at: channelRec?.at ? channelRec.at * 1000 : Number(run.createdAt) || 0,
       })
