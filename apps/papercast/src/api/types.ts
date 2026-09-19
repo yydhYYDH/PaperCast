@@ -65,7 +65,7 @@ export interface ChatRequest {
  * 一句话能变成一张**动作卡**（后端 app/chat_api.py 的「意图 → 动作提案」）：
  * 对话里渲染成「一句话 + 一个动词按钮」，点了才真的执行 —— 服务端不会因为一句话就投递或起停进程。
  */
-export type ChatActionKind = 'gate' | 'metrics' | 'service' | 'run' | 'interactions' | 'draft'
+export type ChatActionKind = 'gate' | 'metrics' | 'service' | 'run' | 'interactions' | 'draft' | 'reply'
 export type ChatActionRisk = 'readonly' | 'local' | 'public'
 
 export interface ChatAction {
@@ -145,6 +145,31 @@ export interface DraftResult {
   stage: string
   canSend: boolean
   canSendNote: string
+}
+
+/**
+ * P2：把一条起草好的回复真发出去。**必须** confirmed=true（后端还会查开关与限速）。
+ * 这是全项目唯一替人「说话」的地方，所以前端一律先过 ui.askConfirm 再调。
+ */
+export interface InteractionReplyBody {
+  content: string
+  commentId?: string
+  feedId?: string
+  /** 访问令牌：只在内存里过一手，不写日志、不进证据截图 */
+  xsecToken?: string
+  userId?: string
+  draftId?: string
+  confirmed: boolean
+}
+
+export interface InteractionReplyResult {
+  sent: boolean
+  at: number
+  content: string
+  target: string
+  savedTo: string
+  stage: string
+  note: string
 }
 
 export interface ChatReply {
@@ -245,6 +270,8 @@ export interface PipelineApi {
   interactions(limit?: number): Promise<InteractionsResult>
   /** 给一条评论起草回复：**只落盘，不发送**（发送是 P2，要逐条确认） */
   draftReply(body: DraftBody): Promise<DraftResult>
+  /** P2：把一条**已确认**的回复真发出去（后端开关默认关着，关着会回 SEND_DISABLED） */
+  interactionsReply(body: InteractionReplyBody): Promise<InteractionReplyResult>
   /** 上传 PDF/LaTeX 包，拿到 uploadId（createRun 的 source.value 用它） */
   uploadPaper(file: File): Promise<UploadResult>
 

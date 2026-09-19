@@ -295,7 +295,8 @@ node ops/shot/chat_action_check.mjs                               # 真界面：
   只是如实说没存下来；
 - 提示词里写死「不许编数字、不许做时间承诺、不要营销腔」；模型没写出可用草稿 → 报 `DRAFT_EMPTY`，
   不返回一条空草稿假装成功；
-- 界面上**没有**「回复/发送」按钮（`interactions_check.mjs` 会断言全页不许出现这类按钮）。
+- 只读这条线上**没有**任何发送入口：读、起草都不会蹦出一个「回复/发送」按钮（`interactions_check.mjs`
+  会断言全页不许出现这类文案的按钮）。真要发是 §14 的那张危险卡，而且只在你点了起草之后才出现。
 
 ### 13.4 对话里怎么用
 
@@ -371,3 +372,53 @@ SKILL.md 原文 4695 字符 + 换风格落 localStorage 并显示在输入框 + 
 > `_ctx.xxx is not a function`、视图点了不切换，重启前端即好；② 这台机器有
 > `http_proxy=127.0.0.1:7890`，代理会给 Playwright 喂陈旧模块，所以 `ops/shot` 脚本一律
 > `--no-proxy-server` 起浏览器。
+
+---
+
+## 14. 互动（P2）：起草好了，点一下才真发（2026-09-19）
+
+> 用户原话：「你写一下吧你直接做」。代码、闸门、用例、核验都做齐了 —— 但**开关默认关着**，
+> 一条都没有真发出去（账号还在风控恢复期，这一步留给你点头）。
+
+### 14.1 四道闸门，缺一不发
+
+`POST /api/interactions/reply` 是这个项目里**唯一**会替人「说话」的接口，所以要同时满足：
+
+| # | 闸门 | 不满足时 |
+| --- | --- | --- |
+| 1 | 请求体 `confirmed: true`（用户在对话里点了「发出去」那张卡，**并且**过了应用内确认框） | 400 `CONFIRM_REQUIRED` |
+| 2 | 开关 `PAPERCAST_INTERACTIONS_SEND=1`（**默认关**） | 403 `SEND_DISABLED`（带一句「怎么打开」） |
+| 3 | 目标明确：笔记页回复要 `feedId + xsecToken`；回「评论和@」要 `commentId` | 400 `NO_TARGET` |
+| 4 | 没超过 `20 条/小时` 的进程内限速（护栏：循环/误触不该变成刷屏） | 429 `SEND_RATE_LIMITED` |
+
+打开方式：`.env` 里加一行 `PAPERCAST_INTERACTIONS_SEND=1`，重启后端。
+
+### 14.2 只允许两条写路由
+
+`feeds/comment/reply`（笔记页回某条评论）与 `notifications/reply`（回「评论和@」里的一条）。
+`feeds/comment`（自己发评论）、`feeds/like`、`feeds/favorite`、`notifications/like`、`publish*`
+**永远不调** —— 点赞/收藏/发帖不是「回话」，属于真对外动作，另走人工闸门那条链。
+`_mcp_post()` 自带兜底：路径不在白名单里就地拦（`WRITE_ROUTE_NOT_ALLOWED`）。
+
+### 14.3 界面上长什么样
+
+- 起草完**不是**终点：紧接着多一条助手消息 + 一张**危险色**卡片「把这句话发出去吗？」，
+  卡片上写明「这一步会真的发到平台上，发出去撤不回来」，按钮是「发出去」和「先不做」；
+- 点「发出去」还会再问一次（`ui.askConfirm`，把要发的原话摆出来）；点「先不做」卡片收起、**什么都没发生**；
+- 真发成功 → 落 `var/interactions/sent.jsonl`（`sent: true`，与草稿文件分开），对话里给回执；
+- 失败（例如开关没开）→ 卡片标红写原因，绝不显示成「已发出」。
+
+### 14.4 核验（真机，一条都没发）
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/api/interactions/reply -H 'content-type: application/json' \
+     -d '{"content":"谢谢","commentId":"c1"}'            # -> CONFIRM_REQUIRED
+curl -s -X POST http://127.0.0.1:8000/api/interactions/reply -H 'content-type: application/json' \
+     -d '{"content":"谢谢","commentId":"c1","confirmed":true}'   # -> SEND_DISABLED（默认关）
+ls var/interactions/            # 只有 drafts.jsonl；sent.jsonl 不存在 = 一条都没发过
+node ops/shot/interactions_check.mjs   # 发送卡出现但**不自动执行**；点「先不做」后 sent.jsonl 行数不变
+```
+
+后端用例（`tests/test_interactions.py`）锁住：默认关 / 必须显式确认 / 目标缺失报错 / 两条写路由
+各走各的 / 落盘 `sent: true` / 限速 20 条每小时 / `_mcp_post` 拒绝白名单外路由 / **源码级**断言
+「不许出现 publish、like、favorite 这些写路由」。

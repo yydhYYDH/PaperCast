@@ -25,6 +25,8 @@ import type {
   DraftBody,
   DraftResult,
   EnvStatus,
+  InteractionReplyBody,
+  InteractionReplyResult,
   InteractionsResult,
   LlmTestResult,
   PlatformLogoutResult,
@@ -206,6 +208,14 @@ export class HttpPipelineApi implements PipelineApi {
   /** 起草回复：后端只落盘、不发送（发送是 P2，要逐条确认） */
   draftReply(body: DraftBody) {
     return this.json<DraftResult>('/api/interactions/draft', { method: 'POST', body: JSON.stringify(body) })
+  }
+
+  /** P2：真发一条（后端要 confirmed=true + 开关打开 + 没超限速，三者缺一就报错） */
+  interactionsReply(body: InteractionReplyBody) {
+    return this.json<InteractionReplyResult>('/api/interactions/reply', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
   }
 
   opsServiceAction(name: string, action: 'start' | 'stop' | 'restart') {

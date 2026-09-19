@@ -11,6 +11,7 @@ import type {
   ChatRequest,
   DraftBody,
   DraftResult,
+  InteractionReplyResult,
   InteractionsResult,
   SkillDetail,
   SkillInfo,
@@ -880,6 +881,11 @@ export class MockPipelineApi implements PipelineApi {
       canSend: false,
       canSendNote: '（模拟器）没有真起草、也没有落盘 —— 接上真后端才会调用模型并写进 var/interactions/drafts.jsonl。',
     }
+  }
+
+  async interactionsReply(): Promise<InteractionReplyResult> {
+    // 模拟器**故意**不发：这里没有真平台，装成发成功比报错更坏
+    throw new Error('（模拟器）不会替你发：接上真后端才会走平台的写接口（而且还不一定开着发送开关）')
   }
 
   async uploadPaper(file: File): Promise<UploadResult> {

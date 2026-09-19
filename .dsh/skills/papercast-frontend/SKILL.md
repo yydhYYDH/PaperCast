@@ -59,8 +59,11 @@ description: PaperCast 前端的界面规范与验证配方（暖调单色编辑
 - **只读动作也要留痕**：自动执行的只读动作（看数据、读评论）进行中要写清**在做什么**（读一次平台要
   几十秒），失败必须在对话里留一行原因 —— 只有一条会自己消失的 toast 等于没回执；
   而且**别让长动作冻住输入框**（`ask()` 里不要 `await` 只读动作），并发读取要在 store 里合并；
-- **互动只读就是只读**：想回复评论只能给「起草」卡片，草稿落 `var/interactions/`，页面上**永远不许**
-  出现「回复/发送」按钮（发送是 P2，要逐条确认）—— 见 `docs/10-ops-and-theme.md` §13；
+- **互动：读、起草都不许有发送入口**：读评论只给只读卡，起草只落 `var/interactions/drafts.jsonl`，
+  页面上不许冒出「回复/发送」按钮；真要发的唯一入口是起草之后那张**危险卡**（§14：
+  按钮文案「发出去」、点了还要过 `ui.askConfirm`、失败必须标红说原因、成功后落 `sent.jsonl`）；
+  发送接口有四道闸门（`confirmed` / `PAPERCAST_INTERACTIONS_SEND` 开关默认关 / 目标 / 20 条每小时），
+  前端**不要**替用户把 `confirmed` 写成 true —— 那是「点过确认」的意思，只能由那一次点击带来；
 - 真实数据优先：先读运行产物，示例只在读不到时兜底，并且**兜底要看得出来**；
 - 空状态、加载中、失败三种态都要有文案（不是转圈了事）；
 - 移动/窄屏：右栏 ≤1180px 收起，对话列自适应。
@@ -113,7 +116,7 @@ cd /path/to/repo && node ops/shot/<脚本>            # 见下，控制台必须
 | `ops/shot/digest_banner_check.mjs` | 论文理解抬头是暖白底（计算样式 luminance > 0.9、无渐变） |
 | `ops/shot/chat_drop.mjs` | 拖 PDF 的遮罩出现/消失（不真的上传） |
 | `ops/shot/review_style_check.mjs` | Agent 审核：名单第七行「审核」+ 43 项检查、`#m-review` 的结论句「Agent 审核已经通过…」、检查项 pill；风格页：后端读到的 6 个技能、展开是 SKILL.md 原文、换风格落 localStorage 并显示在输入框那一行 |
-| `ops/shot/interactions_check.mjs` | 互动 P1：说「看看评论」只读读一遍（真开一次浏览器，几十秒）、没有发送类按钮；贴一段评论 → 草稿**只落盘**（断言 `var/interactions/drafts.jsonl` 多一行且 `sent:false`）。**不点任何发送** |
+| `ops/shot/interactions_check.mjs` | 互动 P1+P2：说「看看评论」只读读一遍（真开一次浏览器，几十秒）、页面上没有发送类按钮；贴一段评论 → 草稿**只落盘**（断言 drafts.jsonl 多一行且 `sent:false`）+ **发送卡出现但不自动执行**，点「先不做」后 `var/interactions/sent.jsonl` 行数不变。**脚本全程不点「发出去」** |
 | `ops/shot/chat_action_check.mjs` | 对话派活：只读动作自动执行 + 一句话结论、有副作用的只出卡片且「先不做」无副作用、普通提问 0 新卡、控制台 0 错误（**不点任何会真发出去的动作**；跑前会预热运营数据缓存，别去撞浏览器预算） |
 
 接口对账（前端调了后端没有的路由 = 上线即 404）：

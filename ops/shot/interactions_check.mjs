@@ -39,6 +39,16 @@ const draftRows = () => {
   }
 }
 
+/** 真发出去的一条才会有：这个文件不存在 = 一条都没发过（P2 的证据落在磁盘上） */
+const SENT = WS + '/var/interactions/sent.jsonl'
+const sentRows = () => {
+  try {
+    return readFileSync(SENT, 'utf8').split('\n').filter((l) => l.trim())
+  } catch {
+    return []
+  }
+}
+
 const browser = await chromium.launch({ executablePath: findShell(), args: ['--no-sandbox', '--disable-gpu'] })
 const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } })
 /**
@@ -119,6 +129,28 @@ result.draft_disk = rows.length
   : null
 await page.screenshot({ path: WS + '/docs/evidence/interactions-draft.png' })
 
+// ---- A2) 发送卡（P2）：必须出现、必须**不**自动执行；点「先不做」磁盘上一条都不许有 ----
+const sentBefore = sentRows().length
+result.send_card = await page.evaluate(() => {
+  const acts = Array.from(document.querySelectorAll('.act'))
+  const last = acts[acts.length - 1]
+  return {
+    count: acts.length,
+    title: last?.querySelector('.act-t')?.innerText.trim() ?? '',
+    detail: last?.querySelector('.act-d')?.innerText.trim() ?? '',
+    risk: last?.querySelector('.act-risk')?.innerText.trim() ?? '',
+    buttons: Array.from(last?.querySelectorAll('button') ?? []).map((b) => b.innerText.trim()),
+    alreadyDone: !!last?.querySelector('.act-note'),
+  }
+})
+// 全程**不点「发出去」**（账号恢复期，一条都不真发）；走「先不做」这条路，并验磁盘
+if (result.send_card.buttons.includes('先不做')) {
+  await page.locator('.act button', { hasText: '先不做' }).last().click()
+  await page.waitForTimeout(1200)
+}
+result.sent_rows = { before: sentBefore, after: sentRows().length }
+await page.screenshot({ path: WS + '/docs/evidence/interactions-send-card.png' })
+
 // ---- B) 新开一个对话 ----
 result.thread_before = await page.evaluate(() => ({
   user: document.querySelectorAll('.msg-user').length,
@@ -185,6 +217,10 @@ if (!result.draft.text) fail.push('没等到起草结果')
 if (result.draft_lines.after !== result.draft_lines.before + 1) fail.push('草稿没有落盘：' + JSON.stringify(result.draft_lines))
 if (result.draft_disk?.sent !== false) fail.push('草稿的 sent 不是 false')
 if (result.draft_disk && !String(result.draft_disk.commentText).includes('样本量')) fail.push('落盘那条草稿的评论原文对不上')
+if (!/发出去/.test(result.send_card.title)) fail.push('起草之后没有出现发送卡：' + JSON.stringify(result.send_card))
+if (result.send_card.alreadyDone) fail.push('发送卡被自动执行了 —— 对外动作不许自动做')
+if (!result.send_card.buttons.includes('先不做')) fail.push('发送卡没有「先不做」这条退路')
+if (result.sent_rows.after !== result.sent_rows.before) fail.push('点了「先不做」居然发出去了一条：' + JSON.stringify(result.sent_rows))
 if (!result.new_thread_dialog.title.includes('新开一个对话')) fail.push('「新开一个对话」没有确认框：' + JSON.stringify(result.new_thread_dialog))
 if (result.thread_after.hasDraftMsg) fail.push('新开之后问答没清干净（起草那条还挂着）')
 if (result.thread_after.user >= result.thread_before.user && result.thread_before.user > 0) fail.push('新开之后你说过的话没清掉')
@@ -197,4 +233,4 @@ if (fail.length) {
   console.error('\n[interactions_check] 失败：\n- ' + fail.join('\n- '))
   process.exit(1)
 }
-console.error('\n[interactions_check] 通过：起草只落盘（sent=false）+ 新开对话清干净 + 只读读一遍 + 无发送按钮 + 控制台 0 错误')
+console.error('\n[interactions_check] 通过：起草只落盘（sent=false）+ 发送卡不自动执行且「先不做」一条没发（sent.jsonl 不变）+ 新开对话清干净 + 只读读一遍 + 控制台 0 错误')

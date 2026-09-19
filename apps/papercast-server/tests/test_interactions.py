@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -210,3 +211,109 @@ def test_draft_reply_reports_model_garbage(monkeypatch: pytest.MonkeyPatch, tmp_
 
 def test_drafts_path_lives_in_var_interactions() -> None:
     assert I._drafts_path().as_posix().endswith("/var/interactions/drafts.jsonl")
+    assert I._sent_path().as_posix().endswith("/var/interactions/sent.jsonl")
+
+
+# ---------- 5) P2：真发（默认关，且只走两条写路由） ----------
+
+
+def test_send_is_off_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """开关默认关：即使前端点了确认，也只得到 SEND_DISABLED —— 代码可以先上，手不能先动。"""
+    monkeypatch.delenv(I.SEND_ENV, raising=False)
+    monkeypatch.setattr(I, "_sent_path", lambda: tmp_path / "sent.jsonl")
+    with pytest.raises(PlatformError) as e:
+        asyncio.run(I.reply_to_comment(I.ReplyRequest(content="谢谢", commentId="c1", confirmed=True)))
+    assert e.value.code == "SEND_DISABLED"
+    assert not (tmp_path / "sent.jsonl").exists()
+
+
+def test_send_requires_explicit_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """少写 confirmed（或写成 false）一律拒 —— 不能靠「默认就是同意」把话说出去。"""
+    monkeypatch.setenv(I.SEND_ENV, "1")
+    for body in ({"content": "谢谢", "commentId": "c1"}, {"content": "谢谢", "commentId": "c1", "confirmed": False}):
+        with pytest.raises(PlatformError) as e:
+            asyncio.run(I.reply_to_comment(I.ReplyRequest(**body)))
+        assert e.value.code == "CONFIRM_REQUIRED"
+
+
+def test_send_needs_a_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(I.SEND_ENV, "1")
+    with pytest.raises(PlatformError) as e:
+        asyncio.run(I.reply_to_comment(I.ReplyRequest(content="谢谢", confirmed=True)))
+    assert e.value.code == "NO_TARGET"
+
+
+def test_send_picks_the_right_write_route_and_records_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """两种回法各走各的路由；真发一条要在 sent.jsonl 留一行（sent 恒为 true）。"""
+    monkeypatch.setenv(I.SEND_ENV, "1")
+    monkeypatch.setattr(I, "_sent_path", lambda: tmp_path / "sent.jsonl")
+    I._SENT_AT.clear()
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _post(path: str, payload: dict[str, Any]) -> Any:
+        calls.append((path, payload))
+        return {"success": True}
+
+    monkeypatch.setattr(I, "_mcp_post", _post)
+
+    note = asyncio.run(I.reply_to_comment(I.ReplyRequest(content="好的，我核对后回你", commentId="c1", confirmed=True)))
+    assert calls[-1][0] == I.REPLY_VIA_NOTIFICATION
+    assert calls[-1][1] == {"comment_id": "c1", "content": "好的，我核对后回你"}
+    assert note["sent"] is True and note["stage"] == "P2" and note["savedTo"] == I.SENT_REL
+
+    reply = asyncio.run(
+        I.reply_to_comment(
+            I.ReplyRequest(content="谢谢", commentId="c2", feedId="f1", xsecToken="TKN", confirmed=True)
+        )
+    )
+    assert calls[-1][0] == I.REPLY_VIA_COMMENT
+    assert calls[-1][1]["feed_id"] == "f1" and calls[-1][1]["xsec_token"] == "TKN" and calls[-1][1]["comment_id"] == "c2"
+    assert reply["target"] == "comment"
+
+    rows = [json.loads(ln) for ln in (tmp_path / "sent.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(rows) == 2 and all(r["sent"] is True for r in rows)
+    assert rows[0]["content"] == "好的，我核对后回你"
+    assert "xsec" not in json.dumps(rows[1]), "令牌不写进落盘记录"
+
+
+def test_send_is_rate_limited(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """限速是护栏：循环/误触不该变成刷屏（20 条/小时）。"""
+    monkeypatch.setenv(I.SEND_ENV, "1")
+    monkeypatch.setattr(I, "_sent_path", lambda: tmp_path / "sent.jsonl")
+    I._SENT_AT.clear()
+
+    async def _post(path: str, payload: dict[str, Any]) -> Any:
+        return {"success": True}
+
+    monkeypatch.setattr(I, "_mcp_post", _post)
+    for i in range(I.SEND_CAP_PER_HOUR):
+        asyncio.run(I.reply_to_comment(I.ReplyRequest(content=f"第 {i} 条", commentId="c1", confirmed=True)))
+    with pytest.raises(PlatformError) as e:
+        asyncio.run(I.reply_to_comment(I.ReplyRequest(content="再来一条", commentId="c1", confirmed=True)))
+    assert e.value.code == "SEND_RATE_LIMITED"
+    I._SENT_AT.clear()
+
+
+def test_mcp_post_refuses_routes_outside_the_send_whitelist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """兜底：拿 _mcp_post 去调点赞/发帖这类路由，就地拦住。"""
+    for bad in I.write_routes_are_disallowed():
+        with pytest.raises(PlatformError) as e:
+            asyncio.run(I._mcp_post(bad, {}))
+        assert e.value.code == "WRITE_ROUTE_NOT_ALLOWED"
+
+
+def test_module_never_calls_publish_or_like_routes() -> None:
+    """读源码拦「以后顺手把点赞/发帖接上」：**写死的** MCP 路径只允许只读路由 + 回复那两条。
+
+    注意只查**字面量**：reply_to_comment 里传给 _mcp_post 的是变量（白名单常量），
+    变量那一路由 test_mcp_post_refuses_routes_outside_the_send_whitelist 兜底。
+    """
+    src = Path(I.__file__).read_text(encoding="utf-8")
+    literals = set(re.findall(r'_mcp_(?:get|post)\(\s*f?"([^"]+)"', src))
+    assert literals, "没找到任何 MCP 字面量路径？读法要跟着改"
+    for path in literals:
+        assert path.startswith("/api/v1/notifications/") or path in I.send_routes(), f"这个路由不在白名单里：{path}"
+    assert set(I.send_routes()) == {I.REPLY_VIA_COMMENT, I.REPLY_VIA_NOTIFICATION}
+    for dead in I.write_routes_are_disallowed():
+        assert dead not in I.send_routes(), f"回复白名单里混进了对外动作：{dead}"

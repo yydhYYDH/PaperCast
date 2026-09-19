@@ -383,6 +383,32 @@ export const useChatStore = defineStore('chat', {
         } else if (a.kind === 'draft') {
           const turn = await this.draftTurn(p('commentText'))
           this.note(turn.text, turn.bullets)
+          // 起草完不是终点：**真发**要用户自己点那张卡（P2 的唯一出口，见 reply 分支）
+          if (turn.send) this.askPeer(turn.send)
+        } else if (a.kind === 'reply') {
+          // 全项目唯一替人「说话」的地方：public 动作，**永远**先过确认框，而且把要发的内容原样摆出来
+          const ok = await ui.askConfirm({
+            title: '真的发出去？',
+            text: `发到小红书上的就是这句：\n「${p('content')}」\n\n发出去撤不回来。`,
+            okLabel: a.confirmLabel || '发出去',
+            cancelLabel: '先不发',
+            tone: 'warn',
+          })
+          if (!ok) {
+            m.act = 'idle'
+            return
+          }
+          const res = await api.interactionsReply({
+            content: p('content'),
+            commentId: p('commentId') || undefined,
+            feedId: p('feedId') || undefined,
+            xsecToken: p('xsecToken') || undefined,
+            userId: p('userId') || undefined,
+            draftId: p('draftId') || undefined,
+            confirmed: true,
+          })
+          ui.toast('发出去了', 'info')
+          this.note(res.note || '已经发出去了。')
         } else if (a.kind === 'service') {
           const action = p('action') as 'start' | 'stop' | 'restart'
           const ok = await ui.askConfirm({
@@ -489,7 +515,7 @@ export const useChatStore = defineStore('chat', {
      * 对象从哪来：话里直接带了评论原文就用那段；否则用上一次读到的、最前面一条能回的评论
      * （没读过就先读一遍）。读不到又没带原文 → 如实说，并把「贴原文也能起草」这条退路讲清楚。
      */
-    async draftTurn(pasted = ''): Promise<{ text: string; bullets: string[] }> {
+    async draftTurn(pasted = ''): Promise<{ text: string; bullets: string[]; send?: ChatAction }> {
       let target: InteractionItem | undefined
       if (!pasted) {
         if (!this.items.length) {
@@ -523,7 +549,28 @@ export const useChatStore = defineStore('chat', {
           res.draft.why ? `这么回的理由：${res.draft.why}` : '',
           `${saved}${res.canSendNote}`,
         ],
+        // 发送卡：只有一个按钮，而且点了还要过确认框。目标信息随这条评论一起带过来
+        send: {
+          kind: 'reply',
+          title: '把这句话发出去吗？',
+          detail: res.draft.reply,
+          params: {
+            content: res.draft.reply,
+            commentId: target?.commentId ?? '',
+            feedId: target?.feedId ?? '',
+            xsecToken: target?.xsecToken ?? '',
+            draftId: res.draft.id,
+          },
+          needsConfirm: true,
+          confirmLabel: '发出去',
+          risk: 'public',
+        },
       }
+    },
+
+    /** 追加一条「带动作卡」的助手消息（卡片留在那儿等用户点，见 runAction） */
+    askPeer(action: ChatAction, text = '要发的话，点下面那个按钮 —— 发出去撤不回来；先不点就一直搁在这儿。') {
+      this.turns.push({ id: `a${++this.turnSeq}`, role: 'agent', who: '助手', text, action, act: 'idle' })
     },
 
     /**
