@@ -349,8 +349,11 @@ def _markdown_report(page: Any) -> dict[str, Any]:
 
 
 def _open_image_modal(page: Any, warnings: list[str]) -> Any:
-    """点「图片」打开上传弹窗，返回弹窗里的上传输入框（找不到返回 None）。"""
-    inp = page.query_selector('.Modal input[type=file][accept*="image"]')
+    """点「图片」打开上传弹窗，返回弹窗里的上传输入框（找不到返回 None）。
+
+    弹窗已经开着就直接用（别重复点，重复点会叠一层遮罩）。
+    """
+    inp = _modal_image_input(page)
     if inp is not None:
         return inp
     btn = _first(page, IMAGE_BUTTONS)
@@ -370,10 +373,9 @@ def _open_image_modal(page: Any, warnings: list[str]) -> Any:
             return None
     for _ in range(12):
         time.sleep(0.8)
-        for sel in IMAGE_INPUTS:
-            inp = page.query_selector(sel)
-            if inp is not None:
-                return inp
+        inp = _modal_image_input(page)
+        if inp is not None:
+            return inp
     return None
 
 
@@ -468,17 +470,16 @@ def _set_images(page: Any, images: list[str], warnings: list[str]) -> tuple[int,
     if not todo:
         return 0, len(images)
 
-    if _open_image_modal(page, warnings) is None:
+    inp0 = _open_image_modal(page, warnings)
+    if inp0 is None:
         warnings.append("打不开「上传图片」弹窗，这一篇没有配图")
         return 0, len(images)
 
-    uploaded = 0
     # 一次把全部图交给弹窗（若那个 input 支持 multiple）：弹窗自己排队上传。
     # 逐张传时每张「一次 set_input_files + 最多 25 次 ×1 秒 轮询」，8 张实测光这一步就 ~50 秒。
-    inp0 = _modal_image_input(page)
-    multi = False
+    uploaded = 0
     try:
-        multi = bool(inp0 is not None and inp0.get_attribute("multiple") is not None)
+        multi = inp0.get_attribute("multiple") is not None
     except Exception:
         multi = False
     if multi and len(todo) > 1:

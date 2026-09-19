@@ -64,6 +64,18 @@ URL 从编辑页地址栏取，取不到还会退而求其次拿「列表里第�
 bash apps/zhihu-publisher/scripts/replay_verify_cases.sh      # 服务在跑即可
 ```
 
+## 填稿验证（`scripts/dry_run_check.sh`）
+
+真发布不可逆，所以「标题/正文/配图这条路通不通」只能用只填不发的 `dry_run` 验：
+
+```bash
+bash apps/zhihu-publisher/scripts/dry_run_check.sh            # 默认取 var/runs 下最近一次 zhihu 导出
+bash apps/zhihu-publisher/scripts/dry_run_check.sh <导出目录> # 也可指定
+```
+
+它把素材交给 `/api/v1/publish`（带 `dry_run=true`，**绝不点发布**），断言 success、正文块数 > 0、
+「上传张数 == 传进去的张数」，不满足就 exit 1；顺便打印耗时（本机实测 7 张图约 26 秒）。
+
 ## 启动
 
 ```bash

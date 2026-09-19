@@ -147,6 +147,7 @@ cd /path/to/repo && node ops/shot/<脚本>            # 见下，控制台必须
 | `ops/shot/digest_banner_check.mjs` | 论文理解抬头是暖白底（计算样式 luminance > 0.9、无渐变） |
 | `ops/shot/chat_drop.mjs` | 拖 PDF 的遮罩出现/消失（不真的上传） |
 | `ops/shot/receipt_check.mjs` | 回执：作品库里每一件「已发布/没发成功」的详情都要有回执块，投过几次就几条，失败带原文，有链接的带链接（截图 `docs/evidence/library-receipt-*.png`） |
+| `ops/shot/publish_latency_check.mjs` | 投递面板的等待核验（**不真发布**）：面板出现 ≤1s、面板到「确认发布」可点 ≤3s、主线程长任务 0 个、60 秒内重开不重拉 drafts、「重新检查」必须真重探，并摆出「正在投递…已等 N 秒」截图 `docs/evidence/publish-waiting.png`；超时/有长任务/多拉一次就 exit 1 |
 | `ops/shot/mobile_check.mjs` | 手机端（默认 390×844，可传 `[origin] [宽] [高]`）：七页 + 产物查看器的横向溢出 / 越界元素 / 小于 32px 的按钮，截图 `docs/evidence/mobile-*.png` |
 | `ops/shot/review_style_check.mjs` | Agent 审核：名单第七行「审核」+ 43 项检查、`#m-review` 的结论句「Agent 审核已经通过…」、检查项 pill；风格页：后端读到的 6 个技能、展开是 SKILL.md 原文、换风格落 localStorage 并显示在输入框那一行 |
 | `ops/shot/interactions_check.mjs` | 互动 P1+P2：说「看看评论」只读读一遍（真开一次浏览器，几十秒）、页面上没有发送类按钮；贴一段评论 → 草稿**只落盘**（断言 drafts.jsonl 多一行且 `sent:false`）+ **发送卡出现但不自动执行**，点「先不做」后 `var/interactions/sent.jsonl` 行数不变。**脚本全程不点「发出去」** |

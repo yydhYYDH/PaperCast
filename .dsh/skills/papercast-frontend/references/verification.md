@@ -27,6 +27,15 @@ curl -s http://127.0.0.1:8000/api/health
 脚本里 chromium 用 `~/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell`，
 依赖在 `ops/shot/node_modules`。
 
+## 投递这类「点下去要等」的动作怎么验
+
+- **界面不卡 ≠ 没卡**：投递面板的「卡」实测是**在等服务器**（主线程长任务 0 个），
+  量法用 `ops/shot/publish_latency_check.mjs`：它同时看「点击到有反馈的耗时」与
+  `PerformanceObserver` 的 longtask —— 前者大后者为 0，就说明是等待不是卡死。
+- **等待文案只报事实**：显示真实已等秒数 + 说清那边在做哪几步；**不做进度条**（进度只能靠猜）。
+- **不可逆动作不进自动化检查**：验「正在投递」的样子时，只把 store 的 `busy`/`elapsed` 摆出来截图，
+  绝不调 `deliver()`；渠道那边验填稿用后端的 `dry_run`（只填不发）。
+
 ## 判定标准
 
 - **控制台 0 错误**（脚本里 `console` + `pageerror` 都收）；有 404 先看是不是漏配路由或忘了 `assetUrl()`；
