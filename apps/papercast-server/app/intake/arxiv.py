@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -20,6 +21,73 @@ ID_RE = re.compile(
     r"(?:arxiv[:/])?\s*(\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7})(v\d+)?",
     re.I,
 )
+
+
+# arXiv 的 API 会对「看起来像机器人 / 太频繁」的请求直接回 406 或 429。实测过一次：
+# 同一分钟里 curl 打同一个 URL 是 200，而流水线的 run 拿到 406 —— 属于**偶发限流**。
+# 原先的实现只发一次请求就 raise_for_status()，于是偶发限流 = 整个 run 必然失败
+# （历史：arxiv 入口 4 次尝试，2 次死在这条）。可重试的状态码与网络类错误都重试。
+RETRYABLE_STATUS = frozenset({406, 408, 425, 429, 500, 502, 503, 504})
+ATTEMPTS = 4
+BASE_DELAY = 0.7
+# arXiv 的 API 使用条款要求带上能识别调用方的 User-Agent（默认的 python-httpx 不达标）
+UA = "PaperCast/0.1 (arXiv intake; +https://github.com/yydhYYDH/PaperCast)"
+
+
+def _headers() -> dict[str, str]:
+    return {"User-Agent": UA}
+
+
+async def _get(client: httpx.AsyncClient, url: str, **kw) -> httpx.Response:
+    """带重试的 GET：可重试状态码 / 网络错 → 指数退避重试，仍失败才抛。
+
+    最后仍失败时把「试了几次」写进异常文本 —— 否则又变成今天这种
+    「406 一句话」，看不出是被限流还是参数写错。
+    """
+    last: Exception | None = None
+    for i in range(ATTEMPTS):
+        try:
+            resp = await client.get(url, headers=_headers(), **kw)
+        except httpx.TransportError as e:  # 连接失败 / 超时 / 协议错
+            last = e
+        else:
+            if resp.status_code not in RETRYABLE_STATUS:
+                return resp
+            last = httpx.HTTPStatusError(
+                f"arXiv 返回 {resp.status_code}，已重试 {i + 1}/{ATTEMPTS} 次",
+                request=resp.request,
+                response=resp,
+            )
+        if i < ATTEMPTS - 1:
+            await asyncio.sleep(BASE_DELAY * (2**i))
+    assert last is not None
+    raise last
+
+
+async def _stream_to(client: httpx.AsyncClient, url: str, dest: Path) -> None:
+    """把 URL 流式写进文件，带与 _get 同样的重试；每次重试都截断重写。"""
+    last: Exception | None = None
+    for i in range(ATTEMPTS):
+        try:
+            async with client.stream("GET", url, headers=_headers()) as resp:
+                if resp.status_code in RETRYABLE_STATUS:
+                    last = httpx.HTTPStatusError(
+                        f"arXiv 返回 {resp.status_code}，已重试 {i + 1}/{ATTEMPTS} 次",
+                        request=resp.request,
+                        response=resp,
+                    )
+                else:
+                    resp.raise_for_status()
+                    with dest.open("wb") as fh:
+                        async for chunk in resp.aiter_bytes(1 << 16):
+                            fh.write(chunk)
+                    return
+        except httpx.TransportError as e:
+            last = e
+        if i < ATTEMPTS - 1:
+            await asyncio.sleep(BASE_DELAY * (2**i))
+    assert last is not None
+    raise last
 
 
 def normalize(value: str) -> tuple[str, str]:
@@ -47,7 +115,7 @@ def _text(node, path: str) -> str:
 async def fetch_metadata(arxiv_id: str, *, timeout: float = 30.0) -> dict:
     """取标题 / 作者 / 摘要 / 日期 / 主分类。"""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as cx:
-        resp = await cx.get(API, params={"id_list": arxiv_id})
+        resp = await _get(cx, API, params={"id_list": arxiv_id})
         resp.raise_for_status()
         root = ET.fromstring(resp.text)
     entry = root.find(f"{ATOM}entry")
@@ -84,11 +152,7 @@ async def download_pdf(arxiv_id: str, dest: Path, *, version: str = "", timeout:
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://arxiv.org/pdf/{arxiv_id}{version}"
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as cx:
-        async with cx.stream("GET", url) as resp:
-            resp.raise_for_status()
-            with dest.open("wb") as fh:
-                async for chunk in resp.aiter_bytes(1 << 16):
-                    fh.write(chunk)
+        await _stream_to(cx, url, dest)
     if dest.stat().st_size < 8000 or dest.read_bytes()[:4] != b"%PDF":
         raise RuntimeError(f"arXiv 返回的不是有效 PDF：{url}")
     return dest
@@ -101,7 +165,7 @@ async def download_source(arxiv_id: str, dest: Path, *, timeout: float = 120.0) 
     url = f"https://arxiv.org/e-print/{arxiv_id}"
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as cx:
-            resp = await cx.get(url)
+            resp = await _get(cx, url)
             resp.raise_for_status()
             dest.write_bytes(resp.content)
         if dest.stat().st_size < 200:
