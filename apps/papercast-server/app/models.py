@@ -155,6 +155,18 @@ class ArticleVariant(BaseModel):
     words: Optional[int] = None
 
 
+# 渠道 id（app/channels 的规范 id）→ 文案平台 id（app/styles.PLATFORMS 的 id）。
+# 别名（xhs / x）也认；跟 publish.py 的 CHANNEL_PLATFORMS 是同一套对应关系。
+_TARGET_PLATFORM: dict[str, str] = {
+    "xiaohongshu": "xhs",
+    "xhs": "xhs",
+    "zhihu": "zhihu",
+    "bilibili": "bilibili",
+    "x": "en",
+    "en": "en",
+}
+
+
 class ArticleConfig(BaseModel):
     # "{platform}-{voice}"，例如 xhs-author / zhihu-analyst；兼容旧的 xhs 等写法
     variants: list[str] = Field(default_factory=lambda: ["xhs-author"])
@@ -190,6 +202,45 @@ class RunConfig(BaseModel):
     publish: PublishConfig = Field(default_factory=PublishConfig)
 
 
+def align_variants_with_targets(config: RunConfig) -> RunConfig:
+    """让文案变体覆盖发布目标：缺哪个平台就补哪个（人格取该平台默认），原地改。
+
+    原来两者是自相矛盾的：targets 默认 3 个渠道，variants 默认只有 xhs-author，于是发布
+    知乎时找不到 zhihu 变体，只能按兜底顺序抓别的平台的稿子顶上（2026-09-19 实测：知乎
+    拿到 994 字的小红书短稿，而它自己有变体时是 3924 字长文；24 条 run 里 20 条是这个错配，
+    包括只传 source 建出来的那条默认 run）。
+
+    只补 app/styles.PLATFORMS 里真实存在的平台；不认识的渠道 id 原样跳过，留给发布阶段的
+    兜底顺序处理（那里仍会记 warn）。补的是裸平台写法，由 styles.parse_variant 映射到该平台
+    默认人格（zhihu / bilibili → author），prompts.article_system 对这些组合都有真 prompt。
+
+    刻意不做成 RunConfig 的自动 validator：那样会改掉默认对象本身（前端契约测试钉的就是默认
+    值），用户显式点名变体时也会被动扩容。这里只在「配置变成一次运行」的入口调用，存进
+    run.json 的就是覆盖后的真实清单。
+    """
+    from . import styles  # 函数内导入，避免 models ↔ styles 的导入顺序问题
+
+    need: list[str] = []
+    for target in config.publish.targets or []:
+        pid = _TARGET_PLATFORM.get(str(target).strip().lower())
+        if pid and pid in styles.PLATFORMS and pid not in need:
+            need.append(pid)
+    have: set[str] = set()
+    for raw in config.article.variants or []:
+        parsed = styles.parse_variant(str(raw))
+        if parsed:
+            have.add(parsed[0])
+    add = [pid for pid in need if pid not in have]
+    if not add:
+        return config
+    # 上限由 styles.MAX_VARIANTS 定（每个变体一次 LLM 调用）：放不下就补到放不下为止，
+    # 剩下的仍走发布阶段的兜底并记 warn —— 不静默超支，也不假装覆盖了。
+    room = max(0, styles.MAX_VARIANTS - len(config.article.variants))
+    if room:
+        config.article.variants = [*config.article.variants, *add[:room]]
+    return config
+
+
 class PaperRun(BaseModel):
     id: str
     createdAt: int
@@ -204,6 +255,8 @@ class PaperRun(BaseModel):
 
 
 def new_run(source: SourceInput, config: RunConfig, title: str) -> PaperRun:
+    # 文案变体必须覆盖发布目标：入口处对齐一次，run.json 里存的就是真实清单（见函数注释）
+    config = align_variants_with_targets(config)
     stages: list[Stage] = []
     for sid in STAGE_ORDER:
         meta = STAGE_META[sid]
