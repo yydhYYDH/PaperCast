@@ -133,9 +133,9 @@ watch(isXhs, (v) => { mode.value = v ? 'cards' : 'reader' }, { immediate: true }
 .seg.sm button { padding: 4px 9px; font-size: 11.5px; }
 .stage { flex: 1; overflow-y: auto; min-height: 0; }
 .reader { padding: 18px 22px; max-width: 720px; }
-.reader :deep(.texblock) { position: relative; font-family: var(--mono); font-size: 12.5px; background: var(--bg-2); border: 1px solid var(--line-soft); border-radius: 9px; padding: 12px 12px 12px 14px; margin: 0 0 14px; color: #cbd8ee; white-space: pre-wrap; }
+.reader :deep(.texblock) { position: relative; font-family: var(--mono); font-size: 12.5px; background: var(--bg-2); border: 1px solid var(--line-soft); border-radius: 9px; padding: 12px 12px 12px 14px; margin: 0 0 14px; color: var(--ink-2); white-space: pre-wrap; }
 .reader :deep(.tex-tag) { position: absolute; top: -8px; right: 10px; font-size: 9.5px; background: var(--panel-3); border: 1px solid var(--line); color: var(--muted); padding: 0 5px; border-radius: 5px; }
-.reader :deep(.tex-inline) { font-family: var(--mono); font-size: 12.5px; background: rgba(139, 108, 255, 0.12); color: #d5c9ff; padding: 1px 5px; border-radius: 5px; }
+.reader :deep(.tex-inline) { font-family: var(--mono); font-size: 12.5px; background: var(--accent-soft); color: var(--accent); padding: 1px 5px; border-radius: 5px; }
 .phone-wrap { display: flex; justify-content: center; padding: 18px; }
 .phone { width: 390px; background: #fff; border-radius: 16px; overflow: hidden; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45); }
 .phone-bar { background: #f2f3f5; color: #333; font-size: 11.5px; padding: 8px 12px; text-align: center; }
@@ -146,7 +146,7 @@ watch(isXhs, (v) => { mode.value = v ? 'cards' : 'reader' }, { immediate: true }
 .phone-body :deep(table), .phone-body :deep(th), .phone-body :deep(td) { border-color: #e5e5e5; }
 .phone-body :deep(th) { background: #f7f7f7; }
 .cards { display: flex; gap: 12px; padding: 18px; overflow-x: auto; }
-.xcard { flex: none; width: 268px; aspect-ratio: 3 / 4; background: linear-gradient(170deg, #1a2130, #12161f); border: 1px solid var(--line-soft); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.xcard { flex: none; width: 268px; aspect-ratio: 3 / 4; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .xcard-top { display: flex; align-items: baseline; gap: 8px; }
 .xcard-top strong { font-size: 13.5px; line-height: 1.4; }
 .xt { color: var(--accent); font-size: 11px; }
