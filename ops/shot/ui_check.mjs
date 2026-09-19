@@ -9,7 +9,7 @@ function findShell() {
   }
 }
 const WS = new URL('../../', import.meta.url).pathname.replace(/\/$/, '')
-const browser = await chromium.launch({ executablePath: findShell(), args: ['--no-sandbox', '--disable-gpu'] })
+const browser = await chromium.launch({ executablePath: findShell(), args: ['--no-sandbox', '--disable-gpu', '--no-proxy-server'] })
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } })
 const errors = []
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message.slice(0, 200)))

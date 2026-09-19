@@ -48,6 +48,17 @@ curl -s http://127.0.0.1:8000/api/health
    页面上表现为「什么都不显示」；先跑 `ops/check_api_contract.py`，再确认后端确实重启过
    （uvicorn 没开 `--reload`，改路由必须重启）。
 7. **别 `git add -A`**：本工作区常有其它轨道在半写同一批文件；按白名单提交自己的文件。
+8. **dev server 的 HMR 会陈旧**（2026-09-19 连着踩两次）：改完 SFC 后若页面报
+   `_ctx.xxx is not a function`（模板是新的、script 还是旧的），或某个视图点了不切换，
+   先怀疑 Vite 的内存模块图过期 —— 重启前端（`kill $(cat var/pids/frontend.pid)` 再
+   `./ops/start_all.sh frontend`，它幂等但端口还被占时会跳过，所以要先 kill），
+   别花时间怀疑自己的 Vue 写法。
+9. **chromium 必须走直连**：这台机器有 `http_proxy=127.0.0.1:7890`，代理会把陈旧模块喂给
+   Playwright（表现就是上面第 8 条）。所有 `ops/shot` 脚本都用 `--no-proxy-server` 起浏览器，
+   新写脚本照抄（`curl` 同理，探活加 `no_proxy=127.0.0.1`）。
+10. **闸门分支要留一句实话**：`review_style_check.mjs` 在「当前没有停在闸门的 run」时
+    `gateLine` 为 null —— 这时别写「已验证闸门上方那句话」，如实说它和已验的结论句是同一个
+    `review.line`。要真验闸门，得等一条 run 走到 publish 闸门。
 
 ## 提交与协作
 

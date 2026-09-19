@@ -12,9 +12,69 @@ import type {
   DraftBody,
   DraftResult,
   InteractionsResult,
+  SkillDetail,
+  SkillInfo,
   UploadResult,
 } from './types'
 import { EXAMPLE_PAPER, exampleSource } from '../data/example'
+
+/** 模拟器里的技能清单（接上真后端时由 GET /api/skills 决定，这里只是让你离线也看得到这一层） */
+const MOCK_SKILLS: SkillInfo[] = [
+  {
+    name: 'papercast-frontend',
+    description: '本仓库自己的前端规范：暖调单色编辑风、对话优先入口、只给结论、不许看板化',
+    origin: 'repo',
+    dir: '（模拟器）.dsh/skills/papercast-frontend',
+    root: '（模拟器）.dsh/skills',
+    references: ['design-system.md', 'verification.md'],
+    style: true,
+  },
+  {
+    name: 'minimalist-ui',
+    description: '简洁高级的编辑风格：暖调单色、排版对比、平面网格、柔和粉彩；禁渐变与重阴影',
+    origin: 'user',
+    dir: '（模拟器）~/.agents/skills/minimalist-ui',
+    root: '（模拟器）~/.agents/skills',
+    references: [],
+    style: true,
+  },
+  {
+    name: 'frontend-design',
+    description: '审美方向与反模板纪律：先定调，再排版，不要生成一眼看上去就是默认模板的界面',
+    origin: 'user',
+    dir: '（模拟器）~/.agents/skills/frontend-design',
+    root: '（模拟器）~/.agents/skills',
+    references: [],
+    style: true,
+  },
+  {
+    name: 'impeccable',
+    description: '审计 + 修复分册：布局、排版、降噪、精简，逐条给问题与改法',
+    origin: 'user',
+    dir: '（模拟器）~/.agents/skills/impeccable',
+    root: '（模拟器）~/.agents/skills',
+    references: [],
+    style: true,
+  },
+  {
+    name: 'design-spacing-rhythm',
+    description: '间距刻度与垂直韵律：一套间距、靠距离表达关系，别用线框把每个东西围起来',
+    origin: 'user',
+    dir: '（模拟器）~/.agents/skills/design-spacing-rhythm',
+    root: '（模拟器）~/.agents/skills',
+    references: [],
+    style: true,
+  },
+  {
+    name: 'guizang-social-card-skill',
+    description: '出图技能：文章 → 小红书 3:4 组图 / 公众号封面对（属于"作品长什么样"，不属于界面风格）',
+    origin: 'user',
+    dir: '（模拟器）~/.agents/skills/guizang-social-card-skill',
+    root: '（模拟器）~/.agents/skills',
+    references: [],
+    style: true,
+  },
+]
 import type {
   Artifact,
   ArtifactKind,
@@ -644,6 +704,28 @@ export class MockPipelineApi implements PipelineApi {
 
   async patchConfig(): Promise<ConfigPatchResult> {
     throw new Error('模拟器不支持写入配置：请用 VITE_API_BASE 连接真实后端')
+  }
+
+  /* ---------- 技能 / 个性化层（模拟器） ---------- */
+
+  /**
+   * 模拟器里没有技能目录可读，所以这里给的是**已知的六个风格技能的名字与用途**，
+   * 并在 dir 里写明「接上真后端才读得到真实技能目录」—— 不假装读到了本机文件。
+   */
+  async skills(): Promise<SkillInfo[]> {
+    await new Promise((r) => setTimeout(r, 120))
+    return MOCK_SKILLS
+  }
+
+  async skill(name: string): Promise<SkillDetail> {
+    const found = MOCK_SKILLS.find((s) => s.name === name)
+    if (!found) throw new Error(`模拟器里没有技能「${name}」`)
+    return {
+      ...found,
+      body: `（模拟器）这里只会显示提示：接上真后端（VITE_API_BASE=http://127.0.0.1:8000）后，` +
+        `这里显示的是 ${found.name} 的 SKILL.md 原文 —— 本机路径 ${found.dir}/SKILL.md。`,
+      truncated: false,
+    }
   }
 
   /* ---------- 对话与上传（模拟器） ---------- */

@@ -19,11 +19,13 @@ from pydantic import BaseModel
 from . import direct_publish as direct_publish_mod
 from . import ops as ops_mod
 from . import platforms as platforms_mod
+from .modules import cards_deck
 from .channels import routes as channels_routes
 from .chat_api import router as chat_router
 from .config_api import router as config_router
 from .config import settings
 from .interactions import router as interactions_router
+from .skills_api import router as skills_router
 from .models import CreateRunRequest, GateRequest, PaperRun, SourceInput, new_run
 from .pipeline import Pipeline
 from .store import RunStore
@@ -48,6 +50,8 @@ app.include_router(config_router)
 app.include_router(chat_router)
 # 互动（P1）：GET /api/interactions（只读）、POST /api/interactions/draft（只起草，不发送）
 app.include_router(interactions_router)
+# 技能目录（个性化层）：GET /api/skills、GET /api/skills/{name}（只读 SKILL.md）
+app.include_router(skills_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -227,6 +231,12 @@ async def api_env() -> dict:
             "configured": bool(settings.llm_api_key),
             "baseUrl": settings.llm_base_url,
             "model": settings.llm_model,
+        },
+        "deck": {
+            "mode": settings.poster_deck,
+            "skillInstalled": cards_deck.available(),
+            "skillPath": str(cards_deck.skill_dir() or "") or None,
+            "active": cards_deck.enabled(settings.poster_deck),
         },
         "cards": {
             "enabled": settings.cards_enabled,

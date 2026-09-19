@@ -8,7 +8,7 @@ function findShell() {
   }
 }
 const WS = '/home/yydh/hack'
-const browser = await chromium.launch({ executablePath: findShell(), args: ['--no-sandbox', '--disable-gpu'] })
+const browser = await chromium.launch({ executablePath: findShell(), args: ['--no-sandbox', '--disable-gpu', '--no-proxy-server'] })
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } })
 const errors = []
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 140)) })

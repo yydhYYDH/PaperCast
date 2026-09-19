@@ -3,7 +3,9 @@ import { api } from '../api'
 import { exampleRunConfig } from '../data/example'
 import { useRunsStore } from './runs'
 import { useUiStore } from './ui'
-import type { ChatAction } from '../api/types'
+import { useStyleStore } from './style'
+import { reviewRun } from '../review'
+import type { ChatAction, InteractionItem } from '../api/types'
 import type { Artifact, PaperRun, SourceInput, Stage, StageGate, StageId, StageStatus } from '../types'
 
 /**
@@ -20,6 +22,9 @@ import type { Artifact, PaperRun, SourceInput, Stage, StageGate, StageId, StageS
  */
 
 export type ViewerId = 'digest' | 'article' | 'poster' | 'video' | 'publish'
+
+/** 正在跑的那一次「读一遍平台」：并发时复用，别为同一件事多开浏览器（见 interactionsTurn） */
+let readInflight: Promise<{ text: string; bullets: string[] }> | null = null
 
 /** 动作卡的状态：idle 可点 · running 正在做 · done 办完了 · failed 没办成（带原因） */
 export type ActionState = 'idle' | 'running' | 'done' | 'failed'
@@ -43,6 +48,8 @@ export interface ChatMessage {
   actNote?: string
   /** 正在干活（右侧名单里也会亮） */
   pending?: boolean
+  /** Agent 审核的检查项（后端每段真实 checks + 前端两条交叉检查） */
+  reviewItems?: { label: string; state: string; detail: string; from: string }[]
 }
 
 interface AgentSpec {
@@ -76,6 +83,9 @@ const CHANNEL_NAME: Record<string, string> = {
   xiaohongshu: '小红书',
   zhihu: '知乎',
   bilibili: 'B 站',
+  x: 'X（推特）',
+  twitter: 'X（推特）',
+  en: 'X（推特）',
 }
 
 function artifactLabel(a: Artifact) {
@@ -147,6 +157,8 @@ export const useChatStore = defineStore('chat', {
     uploading: false,
     error: '',
     turnSeq: 0,
+    /** 上一次读到的互动条目（只读缓存，不落盘、不持久化）：起草回复时直接用它，不重复读平台 */
+    items: [] as InteractionItem[],
   }),
 
   getters: {
@@ -200,6 +212,30 @@ export const useChatStore = defineStore('chat', {
         })
       }
 
+      // ── Agent 审核：把这次已落盘的自检汇总成一条消息，**插在人工闸门前面** ──
+      // 还在跑就只说「已出来的这部分核过了」，绝不提前说「已经通过」。
+      if (run.stages.some((s) => ['done', 'waiting', 'failed', 'skipped'].includes(s.status))) {
+        const rev = reviewRun(run)
+        const reviewMsg: ChatMessage = {
+          id: 'review',
+          role: 'agent',
+          who: '审核',
+          state: rev.settled ? (rev.verdict === 'blocked' ? 'failed' : 'done') : 'running',
+          pending: !rev.settled,
+          // 结论句在前（人工闸门上方用的是同一句 rev.line，两处一个来源，不会各说各话）
+          text: rev.settled
+            ? `${rev.line}。我把这批东西对着事实源核了一遍：${rev.detail}。`
+            : `先把已经出来的部分核了一遍：${rev.detail} —— 还没跑完，收齐了我再核一次。`,
+          bullets: [...rev.failed, ...rev.notes]
+            .slice(0, 4)
+            .map((i) => `${i.state === 'fail' ? '要处理' : '说明'}：${i.label}（${i.detail}）`),
+          reviewItems: rev.items,
+        }
+        const gateAt = out.findIndex((m) => m.gate)
+        if (gateAt >= 0) out.splice(gateAt, 0, reviewMsg)
+        else out.push(reviewMsg)
+      }
+
       const running = run.stages.find((s) => s.status === 'running')
       if (running) {
         const spec = AGENTS.find((a) => a.id === running.id)
@@ -221,7 +257,7 @@ export const useChatStore = defineStore('chat', {
     roster(): { id: StageId; who: string; doing: string; state: StageStatus; activity: string; artifacts: number }[] {
       const run = this.run
       if (!run) return []
-      return AGENTS.map((a) => {
+      const rows = AGENTS.map((a) => {
         const stage = run.stages.find((s) => s.id === a.id)
         const state = stage?.status ?? 'pending'
         const activity =
@@ -236,6 +272,23 @@ export const useChatStore = defineStore('chat', {
                 : STAGE_STATE_LABEL[state]
         return { id: a.id, who: a.who, doing: a.doing, state, activity, artifacts: stage?.artifacts.length ?? 0 }
       })
+
+      // 第七行：Agent 审核 —— 不是后端阶段，是前端按真实 self-check 汇总的那一步。
+      // id 用 'review' 只为滚动锚点（#m-review）对得上，别当成后端 stage 用。
+      const rev = reviewRun(run)
+      if (run.stages.some((s) => s.status !== 'pending')) {
+        rows.push({
+          id: 'review' as StageId,
+          who: '审核',
+          doing: '对着事实源核一遍',
+          state: !rev.settled ? 'running' : rev.verdict === 'blocked' ? 'failed' : 'done',
+          activity: !rev.settled
+            ? `已核 ${rev.items.length} 项`
+            : `${rev.items.length} 项检查 · ${rev.failed.length ? `${rev.failed.length} 项要处理` : '都过了'}`,
+          artifacts: 0,
+        })
+      }
+      return rows
     },
   },
 
@@ -257,8 +310,13 @@ export const useChatStore = defineStore('chat', {
           msg.act = 'idle'
         }
         this.turns.push(msg)
-        // 只读动作（看数据这类）不需要用户再点一次；要有副作用的，卡片留在那儿等他点
-        if (msg.action && !msg.action.needsConfirm) await this.runAction(msg.id)
+        // 只读动作（看数据这类）不需要用户再点一次；要有副作用的，卡片留在那儿等他点。
+        //
+        // 这里**不等**它做完：只读动作里有「读一遍平台」这种要真开一次浏览器、几十秒才回来的活，
+        // 等的话整轮 asking 就悬在那儿，输入框会一直灰着（2026-09-19 实测踩到）。
+        // 卡片自己会显示「正在照做…」，做完再补一句结论；重复触发的读取在 interactionsTurn 里合并。
+        // runAction 内部已经把失败收成卡片上的回执，所以这里不需要再兜 catch。
+        if (msg.action && !msg.action.needsConfirm) void this.runAction(msg.id)
       } catch (e) {
         this.error = (e as Error).message
         // 除了气泡，也在这里留一句：否则对话看上去像断了
@@ -278,8 +336,14 @@ export const useChatStore = defineStore('chat', {
     },
 
     /** 本地回一句（不花模型的钱，用于「我看不懂你这句话」这类即时反馈） */
-    note(text: string) {
-      this.turns.push({ id: `n${++this.turnSeq}`, role: 'agent', who: '助手', text })
+    note(text: string, bullets: string[] = []) {
+      this.turns.push({
+        id: `n${++this.turnSeq}`,
+        role: 'agent',
+        who: '助手',
+        text,
+        bullets: bullets.filter(Boolean),
+      })
     },
 
     /**
@@ -307,12 +371,18 @@ export const useChatStore = defineStore('chat', {
           const runs = useRunsStore()
           const run = await runs.submit(
             { kind: p('kind') as SourceInput['kind'], value: p('value'), title: p('title') },
-            exampleRunConfig(),
+            this.runConfig(),
           )
           if (!run) throw new Error(runs.error || '没能开起新的一遍')
           this.note('新的一遍开起来了，下面就从取论文开始走。')
         } else if (a.kind === 'metrics') {
           this.note(await this.metricsLine())
+        } else if (a.kind === 'interactions') {
+          const turn = await this.interactionsTurn(Number(a.params.limit) || 10)
+          this.note(turn.text, turn.bullets)
+        } else if (a.kind === 'draft') {
+          const turn = await this.draftTurn(p('commentText'))
+          this.note(turn.text, turn.bullets)
         } else if (a.kind === 'service') {
           const action = p('action') as 'start' | 'stop' | 'restart'
           const ok = await ui.askConfirm({
@@ -338,12 +408,122 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    /**
+     * 新开一个对话：清掉问答记录，回到干净的一屏。
+     *
+     * 清的是**对话**，不是运行：这条运行的来龙去脉（论文、六段进度、产物）还挂在上面，随时接着问；
+     * 已经起草落盘的回复草稿（var/interactions/）也不动 —— 所以清之前只需要提醒一句「问答会没」。
+     */
+    async newThread() {
+      const ui = useUiStore()
+      if (this.turns.length) {
+        const ok = await ui.askConfirm({
+          title: '新开一个对话？',
+          text: '下面这些问答会从对话里清掉。这条运行的进度、产物和已经落盘的回复草稿都不动。',
+          okLabel: '新开',
+          cancelLabel: '先不清',
+          tone: 'warn',
+        })
+        if (!ok) return
+      }
+      this.turns = []
+      this.items = []
+      this.error = ''
+      ui.toast('对话清好了，接着问就行', 'info')
+    },
+
     /** 用户点了「先不做」：卡片收起来，别一直悬在那儿 */
     dismissAction(id: string) {
       const m = this.turns.find((t) => t.id === id)
       if (!m?.action || m.act === 'running') return
       m.act = 'done'
       m.actNote = '你选了先不做，这件事就先放下。'
+    },
+
+    /**
+     * 读一遍互动（**只读**）→ 一句话结论 + 最多 3 条要点。
+     *
+     * 三条规矩：
+     * 1. 这是**用户主动**才发起的读取（每次真开一次浏览器），所以这里不轮询、不定时刷新；
+     * 2. 读不到**照原话说为什么**（后端给的 gap），绝不写成「0 条评论」；
+     * 3. 只读就是只读：这里没有、也不会有「回复」这个按钮（发送是 P2，要逐条确认）。
+     */
+    async interactionsTurn(limit = 10): Promise<{ text: string; bullets: string[] }> {
+      // 并发合并：读一次要真开一次浏览器（预算是 30 次/10 分钟），所以在途时后到的复用同一次结果
+      if (readInflight) return readInflight
+      readInflight = this.readOnce(limit).finally(() => {
+        readInflight = null
+      })
+      return readInflight
+    },
+
+    async readOnce(limit = 10): Promise<{ text: string; bullets: string[] }> {
+      const res = await api.interactions(limit)
+      this.items = res.items
+      const comments = res.items.filter((i) => i.kind === 'comment')
+      // 读不到就照后端那句原话说（gap 已经写清是「读不到」还是「真没人评论」），别在前面再套一层
+      if (!res.items.length) return { text: res.gap || '这次没有新的互动。', bullets: [] }
+
+      const bullets = comments
+        .slice(0, 3)
+        .map((i) => {
+          const who = i.author || '有人'
+          const what = i.text.length > 60 ? i.text.slice(0, 60) + '…' : i.text
+          return `${who}：${what}${i.workTitle ? `（《${i.workTitle}》）` : ''}`
+        })
+      const u = res.unread
+      const unread = u ? `未读还有：评论和@ ${u.mentions ?? 0}、赞和收藏 ${u.likes ?? 0}、新增关注 ${u.connections ?? 0}。` : ''
+      const filtered = res.filtered ? `另有 ${res.filtered} 条被平台侧过滤掉了（已删除或不可见）。` : ''
+      const head = comments.length
+        ? `读到 ${comments.length} 条评论${res.items.length > comments.length ? `（另有 ${res.items.length - comments.length} 条是关注/点赞这类通知）` : ''}。`
+        : '这次读到的都是关注/点赞这类通知，没有评论。'
+      return {
+        text: `${head}我没有回复任何一条 —— 这里只读；要我起草就说「帮我起草回复」。${unread}${filtered}`,
+        bullets,
+      }
+    },
+
+    /**
+     * 起草一条回复（**只落盘，不发送**）。
+     *
+     * 对象从哪来：话里直接带了评论原文就用那段；否则用上一次读到的、最前面一条能回的评论
+     * （没读过就先读一遍）。读不到又没带原文 → 如实说，并把「贴原文也能起草」这条退路讲清楚。
+     */
+    async draftTurn(pasted = ''): Promise<{ text: string; bullets: string[] }> {
+      let target: InteractionItem | undefined
+      if (!pasted) {
+        if (!this.items.length) {
+          const read = await this.interactionsTurn()
+          if (!this.items.length) {
+            return {
+              text: '这次读不到评论，所以我没得起草 —— ' + read.text.replace('这次没读到评论 —— ', ''),
+              bullets: ['你把评论原文贴进来说「帮我回复一下：<原文>」，我照样能起草（草稿只落盘，不发送）。'],
+            }
+          }
+        }
+        target = this.items.find((i) => i.canReply)
+        if (!target) {
+          return { text: '这次读到的都是关注/点赞这类通知，没有可以回复的评论。', bullets: [] }
+        }
+      }
+
+      const body = pasted
+        ? { commentText: pasted }
+        : {
+            commentText: target!.text,
+            author: target!.author,
+            workTitle: target!.workTitle,
+          }
+      const res = await api.draftReply(body)
+      const saved = res.savedTo ? `草稿存在 ${res.savedTo}（只落盘）。` : '草稿没能落盘，上面这段就是全部内容。'
+      return {
+        text: `起草好了，你过一遍再决定：${res.draft.reply}`,
+        bullets: [
+          target ? `要回的是 ${target.author || '这条评论'}：${target.text}` : `照你贴的这段起草：${pasted}`,
+          res.draft.why ? `这么回的理由：${res.draft.why}` : '',
+          `${saved}${res.canSendNote}`,
+        ],
+      }
     },
 
     /**
@@ -376,6 +556,20 @@ export const useChatStore = defineStore('chat', {
     },
 
     /**
+     * 这一轮的运行配置：把「个性化层」选中的风格并进 brief。
+     *
+     * 为什么走 brief 而不是新加字段：后端 app/prompts.py 的 BRIEF_RULES 就是给「用户自由要求」
+     * 用的，而且 brief_checks 会机检遵从度 —— 于是风格是**真生效且可核对**的，
+     * 不需要动后端契约，也不会变成界面上的一个装饰开关。
+     */
+    runConfig(userWords = '') {
+      const cfg = exampleRunConfig()
+      const style = useStyleStore()
+      cfg.brief = style.buildBrief([cfg.brief ?? '', userWords].filter(Boolean).join('；'))
+      return cfg
+    },
+
+    /**
      * 统一入口：链接 / PDF / 一句话。
      * - 有文件 → 上传后按 pdf 提交；
      * - 文本里能认出论文（arXiv 链接或 id）→ 直接开跑；
@@ -394,7 +588,7 @@ export const useChatStore = defineStore('chat', {
           if (up.uploadId) {
             await runs.submit(
               { kind: 'pdf', value: up.uploadId, title: up.filename.replace(/\.pdf$/i, ''), bytes: up.bytes },
-              exampleRunConfig(),
+              this.runConfig(),
             )
           }
         } catch (e) {
@@ -408,7 +602,13 @@ export const useChatStore = defineStore('chat', {
 
       const paper = parsePaper(text)
       if (paper) {
-        await runs.submit(paper, exampleRunConfig())
+        // 链接周围的那些话也算用户的要求（「做成小红书竖图，别营销腔」），跟风格一起进 brief
+        const words = text
+          .replace(/https?:\/\/\S+/g, ' ')
+          .replace(/\b\d{4}\.\d{4,5}(v\d+)?\b/gi, ' ')
+          .replace(/arxiv:?/gi, ' ')
+          .trim()
+        await runs.submit(paper, this.runConfig(words))
         return
       }
       if (/^https?:\/\//i.test(text.trim())) {

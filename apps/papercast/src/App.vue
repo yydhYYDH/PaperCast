@@ -12,6 +12,7 @@ import WorkbenchView from './views/WorkbenchView.vue'
 import RunsView from './views/RunsView.vue'
 import LibraryView from './views/LibraryView.vue'
 import PlatformsView from './views/PlatformsView.vue'
+import StyleView from './views/StyleView.vue'
 import OpsView from './views/OpsView.vue'
 import SettingsView from './views/SettingsView.vue'
 
@@ -34,6 +35,7 @@ onMounted(() => void store.bootstrap())
       <RunsView v-else-if="ui.view === 'runs'" />
       <LibraryView v-else-if="ui.view === 'library'" />
       <PlatformsView v-else-if="ui.view === 'platforms'" />
+      <StyleView v-else-if="ui.view === 'style'" />
       <OpsView v-else-if="ui.view === 'ops'" />
       <SettingsView v-else />
     </div>

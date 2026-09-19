@@ -5,10 +5,12 @@ import AgentRail from '../components/chat/AgentRail.vue'
 import Composer from '../components/chat/Composer.vue'
 import { useChatStore } from '../stores/chat'
 import { useRunsStore } from '../stores/runs'
+import { useUiStore } from '../stores/ui'
 import type { StageId } from '../types'
 
 const chat = useChatStore()
 const runs = useRunsStore()
+const ui = useUiStore()
 const thread = ref<InstanceType<typeof ChatThread> | null>(null)
 const dragging = ref(false)
 let depth = 0
@@ -38,7 +40,13 @@ function onDrop(e: DragEvent) {
         @gate="(s: StageId, o: string) => runs.confirm(s, o)"
         @action="(id: string, go: boolean) => (go ? chat.runAction(id) : chat.dismissAction(id))"
       />
-      <Composer :busy="runs.busy || chat.asking" :uploading="chat.uploading" @send="chat.send($event.text, $event.file)" />
+      <Composer
+        :busy="runs.busy || chat.asking"
+        :uploading="chat.uploading"
+        @send="chat.send($event.text, $event.file)"
+        @new-thread="chat.newThread()"
+        @style="ui.setView('style')"
+      />
       <div v-if="dragging" class="drop">
         <div class="drop-inner">松手就把这份 PDF 交给它</div>
       </div>

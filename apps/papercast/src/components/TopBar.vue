@@ -16,6 +16,7 @@ const TITLES: Record<ViewId, string> = {
   runs: '运行记录',
   library: '作品库',
   platforms: '平台账号',
+  style: '风格',
   ops: '运营维护',
   settings: '设置',
 }

@@ -189,6 +189,25 @@ export interface EnvStatus {
   publish: { xiaohongshu?: { reachable: boolean; loggedIn: boolean; account: string } }
 }
 
+/** 风格技能：描述来自 SKILL.md 的 frontmatter（原文要再调 skill()） */
+export interface SkillInfo {
+  name: string
+  description: string
+  /** repo = 本仓库 .dsh/skills（跟着代码走）· user = ~/.agents/skills（ops/install_skills.sh 装的） */
+  origin: 'repo' | 'user'
+  dir: string
+  root: string
+  /** 分册文件名（「展开还能看更多」），没有就是空数组 */
+  references: string[]
+  /** 是不是风格类技能（前端把它们排在「风格」一组里） */
+  style: boolean
+}
+
+export interface SkillDetail extends SkillInfo {
+  body: string
+  truncated: boolean
+}
+
 export interface PipelineApi {
   /** 人类可读的实现说明，显示在设置里 */
   readonly label: string
@@ -228,6 +247,12 @@ export interface PipelineApi {
   draftReply(body: DraftBody): Promise<DraftResult>
   /** 上传 PDF/LaTeX 包，拿到 uploadId（createRun 的 source.value 用它） */
   uploadPaper(file: File): Promise<UploadResult>
+
+  /* ---------- 技能 / 个性化层 ---------- */
+  /** 本机能找到的技能（风格技能排在前面）：只读 SKILL.md 的 frontmatter，改不了任何东西 */
+  skills(): Promise<SkillInfo[]>
+  /** 一个技能的 SKILL.md 原文（前端「看它的规矩」用） */
+  skill(name: string): Promise<SkillDetail>
 
   /* ---------- 运营维护 ---------- */
   /** 本机五个服务的真实状态（端口 / pid / 健康 / 日志） */

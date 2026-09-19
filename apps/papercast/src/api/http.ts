@@ -20,6 +20,8 @@ import type {
   ChatReply,
   ChatRequest,
   ConfigPatchResult,
+  SkillDetail,
+  SkillInfo,
   DraftBody,
   DraftResult,
   EnvStatus,
@@ -168,6 +170,16 @@ export class HttpPipelineApi implements PipelineApi {
     form.append('file', file, file.name)
     // 必须让浏览器自己带 multipart boundary：不能沿用 json() 默认的 application/json
     return this.json<UploadResult>('/api/uploads', { method: 'POST', body: form, headers: {} })
+  }
+
+  /* ---------- 技能 / 个性化层 ---------- */
+
+  skills() {
+    return this.json<SkillInfo[]>('/api/skills')
+  }
+
+  skill(name: string) {
+    return this.json<SkillDetail>('/api/skills/' + encodeURIComponent(name))
   }
 
   /* ---------- 运营维护 ---------- */

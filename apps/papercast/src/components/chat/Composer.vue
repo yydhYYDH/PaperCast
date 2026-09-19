@@ -1,9 +1,18 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue'
 import { EXAMPLE_PAPER } from '../../data/example'
+import { useStyleStore } from '../../stores/style'
 
 const props = defineProps<{ busy?: boolean; uploading?: boolean }>()
-const emit = defineEmits<{ send: [{ text: string; file?: File | null }] }>()
+const emit = defineEmits<{
+  send: [{ text: string; file?: File | null }]
+  newThread: []
+  /** 点「风格」跳到风格页（个性化层就露在输入框这一行，不藏在设置里） */
+  style: []
+}>()
+
+/** 当前风格：决定这一轮内容写成什么样（接口见 stores/style.ts） */
+const style = useStyleStore()
 
 const text = ref('')
 const box = ref<HTMLTextAreaElement | null>(null)
@@ -79,6 +88,7 @@ function say(t: string) {
           <input type="file" accept="application/pdf,.pdf" @change="pick" />
         </label>
         <button class="btn sm ghost" :disabled="busy" @click="useExample">用示例论文试试</button>
+        <button class="btn sm ghost" :disabled="busy" @click="emit('newThread')">新开一个对话</button>
         <span class="grow" />
         <button class="btn primary" :disabled="busy || !text.trim()" @click="send">
           {{ uploading ? '上传中…' : busy ? '开始中…' : '开始' }}
@@ -91,9 +101,15 @@ function say(t: string) {
       <span class="sep">·</span>
       <button class="say" @click="say('看下现在的数据')">看下现在的数据</button>
       <span class="sep">·</span>
+      <button class="say" @click="say('看看评论')">看看评论</button>
+      <span class="sep">·</span>
       <button class="say" @click="say('这篇论文的局限是什么')">这篇论文的局限是什么</button>
     </p>
-    <p class="hint">默认：一篇中文长文 + 一张海报 + 一段讲解视频 · 三个平台先排稿、发布要你点头 · 想改去「设置」</p>
+    <p class="hint">
+      风格：<button class="say" @click="emit('style')">{{ style.current }}</button>
+      <span class="sep">·</span>它决定这一轮文章的语气、海报的排版，会写进本次运行的 brief
+      <span class="sep">·</span>默认：一篇中文长文 + 一张海报 + 一段讲解视频，三个平台先排稿、发布要你点头
+    </p>
   </div>
 </template>
 

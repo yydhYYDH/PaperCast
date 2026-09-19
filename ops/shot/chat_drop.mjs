@@ -7,7 +7,7 @@ function findShell() {
     if (d.startsWith('chromium_headless_shell') && existsSync(p)) return p
   }
 }
-const browser = await chromium.launch({ executablePath: findShell(), args: ['--no-sandbox', '--disable-gpu'] })
+const browser = await chromium.launch({ executablePath: findShell(), args: ['--no-sandbox', '--disable-gpu', '--no-proxy-server'] })
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } })
 await page.goto('http://127.0.0.1:5178/', { waitUntil: 'domcontentloaded' })
 await page.waitForSelector('.chat-page', { timeout: 15000 })

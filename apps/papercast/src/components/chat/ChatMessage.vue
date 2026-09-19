@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, ref } from 'vue'
 import type { ChatMessage } from '../../stores/chat'
 import type { Artifact, PaperRun } from '../../types'
+import { reviewRun } from '../../review'
 
 const props = defineProps<{ msg: ChatMessage; run?: PaperRun }>()
 /** action 的第二个参数：true = 照这张卡办，false = 先不做 */
@@ -20,9 +21,28 @@ const viewer = computed(() => (props.msg.viewer && props.run ? VIEWERS[props.msg
 /** 有产物就能展开；展开后按阶段渲染对应查看器（懒加载，不展开不下载） */
 const canOpen = computed(() => !!viewer.value && !!props.msg.artifacts?.length)
 
+/**
+ * Agent 审核：**前端自己算**的那份汇总（数据来自后端每个阶段的真实 checks），
+ * 用在两处 —— 闸门上方那一句「Agent 审核已经通过」，以及这条审核消息下面的检查项。
+ */
+const review = computed(() => reviewRun(props.run))
+
+/** 先亮要处理的，没有要处理的再亮几条通过的（让"通过"也有证据，而不是一句空话） */
+const reviewItemsShown = computed(() => {
+  const items = props.msg.reviewItems ?? []
+  const bad = items.filter((i) => i.state !== 'pass')
+  return (bad.length ? bad : items.filter((i) => i.state === 'pass')).slice(0, 5)
+})
+
 const KIND_ICON: Record<string, string> = { markdown: '文', html: '版', image: '图', video: '影', json: '数', text: '字', pptx: '讲' }
 function icon(a: Artifact) {
   return KIND_ICON[a.kind] ?? '件'
+}
+/** 检查项的标题常常是「英文传播（X / LinkedIn） × 技术解读 · 指令遵从度 · 侧重」这种长串：
+ *  胶囊里只留最前面那段（完整内容在 title 里），否则一行被它一个人占满。 */
+function short(label: string) {
+  const head = label.split(' · ')[0]
+  return head.length > 22 ? head.slice(0, 22) + '…' : head
 }
 function size(a: Artifact) {
   if (!a.bytes) return ''
@@ -94,11 +114,42 @@ function name(a: Artifact) {
         <p v-else-if="msg.act === 'done'" class="act-note">{{ msg.actNote || '已经照这个办了。' }}</p>
         <p v-else class="act-err">没做成：{{ msg.actNote }}</p>
       </div>
-      <!-- 只读动作（看数据这类）不等用户点，给一行「正在取」就够，结果由回执那条消息说 -->
-      <p v-if="msg.action && !msg.action.needsConfirm && msg.act === 'running'" class="act-wait">正在照做…</p>
+      <!--
+        只读动作（看数据、读一遍评论这类）不等用户点：
+        - 正在做：写清**在做什么**（读一遍平台要真开一次浏览器，几十秒，不能只写「正在照做…」）；
+        - 没做成：留一行持久的原因 —— 只有一条会自己消失的 toast 等于没回执（2026-09-19 踩到）；
+        - 做完了：这里不写字，结果由紧随其后的那条回执消息说。
+      -->
+      <p
+        v-if="msg.action && !msg.action.needsConfirm && msg.act === 'running'"
+        class="act-wait"
+      >正在照做：{{ msg.action.title }}…</p>
+      <p v-else-if="msg.action && !msg.action.needsConfirm && msg.act === 'failed'" class="act-err">
+        没做成：{{ msg.actNote }}
+      </p>
+
+      <!-- 审核的检查项：只亮要处理的（没有就亮几条通过的），别把几十项全铺出来 -->
+      <div v-if="msg.reviewItems?.length" class="checks">
+        <span
+          v-for="i in reviewItemsShown"
+          :key="i.label"
+          class="chk"
+          :class="i.state"
+          :title="i.label + ' —— ' + i.detail + '（' + i.from + '）'"
+        >
+          {{ short(i.label) }}
+        </span>
+        <span class="chk more">共 {{ msg.reviewItems.length }} 项检查</span>
+      </div>
 
       <!-- 等你点头：只在真需要人决定的地方出现，默认动作排第一 -->
       <div v-if="msg.gate" class="gate">
+        <!-- 人工审核时先说清：机器已经替你核过一遍了（通过了才这么说，没通过就如实写） -->
+        <p class="gate-review" :class="{ bad: review.verdict === 'blocked' }">
+          <span class="tick">{{ review.verdict === 'blocked' ? '!' : '✓' }}</span>
+          <span>{{ review.line }}</span>
+          <span v-if="review.detail" class="gate-review-d"> · {{ review.detail }}</span>
+        </p>
         <p class="gate-q">{{ msg.gate.label }}</p>
         <p v-if="msg.gate.detail" class="gate-d">{{ msg.gate.detail }}</p>
         <div class="row wrap">
@@ -119,6 +170,22 @@ function name(a: Artifact) {
 
 <style scoped>
 .msg { display: flex; gap: 12px; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
+.chk {
+  font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line-soft); color: var(--ink-3);
+}
+.chk.pass { background: var(--tone-green-bg); border-color: transparent; color: var(--tone-green-fg); }
+.chk.run, .chk.warn { background: var(--tone-amber-bg); border-color: transparent; color: var(--tone-amber-fg); }
+.chk.fail { background: var(--tone-red-bg); border-color: transparent; color: var(--tone-red-fg); }
+.chk.more { color: var(--muted-2); background: none; border-color: var(--line); }
+.gate-review {
+  display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--tone-green-fg); margin-bottom: 2px;
+}
+.gate-review.bad { color: var(--tone-red-fg); }
+.gate-review .tick { font-weight: 700; }
+.gate-review-d { color: var(--muted); }
 .msg-user { justify-content: flex-end; }
 .bubble {
   max-width: 86%;

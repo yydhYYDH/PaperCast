@@ -257,3 +257,117 @@ node ops/shot/chat_action_check.mjs                               # 真界面：
 卡片收起且**没有副作用**；③ 普通提问（这篇论文的局限是什么）不产生带按钮的卡片；④ 控制台 0 错误。
 这个脚本**不点任何会真发出去的动作**，跑之前会先预热一次 60s 缓存，免得核验本身去撞浏览器预算。
 证据截图：`docs/evidence/chat-action-{metrics,card,dismissed}.png`。
+
+---
+
+## 13. 互动（P1）：只读评论 + 起草回复，一个字都不发（2026-09-19）
+
+> 用户原话：「互动（回评论）接上吧」「主 agent 应该要接入一些内容，比如可以互动之类的」。
+
+**为什么不是第 7 个 agent**：见 §12 与 `docs/02-six-agents-coverage.md` §2.4 —— 六个环节的契约不动，
+互动是**主 agent 的一项技能**（对话里一张只读卡 + 一次起草），不是新阶段、不是新代理。
+
+### 13.1 三步走，先只走第一步
+
+| 步骤 | 做什么 | 现在的状态 |
+| --- | --- | --- |
+| **P1 只读 + 起草** | 读「评论和@」；照一条评论（或你贴进来的原文）**起草**一句回复，草稿只落盘 | **已做**（本节） |
+| P2 逐条确认后发送 | 每条草稿都要在对话里点一次确认，才调 MCP 的写类路由 | 没做，等账号恢复 + 你明确授权 |
+| 全自动回复 | —— | **不做**（账号真实吃过风控，见 `docs/xhs-account-safety.md`） |
+
+### 13.2 只读这条线的三条硬规矩（写在代码里，也有用例锁着）
+
+1. **只调只读路由**：`app/interactions.py` 里对 MCP 的调用只允许 `/api/v1/notifications/list`
+   （要未读数时才加 `/api/v1/notifications/unread`）。`feeds/comment`、`feeds/comment/reply`、
+   `notifications/reply`、`notifications/like`、`feeds/like`、`feeds/favorite`、`publish*` 一律不碰，
+   而且有一条用例**读源码**来拦「以后顺手接上自动回复」。
+2. **每次真开一次浏览器**（MCP 侧护栏 30 次/10 分钟）：所以没有轮询、没有后台刷新，只有用户说一句
+   「看看评论」才发请求；未读数默认**不读**（列表成功已经证明登录态可用），要它得显式 `?unread=1`。
+   一次「读一遍」= 一次浏览器动作。
+3. **读不到就说读不到**：MCP 不可达 / 未登录 / 报错 → `gap` 里写原话 + 下一步（去哪扫码），
+   `items` 为空但**绝不当成「0 条评论」**；真读到空列表（没人评论）则是另一句话，不算错误。
+   这条与运营数据（`ops.py`）口径一致。
+
+### 13.3 起草 ≠ 发送（契约里写死）
+
+- `POST /api/interactions/draft` 的返回体里 `canSend: false`、`stage: "P1"` 是常量，草稿 `sent: false`；
+- 草稿落 `var/interactions/drafts.jsonl`（运行态、不入库），落盘失败**也把草稿原文交给你**，
+  只是如实说没存下来；
+- 提示词里写死「不许编数字、不许做时间承诺、不要营销腔」；模型没写出可用草稿 → 报 `DRAFT_EMPTY`，
+  不返回一条空草稿假装成功；
+- 界面上**没有**「回复/发送」按钮（`interactions_check.mjs` 会断言全页不许出现这类按钮）。
+
+### 13.4 对话里怎么用
+
+| 你说 | 会发生什么 |
+| --- | --- |
+| 看看评论 | 只读卡（自动执行）→ 真读一遍，回一句「读到 N 条评论…」+ 最多 3 条要点；读不到就说原因 |
+| 帮我起草回复 | 读一遍（没读过的话）→ 就**最前面一条能回的**评论起草一句，草稿落盘 |
+| 帮我回复一下：<评论原文> | **不读平台**，照你贴的原文起草 —— MCP 没起或未登录时这条退路照样能用 |
+
+### 13.5 这轮顺手修掉的两个真问题（都是核验时抓到的）
+
+1. **只读动作失败时对话里不留痕**：卡片原本只在 `needsConfirm` 时渲染，只读动作失败只弹一条会自己
+   消失的 toast，「没做成 + 原因」在对话里查无此事 —— 违反 §12 自己定的「失败要有回执」。现在只读
+   动作的进行/失败都在对话里留行（`正在照做：读一遍评论和@（只读）…` / `没做成：<原因>`）。
+2. **读平台时输入框被整轮冻住**：`ask()` 原本 `await runAction()`，而读一次平台要几十秒，输入框一直
+   「开始中…」。现在只读动作**不阻塞这一轮**（卡片自己显示进行中，完成再补一条结论），并且**并发合并**
+   —— 在途的读取复用同一个 promise，不为同一件事多开一次浏览器。
+
+### 13.6 核验
+
+```bash
+cd apps/papercast-server && .venv/bin/python -m pytest -q        # 含 tests/test_interactions.py（9 条）+ test_chat_actions.py
+curl -s 'http://127.0.0.1:8000/api/interactions?limit=5' | python3 -m json.tool        # 只读一遍（慢，真开浏览器）
+curl -s -X POST http://127.0.0.1:8000/api/interactions/draft -H 'content-type: application/json' \
+     -d '{"commentText":"这个方法能用在临床上吗？","author":"阿岚","workTitle":"DeepRare"}' | python3 -m json.tool
+wc -l var/interactions/drafts.jsonl                              # 起草一次多一行；sent 恒为 false
+node ops/shot/interactions_check.mjs                            # 真界面：只读读一遍 + 真起草且只落盘 + 无发送按钮 + 控制台 0 错误
+```
+
+`interactions_check.mjs` 的关键断言是**磁盘证据**：贴一段评论 → 草稿文件必须多一行、且那一行的
+`commentText` 就是贴进去的那段、`sent: false` —— 不是靠界面文案自证「我没发」。截图：
+`docs/evidence/interactions-{read,draft}.png`。
+
+真实一次（2026-09-19，MCP 在线、账号已登录）：读一遍花了约 60 秒，返回「这次没读到评论和@（也可能真的
+还没有人评论）」+ 未读 0；起草一句得到「目前这个方法还是偏研究阶段，离临床常规使用还有距离，实际诊疗
+还是以临床医生的判断为准。」—— 没有编数字、没有时间承诺。
+
+
+## 14. Agent 审核 + 个性化风格层（2026-09-19）
+
+**Agent 审核**（前端流程的第七步，`apps/papercast/src/review.ts`）
+
+- 位置在「六个产出环节之后、人工闸门之前」：右侧「谁在干活」多出第七行 **审核**，对话里多出一条
+  `#m-review`（提醒：它不是后端 stage，`id: 'review'` 只是滚动锚点）；
+- 数据来源是后端每个阶段**真实落盘的** `stage.checks`（这次是 43 项），再补两条前端交叉检查
+  （事实源 `understand/digest.json` 在不在、走完的环节有没有产物）—— 汇总成一句可复核的话：
+  `Agent 审核已经通过。我把这批东西对着事实源核了一遍：核了 43 项：38 项通过，5 项是说明，没有发现要改的。`
+- **人工审核时那一句**：闸门上方渲染 `Agent 审核已经通过 · 核了 N 项…`；没通过就如实写
+  「Agent 审核没通过：N 项要你决定（…）」，并把要处理的项列在闸门上方；
+- 还在跑时**不提前说通过**（只说「先把已经出来的部分核了一遍…收齐了我再核一次」）——
+  `settled` 这个门就是为这句话设的；
+- 结论句在**两处是同一个字符串**（`reviewRun().line`）：审核消息和闸门上方，避免各写一份而漂移。
+
+**个性化层：风格技能**（`src/stores/style.ts`、`src/views/StyleView.vue`、后端 `app/skills_api.py`）
+
+- 新增只读端点 `GET /api/skills`（列本机技能：`<repo>/.dsh/skills` 优先，然后 `~/.agents/skills`）
+  与 `GET /api/skills/{name}`（读 `SKILL.md` 原文）。技能名必须匹配 `^[a-z0-9]+(-[a-z0-9]+)*$`，
+  目录固定在白名单根内 —— 路径穿越与空名字都实测被拒（400 / 404）；
+- 左侧导航新增 **风格** 页：一句结论「现在用的是「papercast-frontend」——…」+ 每个技能一行
+  （名字 / 它管什么 / 来源 / 看它的规矩 / 用这个）；「看它的规矩」直接把 `SKILL.md` 原文渲染出来，
+  界面里**不抄一份会过期的二手版本**；其它非风格技能折在下面；
+- 生效链路：选中的风格由 `chat.runConfig()` 并进这次运行的 `brief`（**用户原话在前、风格在后**），
+  后端 `app/prompts.py` 的 BRIEF_RULES 约束它、`brief_checks` 机检遵从度 —— 所以风格是真生效、
+  可核对的，不是装饰开关；
+- 输入框下面那一行「风格：xxx · 它决定这一轮文章的语气、海报的排版，会写进本次运行的 brief」
+  随时能点进风格页，**没有藏进设置**；选择只存浏览器 `localStorage`（`papercast.style`），不进 git。
+
+核验：`node ops/shot/review_style_check.mjs`（第七行 + #m-review 结论句 + 检查项 pill + 风格页 6 个技能 +
+SKILL.md 原文 4695 字符 + 换风格落 localStorage 并显示在输入框 + 控制台 0 错误），
+`npx vue-tsc --noEmit` 干净，`ops/check_api_contract.py` 34 条路由 / 26 处调用双向对上。
+
+> 本轮踩到并已写进技能的两处运维坑：① Vite dev server 的 HMR 会陈旧 —— 页面报
+> `_ctx.xxx is not a function`、视图点了不切换，重启前端即好；② 这台机器有
+> `http_proxy=127.0.0.1:7890`，代理会给 Playwright 喂陈旧模块，所以 `ops/shot` 脚本一律
+> `--no-proxy-server` 起浏览器。
