@@ -186,6 +186,10 @@ class VoiceSpec:
     anchor: str      # UI 与文档里的「参考锚点」（不要拿它当风格名对外宣传）
     persona: str     # 进提示词的人格片段
     sampled: bool    # True = 有真实语料支撑（见 docs/09-voice-styles.md）
+    # 风格页上给用户看的两行字：口语化的风格名 + 一句话它读起来什么样。
+    # 面板上「小红书 · 震惊流」这种条目就是 short；label/anchor 留给日志与文档，避免两套命名互相污染。
+    short: str = ""
+    hint: str = ""
 
 
 _NEWSFLASH = """你是中文科技媒体的快讯作者，把论文/发布当成一条有情绪、有画面感的新闻来写。
@@ -239,11 +243,26 @@ VOICES: dict[str, VoiceSpec] = {
     # 2026-09-19 用户要求：不要「作者自述」。默认人格改为第三方独立视角，不再冒充论文作者。
     # 旧写法（xhs-author / xhs / xhs-academic / zhihu-academic / bilibili-academic）由下面的
     # RETIRED_VOICES 与 LEGACY_VARIANTS 映射到这里，老配置不会静默丢变体。
-    "independent": VoiceSpec("independent", "第三方独立视角", "与论文无利益关系的第三方", _INDEPENDENT, sampled=False),
-    "peer": VoiceSpec("peer", "同行拆解", "实验室师兄讲论文", _PEER, sampled=False),
-    "newsflash": VoiceSpec("newsflash", "科技快讯", "新智元式", _NEWSFLASH, sampled=True),
-    "analyst": VoiceSpec("analyst", "技术解读", "机器之心式", _ANALYST, sampled=True),
-    "reviewer": VoiceSpec("reviewer", "审稿人视角", "同行评审", _REVIEWER, sampled=False),
+    "independent": VoiceSpec(
+        "independent", "第三方独立视角", "与论文无利益关系的第三方", _INDEPENDENT, sampled=False,
+        short="专业科普", hint="不冒充作者，先讲清做了什么，再给判断与保留意见",
+    ),
+    "peer": VoiceSpec(
+        "peer", "同行拆解", "实验室师兄讲论文", _PEER, sampled=False,
+        short="白话拆解", hint="口语直给，先打比方再回到原文，顺手指出前提条件",
+    ),
+    "newsflash": VoiceSpec(
+        "newsflash", "科技快讯", "新智元式", _NEWSFLASH, sampled=True,
+        short="震惊流", hint="标题造势、短句推进，正文用限定语兜住，结尾外推行业影响",
+    ),
+    "analyst": VoiceSpec(
+        "analyst", "技术解读", "机器之心式", _ANALYST, sampled=True,
+        short="专业解读", hint="按论文骨架走，归属明确、数字带出处，全程克制",
+    ),
+    "reviewer": VoiceSpec(
+        "reviewer", "审稿人视角", "同行评审", _REVIEWER, sampled=False,
+        short="审稿视角", hint="以主张是否被证据支撑为主线，好的和该补实验的都要说",
+    ),
 }
 
 DEFAULT_PLATFORM = "xhs"
@@ -324,9 +343,48 @@ def voice_spec(vid: str) -> VoiceSpec:
 def voice_menu() -> list[dict[str, str]]:
     """给前端用的选项清单（不暴露提示词正文）。"""
     return [
-        {"id": v.id, "label": v.label, "anchor": v.anchor, "sampled": "1" if v.sampled else "0"}
+        {
+            "id": v.id,
+            "label": v.label,
+            "short": v.short or v.label,
+            "hint": v.hint,
+            "anchor": v.anchor,
+            "sampled": "1" if v.sampled else "0",
+        }
         for v in VOICES.values()
     ]
+
+
+def style_menu() -> list[dict[str, object]]:
+    """平台 × 人格的全部组合（风格页直接展示这些条目，例如「小红书 · 专业科普」）。
+
+    前端不自己拼 id、也不自己起名字：选项、口语名、约束都来自本文件，避免界面和校验规则各说一套。
+    """
+    out: list[dict[str, object]] = []
+    for p in PLATFORMS.values():
+        for v in VOICES.values():
+            out.append({
+                "variant": variant_id(p.id, v.id),
+                "platform": p.id,
+                "platformLabel": p.label,
+                "voice": v.id,
+                "short": v.short or v.label,
+                "hint": v.hint,
+                "anchor": v.anchor,
+                "label": variant_label(p.id, v.id),
+                "sampled": "1" if v.sampled else "0",
+                "output": p.output,
+                "bodyMin": p.body_min,
+                "bodyMax": p.body_max,
+                "unit": p.unit,
+                "allowFormula": p.allow_formula,
+                "tagsMin": p.tags_min,
+                "tagsMax": p.tags_max,
+                "titleWeightMax": p.title_weight_max,
+                "titleCharsMax": p.title_chars_max,
+                "cards": p.cards,
+            })
+    return out
 
 
 def platform_menu() -> list[dict[str, object]]:
@@ -352,7 +410,44 @@ def platform_menu() -> list[dict[str, object]]:
 
 CJK = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
 NUM = re.compile(r"\d+(?:[.,]\d+)*\s*%?")
-FORMULA = re.compile(r"\$[^$]{1,200}\$|\\frac|\\begin\{|\\sum|\\alpha|_\{|\^\{")
+
+#: 一眼能认出来的 LaTeX 记号（不含 $...$ 包裹）
+FORMULA = re.compile(r"\\frac|\\begin\{|\\sum|\\alpha|_\{|\^\{")
+
+#: 成对的 $...$（行内公式的写法，但英文里的金额也是这个形状）
+DOLLAR_PAIR = re.compile(r"\$([^$\n]{1,200})\$")
+
+#: 里面出现这些才算数学：反斜杠命令、上下标、花括号、等号/不等号、数学符号
+TEX_SIGNAL = re.compile(r"[\\^_{}=<>]|[≤≥×÷∑∫√π±∞≈≠]")
+
+#: 纯数字 / 数字加百分号或千分位：$0.001、$1,200、$42% —— 这是金额，不是公式
+MONEY_ONLY = re.compile(r"^\s*[\d.,%]+\s*$")
+
+
+def is_inline_math(span: str) -> bool:
+    """判断一个 `$...$` 片段到底是不是公式。
+
+    英文稿里 `$0.001` 这类金额与后面另一个 `$` 会凑成一对，被朴素正则当成行内公式
+    （加英文平台时实测误报：「无公式」检查把成本数字判成 fail）。判定规则：
+    纯金额不算；跨普通句子的两个 `$`（内含空格且没有任何数学信号）也不算。
+    """
+    inner = span.strip("$")
+    if MONEY_ONLY.match(inner):
+        return False
+    if " " in inner and not TEX_SIGNAL.search(inner):
+        return False
+    return True
+
+
+def find_formula(text: str) -> str | None:
+    """返回第一处公式痕迹（用于「无公式」校验）；没有则 None。"""
+    m = FORMULA.search(text or "")
+    if m:
+        return m.group(0)
+    for m in DOLLAR_PAIR.finditer(text or ""):
+        if is_inline_math(m.group(0)):
+            return m.group(0)
+    return None
 
 
 def title_weight(s: str) -> int:
@@ -414,8 +509,8 @@ def validate_markdown(spec: PlatformSpec, md: str) -> list[tuple[str, str, str]]
         f"{n} {unit_cn}（要求 {spec.body_min}-{spec.body_max}）",
     ))
     if not spec.allow_formula:
-        hit = FORMULA.search(md)
-        checks.append(("无公式", "fail" if hit else "pass", f"命中 {hit.group(0)[:20]}" if hit else "未出现 LaTeX 表达"))
+        hit = find_formula(md)
+        checks.append(("无公式", "fail" if hit else "pass", f"命中 {hit[:20]}" if hit else "未出现 LaTeX 表达"))
     else:
         checks.append(("公式策略", "pass", "该平台允许 KaTeX 公式"))
     tags = _md_tags(md)

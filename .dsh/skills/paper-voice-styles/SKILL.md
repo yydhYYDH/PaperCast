@@ -2,7 +2,7 @@
 name: paper-voice-styles
 description: >
   中文科技传播「讲述者人格」风格规范的取样与落地方法。当需要新增/校准一个写作人格
-  （新智元式快讯、机器之心式技术解读、作者自述、同行拆解、审稿人视角等），或要把人格
+  （新智元式快讯、机器之心式技术解读、第三方独立视角、同行拆解、审稿人视角等），或要把人格
   接到 papercast 的文章生成提示词里时使用。包含可复现的语料取样路径（媒体原站已失效时
   走搜狐号作者接口 + 360 搜索）、量化统计脚本、已验证的两套人格规范与护栏清单。
 ---
@@ -13,7 +13,7 @@ description: >
 
 - 要给 papercast 的文章生成加一个**新人格**（voice）或校准已有的人格；
 - 要判断某个媒体/作者「到底是什么风格」，需要证据而不是印象；
-- 要把人格接进提示词拼装（`PLATFORM_RULES + VOICE_GUIDES + 反幻觉铁律`）。
+- 要把人格接进提示词拼装（`PLATFORMS[platform] + VOICES[voice] + FACT_RULES`）。
 
 ## 何时不用
 
@@ -50,18 +50,27 @@ voice    → 语气、人称、句长节奏、归属强度、证据呈现方式
 4. **写规则**：产出 10–15 条祈使句（可直接进提示词）+ 3–5 条反面清单。
 5. **接进代码**：`app/styles.py` 的 `VOICES[voice]`（人格片段）与 `PLATFORMS[platform]`（硬约束 + 输出模板），
    提示词由 `prompts.article_system(platform, voice)` 自动拼装；新人格记得在 `LEGACY_VARIANTS` 里加旧 id 兼容。
+   **必填两个面向用户的两行字**：`short`（口语化风格名，如「震惊流」「专业科普」）与 `hint`（一句话手感），
+   它们经 `GET /api/styles` 进前端风格页；缺了风格页上就是一条没名字的条目。
 6. **回归**：`cd apps/papercast-server && .venv/bin/python scripts/test_article_variants.py <run_id> <variant,variant>`
    —— 只跑 article 阶段、复用已有事实源、不碰原 run 目录，几十秒出结果；随后再看人工读感。
 
-## 已完成的人格（详见 \`apps/papercast-server/docs/09-voice-styles.md\`）
+## 已完成的人格（详见 `apps/papercast-server/docs/09-voice-styles.md`）
 
 | voice | 画像 | 关键量化特征（各 8 篇样本） |
 | --- | --- | --- |
 | `newsflash` 新智元式快讯 | 标题造势、正文短句推进、结尾行业外推 | 标题均 17.2 字；感叹号 7/8、问号 0/8；「新智元报道」头部 7/8；≤20 字行占 24%，>60 字仅 23%；正文「可能」33 次（标题强、正文留余地） |
 | `analyst` 机器之心式解读 | 克制、按论文骨架走、归属明确 | 标题均 20.0 字；会议/机构前缀常见；骨架＝核心结论→问题→现状综述→诊断实验→核心方法→实验结果→结论与展望→作者信息；>60 字行占 43%；「作者」11 次/3 篇；有图表引用与参考链接 |
 
-待取样（**不要从上面两套外推**）：`author` 论文作者自述、`peer` 同行拆解、`reviewer` 审稿人视角、
-`reproducer` 复现者视角、`explainer`/`tutor`/`paperwalk` 讲解型。
+当前人格全集（`app/styles.py` 的 `VOICES`）：`independent` 第三方独立视角（**默认**，2026-09-19 起取代
+已退役的 `author` 作者自述 —— 稿子不该冒充论文作者）、`peer` 同行拆解、`newsflash` 科技快讯、
+`analyst` 技术解读、`reviewer` 审稿人视角。
+
+待取样（**不要从上面两套外推**）：`independent`、`peer`、`reviewer`
+（外加 `reproducer` 复现者视角、`explainer`/`tutor`/`paperwalk` 讲解型等候选）。
+
+平台轴（`PLATFORMS`）当前为 `xhs` 小红书 / `zhihu` 知乎 / `bilibili` B站 / `en` 英文传播（X、LinkedIn）；
+公众号已于 2026-09-19 下线，旧 id 解析不出平台会如实报错，不再静默生成。
 
 ## 护栏（写进任何人格都不能省）
 

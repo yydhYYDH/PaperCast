@@ -106,6 +106,30 @@ curl -s http://127.0.0.1:8000/api/platforms/bilibili/login/qrcode | jq '{img: (.
 curl -s -X POST http://127.0.0.1:8000/api/platforms/zhihu/login/start | jq '{started, pid, hint}'          # 知乎：弹桌面窗口
 ```
 
+### `GET /api/styles` — 文章风格清单（平台 × 讲述者人格）
+
+前端「风格」页直接渲染这些条目（「小红书 · 专业科普」「知乎 · 专业解读」…）。
+
+```jsonc
+{
+  "default": { "platform": "xhs", "voice": "independent", "variant": "xhs-independent" },
+  "maxVariants": 4,
+  "platforms": [ { "id": "xhs", "label": "小红书", "output": "json", "allowFormula": false,
+                   "bodyMax": 1000, "tagsMin": 8, "tagsMax": 12, "titleWeightMax": 38, "cards": true } ],
+  "voices":    [ { "id": "independent", "label": "第三方独立视角", "short": "专业科普",
+                   "hint": "不冒充作者，先讲清做了什么，再给判断与保留意见", "anchor": "与论文无利益关系的第三方", "sampled": "0" } ],
+  "styles":    [ { "variant": "xhs-newsflash", "platform": "xhs", "platformLabel": "小红书",
+                   "voice": "newsflash", "short": "震惊流", "hint": "…", "label": "小红书 × 科技快讯",
+                   "sampled": "1", "output": "json", "bodyMin": 0, "bodyMax": 1000, "unit": "cjk",
+                   "allowFormula": false, "tagsMin": 8, "tagsMax": 12, "titleWeightMax": 38,
+                   "titleCharsMax": null, "cards": true } ]
+}
+```
+
+选项、口语名与硬约束全部来自 `app/styles.py`（唯一真源）：界面不自己拼 id、不自己起名字，
+所以不会出现「界面写着作者自述、后端早把 author 退役了」这类漂移。选中的 `variant` 直接写进
+`config.article.variants`，最多 `maxVariants`（= 4）个。
+
 ### `GET /api/health` — 存活探针
 
 `{ "status": "ok", "version": "...", "uptimeSec": 123 }`，给 systemd / nginx 用。

@@ -41,6 +41,8 @@ DESC_MAX = 400
 #: 风格类技能：前端把它们排在「风格」一组里（其余技能折叠起来，别喧宾夺主）
 STYLE_SKILLS = {
     "papercast-frontend",
+    # 写作人格（讲述者口吻）的取样与落地规范：它管的正是「文章写成什么语气」，属于风格一组
+    "paper-voice-styles",
     "minimalist-ui",
     "frontend-design",
     "impeccable",

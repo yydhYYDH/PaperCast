@@ -217,3 +217,88 @@ def test_platform_menus_expose_every_platform_and_voice():
     assert set(v["id"] for v in styles.voice_menu()) == set(styles.VOICES)
     # 菜单不泄露提示词正文
     assert all("persona" not in v for v in styles.voice_menu())
+
+
+# --------------------------------------------------------------------------- #
+# 公式判定：$...$ 的护栏（英文里的金额不是公式）
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "成本是 $0.001，另一处 $0.05。",            # 两个金额凑成一对，朴素的 $[^$]+$ 会误判
+        "PresentAgent 只要 $0.001. 人工要 $62K token.",  # 跨普通句子的两个 $
+        "价格 $1,200 与 $42%。",
+        "没有货币符号也没有公式。",
+    ],
+)
+def test_money_is_not_a_formula(text):
+    assert styles.find_formula(text) is None
+
+
+# 反斜杠用 chr(92) 拼，避免测试文件里的转义序列被写坏（"\l" 不是合法转义，会被吃掉）
+BS = chr(92)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "$x^2 + y^2$",
+        "$O(n) " + BS + "log n$",                    # 反斜杠命令 + 空格，仍应算公式
+        "$" + BS + "alpha$ 与 $" + BS + "beta$",
+        BS + "frac{a}{b}",
+        BS + "begin{aligned}",
+        "下标 $x_i$",
+    ],
+)
+def test_real_formula_still_detected(text):
+    assert styles.find_formula(text) is not None
+
+
+def test_en_platform_with_money_passes_no_formula_check():
+    """加英文平台时踩到的误报：成本数字 $0.001 被当成行内公式，en 的「无公式」判 fail。"""
+    md = "# A hook\n\n" + " ".join(["word"] * 340) + " cost $0.001 per clip.\n\n## Tags\n- #LLM\n- #AI\n- #ML\n"
+    checks = dict((label, state) for label, state, _ in styles.validate_markdown(styles.PLATFORMS["en"], md))
+    assert checks["无公式"] == "pass"
+    md_bad = md.replace("cost $0.001 per clip.", "公式 $x^2$ 仍在。")
+    checks_bad = dict((label, state) for label, state, _ in styles.validate_markdown(styles.PLATFORMS["en"], md_bad))
+    assert checks_bad["无公式"] == "fail"
+
+
+
+# --------------------------------------------------------------------------- #
+# style_menu：前端风格页直接展示的组合清单
+# --------------------------------------------------------------------------- #
+
+def test_style_menu_covers_every_platform_voice_pair():
+    menu = styles.style_menu()
+    assert len(menu) == len(styles.PLATFORMS) * len(styles.VOICES)
+    assert [s["variant"] for s in menu] == sorted(
+        {s["variant"] for s in menu}, key=[s["variant"] for s in menu].index
+    )  # id 唯一（顺序按平台→人格遍历）
+    for s in menu:
+        assert s["variant"] == styles.variant_id(s["platform"], s["voice"])
+        assert styles.parse_variant(s["variant"]) == (s["platform"], s["voice"])
+        assert s["platformLabel"] == styles.PLATFORMS[s["platform"]].label
+
+
+def test_style_menu_carries_the_ui_names_and_constraints():
+    """风格页要显示「小红书 · 专业科普」：口语名与一句话手感必须来自这里，前端不自己编。"""
+    for s in styles.style_menu():
+        assert s["short"], f"{s['variant']} 缺口语名（VoiceSpec.short）"
+        assert s["hint"], f"{s['variant']} 缺一句话说明（VoiceSpec.hint）"
+    xhs = [s for s in styles.style_menu() if s["variant"] == "xhs-newsflash"][0]
+    assert xhs["short"] == "震惊流"
+    assert xhs["platformLabel"] == "小红书"
+    assert xhs["bodyMax"] == 1000 and xhs["allowFormula"] is False and xhs["cards"] is True
+    en = [s for s in styles.style_menu() if s["variant"] == "en-analyst"][0]
+    assert en["unit"] == "words"
+
+
+def test_voice_menu_exposes_short_names():
+    menu = {v["id"]: v for v in styles.voice_menu()}
+    assert menu["independent"]["short"] == "专业科普"
+    assert menu["reviewer"]["short"] == "审稿视角"
+    # 规范名（label）与锚点仍在，日志和文档要用
+    assert menu["newsflash"]["label"] == "科技快讯" and menu["newsflash"]["anchor"] == "新智元式"
+
