@@ -162,7 +162,10 @@ node ops/shot/ops_theme_check.mjs       # 换肤 + 运营页的真实核验（�
 
 - **为什么放仓库里**：DSH 的技能发现根优先级是 `<repo>/.dsh/skills` > `<repo>/.agents/skills` > `~/.dsh/skills` > `~/.agents/skills`。
   放仓库里 = 跟着代码走、能进 git、换机器/换会话都在，也不会污染用户目录；
-- **和 `ops/install_skills.sh` 的分工**：那个脚本装的是 4 个**第三方**设计技能（`reference/upstream/` → `~/.agents/skills`）；
+- **和 `ops/install_skills.sh` 的分工**：那个脚本装的是 5 个**第三方**技能（`reference/upstream/` → `~/.agents/skills`）——
+  4 个前端设计技能 + 1 个出图技能 `guizang-social-card-skill`（文章 → 小红书 3:4 组图 / 公众号封面对；
+  它的自检脚本要 playwright，安装脚本会把技能的 `node_modules` 软链到 `ops/shot/node_modules`，
+  渲染入口是我们自己的 `ops/shot/render_social_deck.mjs`）；
   本仓库自己的规范走 `.dsh/skills/`；
 - `AGENTS.md` §1 已把 `.dsh/` 写成根目录唯一允许的目录（只放技能包，别的仍必须进五层）；
 - 新增技能：建 `.dsh/skills/<name>/SKILL.md`，frontmatter 写 `name`（`^[a-z0-9]+(-[a-z0-9]+)*$`）+ `description`，

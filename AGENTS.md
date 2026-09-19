@@ -19,7 +19,11 @@
 > 技能放哪：DSH 按 `<repo>/.dsh/skills` > `<repo>/.agents/skills` > `~/.dsh/skills` > `~/.agents/skills` 的优先级发现，
 > 目录名无所谓，技能名取 `SKILL.md` frontmatter 的 `name`（须匹配 `^[a-z0-9]+(-[a-z0-9]+)*$`）。
 > **本仓库自己的技能放 `<repo>/.dsh/skills/`**（跟着代码走、能提交、新会话立刻可见）；
-> 第三方设计技能仍用 `./ops/install_skills.sh` 装到 `~/.agents/skills`。现有仓库技能：`papercast-frontend`。
+> 第三方设计技能与出图技能仍用 `./ops/install_skills.sh` 装到 `~/.agents/skills`
+> （4 个设计技能 + 出图技能 `guizang-social-card-skill`：文章 → 小红书 3:4 组图 / 公众号封面对，
+> 渲染用 `node ops/shot/render_social_deck.mjs <task-dir>`，自检用该技能的 `validate-social-deck.mjs`；
+> 任务目录放 `var/`，别写进技能目录）。
+> 现有仓库技能：`papercast-frontend`。
 
 ## 2. 路径：一律不写死 /home/yydh/hack
 

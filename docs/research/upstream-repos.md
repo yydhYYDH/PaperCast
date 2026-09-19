@@ -64,9 +64,10 @@
 - 比上游更该读的是**我们自己的结论**：`reference/baoyu-research/docs/{image-generation.md, image-generation-tools.md, codex-imagegen-backend.md}`。
 - 该目录被 `.gitignore` 单独排除，且**不在 `sync_upstream.sh` 的同步范围**（它是调研包，不是只读参考仓库）。
 
-## E. 前端设计审美技能（2026-09-19 装入 DSH 技能根）
+## E. 会话技能（2026-09-19 装入 DSH 技能根）
 
-> 用途：治「布局排版不够简洁美观 / 一眼模板感」。它们不是 PaperCast 的构建依赖，
+> 用途：4 个**前端设计审美技能**（治「布局排版不够简洁美观 / 一眼模板感」）+ 1 个**出图技能**
+> （guizang，把文章/文案排成小红书 3:4 组图与公众号封面对）。它们不是 PaperCast 的构建依赖，
 > 而是**当代码会话的 skill 加载**用的：由 `./ops/install_skills.sh` 拷到用户级
 > `~/.agents/skills/`（dsh 的 skill-filesystem provider 会扫 `<repo>/.dsh/skills` >
 > `<repo>/.agents/skills` > `~/.dsh/skills` > `~/.agents/skills`），所以不往仓库里塞目录。
@@ -78,6 +79,7 @@
 | `impeccable` | [pbakaus/impeccable](https://github.com/pbakaus/impeccable) | `f2c7051` | 2026-09-16 | 3.8M | **审计 + 修复分册**（layout / typeset / quieter / distill / critique / polish / colorize…）+ 确定性检测 CLI（`scripts/impeccable detect --scope layout`）；关键是访客模式之分：Operate+Read（仪表盘）要稳定密度与可扫描性，Persuade+Experience 才允许夸张构图 |
 | `taste-skill` | [Leonxlnx/taste-skill](https://github.com/Leonxlnx/taste-skill) | `e79ca9e` | 2026-09-16 | 6.1M | 只取 `skills/minimalist-skill`（frontmatter `name: minimalist-ui`，*Premium Utilitarian Minimalism*）：简洁高级的**禁令清单**——禁 Inter/Roboto、禁 Lucide/Feather 细线图标、禁 `shadow-md/lg/xl`、禁大面积彩色背景与渐变、大容器禁 `rounded-full`、禁 emoji |
 | `spacing-skill` | [buidangminh23/spacing-skill](https://github.com/buidangminh23/spacing-skill) | `075d754` | 2026-09-17 | 504K | **间距与垂直韵律**（单文件 73KB）：先读现状再定三个旋钮 SPACING_STEP / DENSITY / ALIGNMENT_RIGOR，推出唯一一条刻度，让邻近性承担语义，覆盖光学对齐、密度纪律、无障碍下限 |
+| `guizang-social-card-skill` | [op7418/guizang-social-card-skill](https://github.com/op7418/guizang-social-card-skill) | `cf4b810` | 2026-07-02 | 4.5M | **出图技能**（AGPL-3.0，只装到用户目录、不进仓库）：Editorial Magazine × Swiss 两套视觉系统、M01–M16/S01–S12 版式配方、主题预设、`fit-contain` 图表规则、以及自检脚本 `validate-social-deck.mjs`（R1–R9：溢出 / 页脚相撞 / 最小字号 / 四横带密度 / 标题行数上限…）。渲染入口用我们自己的 `ops/shot/render_social_deck.mjs`（上游不带渲染脚本） |
 
 `impeccable` 是**稀疏克隆**（`--filter=blob:none --sparse` + `sparse-checkout set .agent/skills/impeccable`），
 全仓 370M 里我们只要这一个技能目录；`sync_upstream.sh` 按登记 commit 复现时会取整棵树，介意体积就手动稀疏克隆。
@@ -90,6 +92,7 @@
 | `impeccable` | `impeccable/.agent/skills/impeccable` |
 | `minimalist-ui` | `taste-skill/skills/minimalist-skill` |
 | `design-spacing-rhythm` | `spacing-skill/skills/spacing-skill` |
+| `guizang-social-card-skill` | `guizang-social-card-skill`（整仓；安装后脚本会把 `<技能>/node_modules` 软链到 `ops/shot/node_modules`，因为它的自检脚本 `import "playwright"`，而本沙箱 `~/.npm` 只读装不了包） |
 
 ## C 组用途速查（按各仓库 README 实测摘录）
 

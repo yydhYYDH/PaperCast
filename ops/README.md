@@ -11,6 +11,7 @@
 | `bin/` | 本地编译产物：`xiaohongshu-mcp`（上游 HEAD 干净版）、`xiaohongshu-mcp-auth`（含本地 `auth.go` 改动）、`xiaohongshu-login`（扫码登录工具）。**不入库**（`.gitignore` 已忽略整个目录）：别人 clone 后要自己编，`./ops/install.sh --with-mcp` 一条命令搞定。**二进制，不要 `sed`/改内容，只能重建** |
 | `shot/` | HTML→PNG 渲染与截图脚本（chrome-headless-shell，来自 Playwright 缓存）；前端 10 张界面截图由 `shot.mjs` 生成 |
 | `shot/render.mjs` | **通用 HTML→PNG 渲染入口**（可被其它组件调用）：`node ops/shot/render.mjs --html <p> --out <png> --width W --height H [--check]`，输出单行 JSON（面板溢出、缺图、面积填充率），退出码 3 = 几何自检不过。海报走这条 |
+| `shot/render_social_deck.mjs` | **社交组图渲染入口**：`node ops/shot/render_social_deck.mjs <task-dir\|index.html> [--out <dir>] [--scale 2] [--only ids]`，把单文件 deck 里每个 `.poster`/`.cover` 节点各截一张 PNG（产物默认落 `<task-dir>/output/`，单行 JSON 汇总），退出码 3 = 一个卡片节点都没找到。小红书组图走这条（配合 `~/.agents/skills/guizang-social-card-skill` 的 `validate-social-deck.mjs` 自检，装法见 `ops/install_skills.sh`） |
 | `imagegen.sh` | **文生图入口**：调 `baoyu-image-gen` 的官方 API 后端（默认 dashscope/qwen-image-2.0-pro）。密钥放 `var/secrets/imagegen.env`；内置 `npm_config_cache` 指向 `var/`（沙箱下 `~/.npm` 只读，否则 `npx` 必挂） |
 | `sync_upstream.sh` | 按 `docs/research/upstream-repos.md` 的登记表复现/核对 `reference/upstream/`（`--list` 只核对，默认补齐缺失；幂等、非破坏） |
 | `skillsearch/` | 上游技能调研脚本（`clone.sh` 克隆 11 个参考仓库、`inspect/deep2/readmes` 提取 README 结构） |

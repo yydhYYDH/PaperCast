@@ -62,6 +62,23 @@
    面板报溢出（闸门看得见），而不是被 `.sheet{overflow:hidden}` 静默裁掉 —— 旧版 `zhihu` 画布就是这么
    带着半张被裁掉的图判 pass 的。
 
+## 3.5 本轮之后：guizang 已装成**出图技能**（2026-09-19）
+
+用户要求把这个仓库变成能直接用的生成技能，所以它不再只是"只读参考"：
+
+| 项 | 值 |
+| --- | --- |
+| 安装 | `./ops/install_skills.sh` → `~/.agents/skills/guizang-social-card-skill`（AGPL-3.0，**只装用户目录、不进仓库**；技能名 = frontmatter `name`） |
+| 依赖 | 它的 `validate-social-deck.mjs` `import "playwright"`，安装脚本把 `<技能>/node_modules` 软链到 `ops/shot/node_modules`（本沙箱 `~/.npm` 只读，装不了新包） |
+| 渲染入口 | `node ops/shot/render_social_deck.mjs <task-dir> --scale 2` —— **我们自己写的**（上游只带自检脚本、不带渲染脚本）；逐个 `.poster/.cover` 节点截图，产物落 `<task-dir>/output/` |
+| 自检 | `node ~/.agents/skills/guizang-social-card-skill/validate-social-deck.mjs <task-dir>`（R1 溢出 / R2 页脚相撞 / R4 最小字号 / R5 四横带密度 / R6 标题行数上限…） |
+| 任务目录 | 一律放 `var/`（技能自己建议 `local-tests/`，我们不放技能目录里） |
+
+实跑样本：`var/samples/guizang-deeprare/`（DeepRare 真 run 的事实 + 论文原图，5 张 3:4 卡片，
+**自检 5/5 clean、0 fail 0 warn**），证据图 `docs/evidence/guizang-xhs-{cover,method,results}.png`。
+本机适配三条（字体覆盖 / 图表 `fit-contain` 底色透明 / `.step-title` 间距 8→18px，最后一条**是上游自己的
+模板与它自己的 QA 下限不一致**，值得反馈上游）都记在任务目录的 `README.md` 里。
+
 ## 4. 还没做的（交接）
 
 - **投放侧封面没按渠道挑**：`publish._pick_media` 给所有渠道同一张封面（按文件名排序挑到 `poster-bili-cover.png`），
