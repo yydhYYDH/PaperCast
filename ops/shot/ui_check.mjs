@@ -66,7 +66,13 @@ if (await page.locator('.ch.ready .btn.danger').count()) {
 
 pages.push(await visit('运营维护', 'ui-ops.png'))
 // 更新数据 → 应出现回执气泡
-await page.locator('.page-head .btn', { hasText: '更新数据' }).click()
+//
+// 进页面时运营数据会**自己先拉一次**（实测约 20–30 秒，走真平台接口），这段时间页头按钮
+// 写的是「更新中…」而不是「更新数据」。直接 click() 会撞上 Playwright 默认 30 秒定位器
+// 超时（2026-09-19 修：之前这条在冷缓存下稳定失败，看着像页面坏了，其实是抢跑）。
+const refreshBtn = page.locator('.page-head .btn', { hasText: '更新数据' })
+await refreshBtn.waitFor({ timeout: 180000 })
+await refreshBtn.click()
 await page.waitForSelector('.toast', { timeout: 240000 })
 const toast = await page.locator('.toast').first().innerText().catch(() => null)
 await page.screenshot({ path: WS + '/docs/evidence/ui-ops-toast.png' })

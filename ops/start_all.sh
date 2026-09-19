@@ -9,6 +9,11 @@
 #   ./ops/start_all.sh backend    # 只起某一个：backend | frontend | mcp | zhihu | bilibili
 #   ./ops/stop_all.sh
 #
+# ⚠️ 小红书 MCP 默认跑在 **Windows 侧**（真实有头 Chrome，风控暴露面更小），
+#    由 ops/mcp_windows.sh 起停，部署目录默认 E:\xhs-test。
+#    服务器上没有 Windows 会自动回退到 Linux 侧；本机也可以 XHS_MCP_PLATFORM=wsl 强制。
+#    背景见 docs/xhs-account-safety.md。
+#
 # 路径约定见 docs/conventions.md：代码在 apps/，工具在 ops/，运行态在 var/。
 set -uo pipefail
 
@@ -18,7 +23,13 @@ LOGS="$WS/var/logs"
 PIDS="$WS/var/pids"
 mkdir -p "$LOGS" "$PIDS"
 
-port_busy() { ss -ltn 2>/dev/null | grep -q "127.0.0.1:$1 "; }
+port_busy() {
+  # 任意本地地址都算占用。原写法只匹配 "127.0.0.1:$port "，而**前端特意绑 0.0.0.0**
+  # （手机/平板要能直接打开界面）—— 于是每次 start_all 都以为前端没起、去起第二个 vite，
+  # 撞 EADDRINUSE，还把 var/pids/frontend.pid 写成那个已经死掉的 pid，stop_all 会漏杀
+  # （2026-09-19 实测；ss 过滤器比 grep 字符串更准，也不会把 15178 误判成 5178）。
+  ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
+}
 
 detach() {  # detach <名字> <端口> <命令...>
   name="$1"; port="$2"; shift 2
@@ -27,19 +38,34 @@ detach() {  # detach <名字> <端口> <命令...>
     return 0
   fi
   setsid nohup "$@" >"$LOGS/$name.log" 2>&1 < /dev/null &
-  echo $! > "$PIDS/$name.pid"
+  local pid=$!
   sleep 2
   if port_busy "$port"; then
-    echo "[$name] 已启动 pid=$(cat "$PIDS/$name.pid") -> http://127.0.0.1:$port  (日志 $LOGS/$name.log)"
+    # pid 确认起得来再落盘：起失败就写进一个死 pid，stop_all 之后会照它去 kill（踩到过）
+    echo "$pid" > "$PIDS/$name.pid"
+    echo "[$name] 已启动 pid=$pid -> http://127.0.0.1:$port  (日志 $LOGS/$name.log)"
   else
+    rm -f "$PIDS/$name.pid"
     echo "[$name] 启动失败，看 $LOGS/$name.log"; tail -5 "$LOGS/$name.log"
   fi
 }
 
 start_backend() {
+  # 素材路径映射：MCP 跑在 Windows 侧时，后端递过去的 `/home/...` 对面根本不认
+  # （Windows 看不到 WSL 的文件系统），MCP 只回一句「视频文件不存在或不可访问」，
+  # 而且是在起浏览器之前就失败（2026-09-19 实测：真发一条视频笔记就死在这）。
+  # Windows 用 \\wsl.localhost\<发行版>\ 访问 WSL，正斜杠同样被认（实测）。前缀从 $WS
+  # 推导，不写死路径；同机部署（Linux 服务器上 MCP 与后端同机）留空即可，路径原样传。
+  path_map="${CHANNEL_PATH_MAP:-}"
+  if [ -z "$path_map" ] && [ "$XHS_MCP_PLATFORM" = "windows" ]; then
+    distro="${WSL_DISTRO_NAME:-$(grep -m1 '^NAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"')}"
+    [ -n "$distro" ] && path_map="${WS}=//wsl.localhost/${distro}${WS}"
+  fi
+
   detach backend 8000 env \
     PAPERCAST_DATA_DIR="$WS/var/runs" \
     PAPERCAST_UPLOAD_DIR="$WS/var/uploads" \
+    CHANNEL_PATH_MAP="$path_map" \
     "$APPS/papercast-server/.venv/bin/uvicorn" app.main:app \
       --host 127.0.0.1 --port 8000 --app-dir "$APPS/papercast-server"
 }
@@ -48,15 +74,66 @@ start_frontend() {
   # 指向真实后端；想回 mock 就去掉 VITE_API_BASE
   #
   # 绑 0.0.0.0 而不是 127.0.0.1：手机/平板要能直接打开这个界面（用户要求，2026-09-19）。
-  # 暴露的**只有前端**：接口与产物由 vite 的 /api、/artifacts 代理转发（见
-  # apps/papercast/vite.config.ts），后端仍然只听 127.0.0.1，不需要跟着暴露、也不会有 CORS。
+  # 暴露的**只有前端**：接口与产物由 vite 的 /api、/artifacts 代理转发（见 apps/papercast/vite.config.ts），
+  # 后端仍然只听 127.0.0.1，不需要跟着暴露、也不会有 CORS 问题。
   # 注意：局域网内谁都能打开这个前端（也就等于能用你的模型额度）；不想暴露就改回 127.0.0.1。
   detach frontend 5178 env VITE_API_BASE=http://127.0.0.1:8000 \
     npm --prefix "$APPS/papercast" run dev -- --host 0.0.0.0 --port 5178
 }
 
+# MCP 跑在哪一侧，**默认 wsl**（2026-09-19 改）。
+#
+# 为什么把默认从 windows 换成 wsl：Windows 侧连续 3 次（1 视频 + 2 图文）都卡在"点发布"
+# 那一步——表单全填好、`检查标题长度：通过`，然后页面不跳转、发布不落地；同一条 run 换到
+# Linux 侧**一次就发成功**（3m15s，`发布成功，已跳转离开发布页`）。能发 > 暴露面小，所以
+# 默认定在能发的那一侧。
+#
+# 代价要知道：Linux 侧是「无头 Chromium + 指纹伪装成 Windows + stealth 关闭」，风控暴露面
+# 比 Windows 侧大（Windows 是真有头 Chrome、指纹与真实 OS 一致）。想用 Windows 侧就显式
+# `XHS_MCP_PLATFORM=windows ./ops/start_all.sh`，但记得后端也要按同一边重启（见下面那段警告）。
+# 详见 docs/xhs-account-safety.md。
+XHS_MCP_PLATFORM="${XHS_MCP_PLATFORM:-wsl}"
+
+# ⚠️ MCP 换边之后**必须按同一边重启后端**：素材路径映射（CHANNEL_PATH_MAP）是后端启动时
+# 定死的，后端不会自己发现 MCP 换了机器。2026-09-19 实测踩到：只重启了 Linux 侧 MCP、
+# 没重启后端，于是后端继续递 Windows 的 `//wsl.localhost/...`，Linux 进程只回一句
+# 「图片文件不存在」，6 张图全丢、卡到 5 分钟超时——看上去像风控，其实是路径不对。
+# 这里主动对照一次（后端把映射如实报在 /api/env 里），别让下一个人再猜。
+mcp_side_mismatch_warn() {
+  env_json="$(curl -s --max-time 5 "http://127.0.0.1:8000/api/env" 2>/dev/null)" || return 0
+  [ -n "$env_json" ] || return 0
+  case "$env_json" in
+    *'"pathMap":""'*) backend_mapped=no ;;
+    *'"pathMap"'*)    backend_mapped=yes ;;
+    *) return 0 ;;
+  esac
+  if [ "$XHS_MCP_PLATFORM" = "windows" ] && [ "$backend_mapped" = "no" ]; then
+    echo "[mcp] ⚠️ MCP 跑 Windows 侧，但在跑的后端没有路径映射 —— 素材路径对面读不到。"
+    echo "[mcp] ⚠️ 修法：XHS_MCP_PLATFORM=windows ./ops/start_all.sh backend"
+  elif [ "$XHS_MCP_PLATFORM" != "windows" ] && [ "$backend_mapped" = "yes" ]; then
+    echo "[mcp] ⚠️ MCP 跑 Linux 侧，但在跑的后端还带着 Windows 路径映射 —— 素材会被翻译成"
+    echo "[mcp] ⚠️ //wsl.localhost/...，本地进程读不到（实测就是这么白失败一次的）。"
+    echo "[mcp] ⚠️ 修法：XHS_MCP_PLATFORM=wsl ./ops/start_all.sh backend"
+  fi
+}
+
+# MCP 的存活检测走 HTTP 而不是端口：WSL 的 ss **看不到 Windows 的监听**（实测），
+# HTTP /health 才是跨 WSL/Windows 都成立的判据。
+mcp_alive() { curl -s -o /dev/null --max-time 3 "http://127.0.0.1:18060/health"; }
+
 start_mcp() {
-  # 本机服务必须清掉代理变量，否则请求会被 http_proxy 吃掉；
+  mcp_side_mismatch_warn
+  if [ "$XHS_MCP_PLATFORM" = "windows" ]; then
+    if command -v powershell.exe >/dev/null 2>&1; then
+      "$WS/ops/mcp_windows.sh" start
+      return $?
+    fi
+    # 服务器上没有 Windows，回退是预期路径；本机也可以 XHS_MCP_PLATFORM=wsl 强制走这边。
+    echo "[mcp] ⚠️ 找不到 powershell.exe（不在 WSL / 没开 interop），回退到 Linux 侧二进制"
+    echo "[mcp] ⚠️ Linux 侧是无头 Chromium + 指纹伪装成 Windows，风控暴露面更大"
+  fi
+
+  # 以下为 Linux 侧。必须清掉代理变量，否则请求会被 http_proxy 吃掉；
   # 四个必须注意的点（2026-09-19 踩过）：
   # 1. 必须在 apps/xiaohongshu-mcp/ 里起：它的 cookie 是**相对当前目录**的 cookies.json
   #    （见 apps/xiaohongshu-mcp/cookies/cookies.go 的 localCookiesPath），换 cwd 会新建空文件并掉登录；

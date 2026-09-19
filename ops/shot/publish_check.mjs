@@ -126,8 +126,11 @@ if (await gatePublish.count()) {
   await page.waitForTimeout(800)
   const afterCancel = await page.evaluate(() => ({
     askClosed: !document.querySelector('.sheet'),
-    // 取消之后绝不能出现回执（回执=真的走完了一次投递）
-    receipt: !!document.querySelector('.receipt'),
+    // 取消之后绝不能出现**投递**回执（投递回执=真的走完了一次发布）。
+    // 不能只看 `.receipt` 在不在：上一步「仅存草稿」是**有意**留回执的，那张是 `.receipt.draft`，
+    // 留着它会给这条断言误报 FAIL（2026-09-19 修）。判据改成回执的性质。
+    receipt: !!document.querySelector('.receipt.published, .receipt.failed, .receipt.blocked'),
+    receiptCls: (document.querySelector('.receipt') || {}).className || '',
     sheetStillOpen: !!document.querySelector('.pub'),
   }))
   out.cases.push({ step: 'cancel', ...afterCancel })

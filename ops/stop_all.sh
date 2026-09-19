@@ -11,7 +11,7 @@
 # /proc/<pid>/cmdline —— 它是世界可读的，跨沙箱也能拿到。
 #
 # 用法：
-#   ./ops/stop_all.sh                 # 停全部（backend/frontend/mcp/zhihu）
+#   ./ops/stop_all.sh                 # 停全部（backend/frontend/mcp/zhihu/bilibili）
 #   ./ops/stop_all.sh backend         # 只停后端（可给多个：backend frontend）
 #   ./ops/stop_all.sh backend zhihu   # 只停这两个
 #   DRY=1 ./ops/stop_all.sh backend   # 只列出会停谁，不动手
@@ -31,6 +31,7 @@ PATTERNS=(
   "frontend|apps/papercast/node_modules/.bin/vite"
   "mcp|ops/bin/xiaohongshu-mcp"
   "zhihu|uvicorn app.main:app --host 127.0.0.1 --port 18070"
+  "bilibili|uvicorn app.main:app --host 127.0.0.1 --port 18080"
   "mcp-browser|var/cache/xiaohongshu-mcp/browser"
 )
 
@@ -45,7 +46,7 @@ if [ "$WANT" != "all" ]; then
     ok=0
     for entry in "${PATTERNS[@]}"; do [ "$w" = "${entry%%|*}" ] && ok=1; done
     [ "$w" = "mcp-browser" ] && ok=1
-    [ "$ok" = "1" ] || { echo "⚠️ 不认识的目标：$w（可选：backend frontend mcp zhihu mcp-browser all）"; exit 2; }
+    [ "$ok" = "1" ] || { echo "⚠️ 不认识的目标：$w（可选：backend frontend mcp zhihu bilibili mcp-browser all）"; exit 2; }
   done
 fi
 echo "== 目标：$WANT =="
