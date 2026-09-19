@@ -134,7 +134,7 @@ watch(() => [pub.open, pub.channelId], () => {
           <div v-else-if="pub.error" class="pub-note err">
             <p>读不到待发内容：{{ pub.error }}</p>
             <div class="row">
-              <button class="btn sm" @click="pub.load">重试</button>
+              <button class="btn sm" @click="pub.load(true)">重试</button>
               <button class="btn sm" @click="ui.setView('platforms'); pub.close()">去「平台账号」看看</button>
             </div>
           </div>
@@ -156,7 +156,7 @@ watch(() => [pub.open, pub.channelId], () => {
                 </span>
               </button>
 
-              <button class="btn ghost sm reload" :disabled="pub.loading" @click="pub.load">重新检查</button>
+              <button class="btn ghost sm reload" :disabled="pub.loading" @click="pub.load(true)">重新检查</button>
             </nav>
 
             <!-- 右：这一份稿子 -->

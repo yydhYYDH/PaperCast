@@ -76,6 +76,9 @@ export const usePublishStore = defineStore('publish', {
     _tick: undefined as number | undefined,
     /** 最近一次调用的回执（真投递、落草稿都记） */
     result: null as RunPublishResult | null,
+    /** 草稿数据是什么时候、为哪条运行读的 —— 用来做 60 秒内的复用，见 load() */
+    loadedAt: 0,
+    _loadedFor: '',
     /** 界面改过的文案，按渠道存：切来切去不会把编辑丢掉 */
     edits: {} as Record<string, DraftEdit>,
   }),
@@ -118,7 +121,7 @@ export const usePublishStore = defineStore('publish', {
       this.channelId = channelId
       this.result = null
       this.error = ''
-      this.data = null
+      if (this._loadedFor !== runId) this.data = null   // 换了一条运行才清掉旧的
       await this.load()
     },
 
@@ -127,13 +130,17 @@ export const usePublishStore = defineStore('publish', {
       this.busy = ''
       this.result = null
       this.error = ''
-      // 下次打开重新读：期间渠道可能登录了、产物可能变了
-      this.data = null
+      // 数据留着（60 秒内复用，见 load()）：重开面板不用再等一次探测；
+      // 过期或想看最新时点面板里的「重新检查」
     },
 
-    /** 读逐渠道草稿（真产物 + 真登录态）。读不到就说读不到，不编。 */
-    async load() {
+    /** 读逐渠道草稿（真产物 + 真登录态）。读不到就说读不到，不编。
+     *
+     * 读一次要真去问渠道能不能收（渠道那边冷启动要新起一个浏览器，几件事撞一起还会排队），
+     * 所以同一条运行 60 秒内**复用上次结果**：关掉面板再点一次不该再等一遍；要看最新的点「重新检查」。 */
+    async load(force = false) {
       if (!this.runId) return
+      if (!force && this.data && this._loadedFor === this.runId && Date.now() - this.loadedAt < 60_000) return
       this.loading = true
       this.error = ''
       try {
@@ -142,6 +149,8 @@ export const usePublishStore = defineStore('publish', {
         const picked = pickDraft(data, this.channelId)
         this.channelId = picked?.channelId ?? ''
         this.data = data
+        this._loadedFor = this.runId
+        this.loadedAt = Date.now()
       } catch (e) {
         this.error = (e as Error).message
         this.data = null
