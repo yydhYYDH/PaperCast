@@ -233,6 +233,46 @@ export interface SkillDetail extends SkillInfo {
   truncated: boolean
 }
 
+/* --------------------------------------------------------------------------- */
+/* 文章风格：平台 × 讲述者人格（后端 app/styles.py 是唯一真源）                    */
+/* --------------------------------------------------------------------------- */
+
+/** 一条风格（风格页显示成「小红书 · 专业科普」）。字段与后端 style_menu() 一一对应 */
+export interface StyleOption {
+  /** "{platform}-{voice}"，就是发给后端的 config.article.variants 元素 */
+  variant: string
+  platform: string
+  platformLabel: string
+  voice: string
+  /** 口语化的风格名（专业科普 / 震惊流 / 白话拆解 …） */
+  short: string
+  /** 一句话：这条读起来什么样 */
+  hint: string
+  /** 参考锚点（新智元式 / 机器之心式 …），只作说明，不当风格名 */
+  anchor: string
+  /** 日志与文档里的规范名，如「小红书 × 第三人称独立视角」 */
+  label: string
+  sampled: string
+  output: string
+  bodyMin: number
+  bodyMax: number
+  unit: string
+  allowFormula: boolean
+  tagsMin: number
+  tagsMax: number
+  titleWeightMax: number | null
+  titleCharsMax: number | null
+  cards: boolean
+}
+
+export interface StyleMenu {
+  default: { platform: string; voice: string; variant: string }
+  maxVariants: number
+  platforms: { id: string; label: string }[]
+  voices: { id: string; label: string; short: string; hint: string }[]
+  styles: StyleOption[]
+}
+
 export interface PipelineApi {
   /** 人类可读的实现说明，显示在设置里 */
   readonly label: string
@@ -258,8 +298,11 @@ export interface PipelineApi {
   /* ---------- 作品库直投：不走流水线闸门的那条发布路径 ---------- */
   /** 这次运行的逐渠道待发草稿：真产物 + 真登录态 + 「为什么投不了」 */
   listRunDrafts(runId: string): Promise<RunDrafts>
-  /** 把作品投到一个渠道：confirmed=false 只落 export/（无副作用），true 才真投递 */
+  /** 把作品投到一个渠道：confirmed=false 只落 export/（无副作用），true 才真投递。
+   *  形态按渠道默认走（小红书图文、B 站视频），要成片走下面的 publishRunVideo。 */
   publishRunWork(runId: string, body: RunPublishRequest): Promise<RunPublishResult>
+  /** 把作品发成成片（小红书视频笔记 / B 站投稿）：形态选错代价大，所以单独一个端点 */
+  publishRunVideo(runId: string, body: RunPublishRequest): Promise<RunPublishResult>
 
   /* ---------- 对话 ---------- */
   /** 一问一答：回答只依据该运行已落盘的事实源（见后端 app/chat_api.py） */
@@ -280,6 +323,8 @@ export interface PipelineApi {
   skills(): Promise<SkillInfo[]>
   /** 一个技能的 SKILL.md 原文（前端「看它的规矩」用） */
   skill(name: string): Promise<SkillDetail>
+  /** 文章风格清单：平台 × 讲述者人格（风格页用它渲染「小红书 · 专业科普」这类条目） */
+  styles(): Promise<StyleMenu>
 
   /* ---------- 运营维护 ---------- */
   /** 本机五个服务的真实状态（端口 / pid / 健康 / 日志） */

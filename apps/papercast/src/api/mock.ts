@@ -15,6 +15,7 @@ import type {
   InteractionsResult,
   SkillDetail,
   SkillInfo,
+  StyleMenu,
   UploadResult,
 } from './types'
 import { EXAMPLE_PAPER, exampleSource } from '../data/example'
@@ -76,6 +77,56 @@ const MOCK_SKILLS: SkillInfo[] = [
     style: true,
   },
 ]
+
+/* --------------------------------------------------------------------------- */
+/* 文章风格：平台 × 讲述者人格（模拟器里同形状；接上真后端时来自 GET /api/styles）   */
+/* --------------------------------------------------------------------------- */
+
+const MOCK_PLATFORMS = [
+  { id: 'xhs', label: '小红书' },
+  { id: 'zhihu', label: '知乎' },
+  { id: 'bilibili', label: 'B站' },
+  { id: 'en', label: '英文传播' },
+]
+
+const MOCK_VOICES = [
+  { id: 'independent', label: '第三方独立视角', short: '专业科普', hint: '不冒充作者，先讲清做了什么，再给判断与保留意见' },
+  { id: 'peer', label: '同行拆解', short: '白话拆解', hint: '口语直给，先打比方再回到原文，顺手指出前提条件' },
+  { id: 'newsflash', label: '科技快讯', short: '震惊流', hint: '标题造势、短句推进，正文用限定语兜住，结尾外推行业影响' },
+  { id: 'analyst', label: '技术解读', short: '专业解读', hint: '按论文骨架走，归属明确、数字带出处，全程克制' },
+  { id: 'reviewer', label: '审稿人视角', short: '审稿视角', hint: '以主张是否被证据支撑为主线，好的和该补实验的都要说' },
+]
+
+const MOCK_STYLE_MENU: StyleMenu = {
+  default: { platform: 'xhs', voice: 'independent', variant: 'xhs-independent' },
+  maxVariants: 4,
+  platforms: MOCK_PLATFORMS,
+  voices: MOCK_VOICES,
+  styles: MOCK_PLATFORMS.flatMap((p) =>
+    MOCK_VOICES.map((v) => ({
+      variant: p.id + '-' + v.id,
+      platform: p.id,
+      platformLabel: p.label,
+      voice: v.id,
+      short: v.short,
+      hint: v.hint,
+      anchor: '',
+      label: p.label + ' × ' + v.label,
+      sampled: v.id === 'newsflash' || v.id === 'analyst' ? '1' : '0',
+      output: p.id === 'xhs' ? 'json' : 'markdown',
+      bodyMin: p.id === 'zhihu' ? 2000 : p.id === 'bilibili' ? 1200 : p.id === 'en' ? 320 : 0,
+      bodyMax: p.id === 'xhs' ? 1000 : p.id === 'zhihu' ? 4000 : p.id === 'bilibili' ? 2500 : 850,
+      unit: p.id === 'en' ? 'words' : 'cjk',
+      allowFormula: p.id === 'zhihu',
+      tagsMin: p.id === 'xhs' ? 8 : 3,
+      tagsMax: p.id === 'xhs' ? 12 : p.id === 'bilibili' ? 8 : 6,
+      titleWeightMax: p.id === 'xhs' ? 38 : null,
+      titleCharsMax: p.id === 'xhs' ? null : p.id === 'en' ? 90 : 40,
+      cards: p.id === 'xhs',
+    })),
+  ),
+}
+
 import type {
   Artifact,
   ArtifactKind,
@@ -733,6 +784,11 @@ export class MockPipelineApi implements PipelineApi {
   async skills(): Promise<SkillInfo[]> {
     await new Promise((r) => setTimeout(r, 120))
     return MOCK_SKILLS
+  }
+
+  async styles(): Promise<StyleMenu> {
+    await new Promise((r) => setTimeout(r, 120))
+    return MOCK_STYLE_MENU
   }
 
   async skill(name: string): Promise<SkillDetail> {

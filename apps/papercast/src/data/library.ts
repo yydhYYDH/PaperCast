@@ -8,7 +8,7 @@
  */
 import type { Artifact, ArtifactKind } from '../types'
 
-export type PlatformId = 'xhs' | 'zhihu' | 'bilibili' | 'en' | 'generic'
+export type PlatformId = 'xhs' | 'zhihu' | 'bilibili' | 'x' | 'generic'
 
 export type Tone = 'red' | 'blue' | 'green' | 'amber' | 'ink'
 
@@ -26,14 +26,16 @@ export interface PlatformMeta {
   min: number
 }
 
-/** 板块顺序：三个真实渠道 → 英文变体 → 不针对单一平台的跨平台作品。 */
-export const PLATFORM_ORDER: PlatformId[] = ['xhs', 'zhihu', 'bilibili', 'en', 'generic']
+/** 板块顺序：三个真实渠道 → X（英文 thread 的落点）→ 不针对单一平台的跨平台作品。 */
+export const PLATFORM_ORDER: PlatformId[] = ['xhs', 'zhihu', 'bilibili', 'x', 'generic']
 
 export const PLATFORM_META: Record<PlatformId, PlatformMeta> = {
   xhs: { label: '小红书', hint: '竖长图与短文案，手机上看', tone: 'red', ratio: 3 / 4, channel: 'xiaohongshu', unit: '篇图文', min: 214 },
   zhihu: { label: '知乎', hint: '长文与横版配图，给深度读者', tone: 'blue', ratio: 4 / 3, channel: 'zhihu', unit: '篇长文', min: 292 },
   bilibili: { label: 'B 站', hint: '成片视频与横屏封面', tone: 'green', ratio: 16 / 9, channel: 'bilibili', unit: '条视频', min: 336 },
-  en: { label: '英文', hint: '英文变体，本轮只生成不发布', tone: 'amber', ratio: 3 / 4, channel: 'en', unit: '件', min: 214 },
+  // X（推特）是英文传播的落点：稿子就是 article 阶段的 en 变体（6-10 条英文 thread）。
+  // 后端渠道是 material-only：只落素材包、不接投递，所以这一格的状态通常停在「存了草稿」。
+  x: { label: 'X（推特）', hint: '英文 thread，一条条发；本轮只出素材包', tone: 'ink', ratio: 3 / 2, channel: 'x', unit: '条 thread', min: 252 },
   generic: { label: '跨平台', hint: '海报母版、成片这类不针对单一平台的作品', tone: 'ink', ratio: 3 / 2, channel: '', unit: '件', min: 252 },
 }
 
@@ -42,7 +44,8 @@ const TOKENS: Array<[RegExp, PlatformId]> = [
   [/xiaohongshu|xhs/, 'xhs'],
   [/zhihu/, 'zhihu'],
   [/bilibili|bili/, 'bilibili'],
-  [/(^|[^a-z])en([^a-z]|$)/, 'en'],
+  // 英文稿的记号是 en（article/en-*.md、poster-en.png），但它落在 X 这一个平台上
+  [/(^|[^a-z])en([^a-z]|$)/, 'x'],
 ]
 
 export function platformOf(a: Artifact): PlatformId {

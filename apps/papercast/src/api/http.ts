@@ -22,6 +22,7 @@ import type {
   ConfigPatchResult,
   SkillDetail,
   SkillInfo,
+  StyleMenu,
   DraftBody,
   DraftResult,
   EnvStatus,
@@ -193,6 +194,10 @@ export class HttpPipelineApi implements PipelineApi {
 
   skill(name: string) {
     return this.json<SkillDetail>('/api/skills/' + encodeURIComponent(name))
+  }
+
+  styles() {
+    return this.json<StyleMenu>('/api/styles')
   }
 
   /* ---------- 运营维护 ---------- */

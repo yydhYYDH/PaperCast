@@ -34,7 +34,7 @@ export interface Work {
   title: string
   /** 标题的出处：回执标题（这个渠道真发的那份）/ 待发布标题 / 论文原标题 */
   titleFrom: 'receipt' | 'export' | 'paper'
-  /** 文案变体名（xhs-author 之类）；空串表示回执没写 */
+  /** 文案变体名（xhs-independent 之类，见后端 app/styles.py）；空串表示回执没写 */
   variant: string
   /** 这个平台没有专属文案、借了别家那份时，在这里说清楚 */
   borrowed: string
@@ -100,7 +100,8 @@ const TOKEN_RE: Record<PlatformId, RegExp> = {
   xhs: /xhs|xiaohongshu/,
   zhihu: /zhihu/,
   bilibili: /bili/,
-  en: /(^|[^a-z])en([^a-z]|$)/,
+  // X 的稿子就是 article 阶段的 en 变体（en-analyst.md / poster-en.png），记号仍是 en
+  x: /(^|[^a-z])en([^a-z]|$)/,
   generic: /$^/,
 }
 
@@ -160,11 +161,13 @@ function lineupFor(run: PaperRun, p: PlatformId): Lineup {
       shots: [],
     }
   }
-  if (p === 'en') {
-    // 英文变体是「真出了才有」：没有 en 专属产物就不该凭空摆一件出来
-    const hasEn = (stageOf(run, 'article')?.artifacts ?? []).concat(posters).some((a) => TOKEN_RE.en.test(a.path))
+  if (p === 'x') {
+    // 英文 thread 是「真出了才有」：没有 en 专属产物就不该凭空摆一件出来
+    const en = TOKEN_RE.x
+    const hasEn = (stageOf(run, 'article')?.artifacts ?? []).concat(posters).some((a) => en.test(a.path))
     if (!hasEn) return { shots: [] }
-    return { cover: find(posters, /poster-en\.png$/) ?? mainPoster, reader: readerFor(run, TOKEN_RE.en.source), shots: [] }
+    // X 没有专属海报（poster 阶段只出主海报 + 小红书 / 知乎 / B 站三张）—— 用主海报当封面，不编一张
+    return { cover: find(posters, /poster-en\.png$/) ?? mainPoster, reader: readerFor(run, en.source), shots: [] }
   }
   return { cover: mainPoster ?? videoCover, reader: readerFor(run, '.'), video: find(videos, /video\/video\.mp4$/), shots: cards }
 }
@@ -174,16 +177,22 @@ function lineupHas(l: Lineup): boolean {
   return !!(l.cover || l.reader || l.video || l.shots.length)
 }
 
-/** 运行声明的发布目标（xhs / zhihu / bilibili），别名归一到 PLATFORM_META.channel */
+/** 运行声明的发布目标（xhs / zhihu / bilibili / x），别名归一到 PLATFORM_META.channel */
+const TARGET_ALIAS: Record<string, string> = {
+  xhs: 'xiaohongshu', xiaohongshu: 'xiaohongshu', redbook: 'xiaohongshu',
+  bili: 'bilibili',
+  twitter: 'x', 'x-com': 'x', en: 'x',
+}
+
 function targets(run: PaperRun): Set<string> {
-  const ids = (run.config?.publish?.targets ?? []).map((t) => (t === 'xhs' ? 'xiaohongshu' : t))
+  const ids = (run.config?.publish?.targets ?? []).map((t) => TARGET_ALIAS[(t || '').toLowerCase()] ?? t)
   return new Set(ids)
 }
 
 /* ---------------------------------------------------------------- 发布状态 */
 
 const CHANNEL_LABEL: Record<PlatformId, string> = {
-  xhs: '小红书', zhihu: '知乎', bilibili: 'B站', en: '英文', generic: '',
+  xhs: '小红书', zhihu: '知乎', bilibili: 'B站', x: 'X（推特）', generic: '',
 }
 
 /** 发布阶段的检查项里写着「渠道状态：小红书 → 未登录」，这是最诚实的「为什么还没发」 */
@@ -266,7 +275,7 @@ export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
 
       const reader = l.reader
       const borrowed =
-        p !== 'generic' && reader && !new RegExp(p === 'xhs' ? 'xhs' : p).test(reader.path)
+        p !== 'generic' && reader && !TOKEN_RE[p].test(reader.path)
           ? '这个平台没有专属文案，这份借的是「' + PLATFORM_META[platformTokenOf(reader.path)].label + '」的稿子'
           : ''
 
@@ -297,6 +306,7 @@ function platformTokenOf(path: string): PlatformId {
   if (/zhihu/.test(p)) return 'zhihu'
   if (/bili/.test(p)) return 'bilibili'
   if (/xhs|xiaohongshu/.test(p)) return 'xhs'
+  if (TOKEN_RE.x.test(p)) return 'x'
   return 'generic'
 }
 
@@ -312,7 +322,12 @@ function statsFor(run: PaperRun, p: PlatformId, l: Lineup, rec?: ChannelReceipt)
   const vmeta = (l.video?.meta ?? {}) as Record<string, number>
   if (p === 'bilibili' && vmeta.durationSec) out.push(fmtDuration(Number(vmeta.durationSec)))
 
-  if (rec?.contentChars) out.push(rec.contentChars.toLocaleString('zh-CN') + ' 字')
+  const enWords = Number((l.reader?.meta || {}).words)
+  if (p === 'x') {
+    // 英文 thread 按词数说：回执里的 contentChars 是字符数，写成「字」会被读成中文篇幅
+    if (enWords) out.push(enWords.toLocaleString('zh-CN') + ' 词')
+    else if (rec?.contentChars) out.push(rec.contentChars.toLocaleString('zh-CN') + ' 字符')
+  } else if (rec?.contentChars) out.push(rec.contentChars.toLocaleString('zh-CN') + ' 字')
   else if (p !== 'bilibili' && words(run)) out.push(words(run).toLocaleString('zh-CN') + ' 字')
 
   if (l.shots.length) out.push(l.shots.length + ' 张卡片')

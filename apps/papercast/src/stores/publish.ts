@@ -69,7 +69,7 @@ export const usePublishStore = defineStore('publish', {
     loading: false,
     error: '',
     /** '' | 'draft' | 'publish' —— 正在做什么，用来禁按钮 */
-    busy: '' as '' | 'draft' | 'publish',
+    busy: '' as '' | 'draft' | 'publish' | 'video',
     /** 最近一次调用的回执（真投递、落草稿都记） */
     result: null as RunPublishResult | null,
     /** 界面改过的文案，按渠道存：切来切去不会把编辑丢掉 */
@@ -201,13 +201,21 @@ export const usePublishStore = defineStore('publish', {
       }
     },
 
-    /** 真投递：**不可逆**，所以先过人工确认，再带 confirmed=true 调后端 */
-    async deliver() {
+    /**
+     * 真投递：**不可逆**，所以先过人工确认，再带 confirmed=true 调后端。
+     *
+     * `media`：`'default'`（不填）= 按渠道默认形态（小红书图文、B 站成片）；
+     * `'video'` = 这次发成片，走单独的 `/publish/video`。形态必须由**这次点击**决定并
+     * 写进确认文案 —— 小红书里图文笔记和视频笔记是两种笔记，发错形态是撤不回来的。
+     */
+    async deliver(media: 'default' | 'video' = 'default') {
       const d = pickDraft(this.data, this.channelId)
       if (!d || this.busy) return
       const ui = useUiStore()
       const runs = useRunsStore()
 
+      const wantVideo = media === 'video'
+      const form = wantVideo ? '视频笔记' : (d.defaultMedia === 'video' ? '成片' : '图文笔记')
       const who = d.account ? `当前账号：${d.account}。` : ''
       const prev = this.data?.previous
       const again = prev
@@ -215,22 +223,25 @@ export const usePublishStore = defineStore('publish', {
         : ''
       const ok = await ui.askConfirm({
         title: `把这篇作品发到${d.name}？`,
-        text: `${who}发出后不可撤销，${d.name}上会立刻公开可见。${again}`,
+        text: `${who}这次发的是「${form}」，发出后不可撤销，${d.name}上会立刻公开可见。${again}`,
         okLabel: '确认发布',
         cancelLabel: '再想想',
         tone: 'warn',
       })
       if (!ok) return
 
-      this.busy = 'publish'
+      this.busy = wantVideo ? 'video' : 'publish'
       this.error = ''
       try {
-        const res = await api.publishRunWork(this.runId, {
+        const req = {
           channelId: d.channelId,
           confirmed: true,
           confirmAccount: d.account || undefined,
           ...this.overrides(),
-        })
+        }
+        const res = wantVideo
+          ? await api.publishRunVideo(this.runId, req)
+          : await api.publishRunWork(this.runId, req)
         this.result = res
         this.report(res, d.name)
         // 回执要落进作品库：刷新运行记录（后端已把回执并进总表并登记成产物）

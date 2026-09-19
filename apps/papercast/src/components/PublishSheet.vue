@@ -8,7 +8,11 @@
  * 界面上只做三件事，其余交给后端：
  *   1. 说清**现在会投哪一份文案**（后端按渠道拣好的，前端不挑变体）；
  *   2. 允许改标题 / 正文 / 标签（改完后端会再按平台规则判一次）；
- *   3. 给两个动作：**仅存草稿**（无副作用）与**确认发布**（不可逆，走 ui.askConfirm）。
+ *   3. 给动作：**仅存草稿**（无副作用）、**确认发布**（按渠道默认形态，不可逆，走 ui.askConfirm），
+ *      以及**发布视频**（run 里另有成片时才出现）。
+ *
+ * 形态（图文 / 视频）由后端口径决定：默认那个是渠道说了算（`defaultMedia`，小红书图文、
+ * B 站成片），本组件只负责**把这次发哪个形态写在按钮上方**，不自己判断能发什么。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { assetUrl } from '../api'
@@ -57,6 +61,15 @@ async function doLogin() {
 /** 只显示前 6 张配图：发布面板不是图库，真实张数写在旁边 */
 const shots = computed(() => (draft.value?.images ?? []).slice(0, 6))
 const shotTotal = computed(() => draft.value?.images?.length ?? 0)
+
+/** 主按钮发的形态：渠道说了算（小红书图文、B 站成片），界面不自己猜 */
+const defaultIsVideo = computed(() => draft.value?.defaultMedia === 'video')
+const formWord = computed(() => (defaultIsVideo.value ? '成片' : '图文'))
+/** 成片可发：素材里有，而且这个渠道本来就能发视频（X 那种只出素材包的不给这个动作） */
+const canPostVideo = computed(() => {
+  const d = draft.value
+  return Boolean(d?.video) && (d?.capabilities ?? []).includes('video') && !defaultIsVideo.value
+})
 
 const statusChip = computed(() => {
   const d = draft.value
@@ -187,7 +200,9 @@ watch(() => [pub.open, pub.channelId], () => {
               <div v-if="shots.length" class="media">
                 <div class="row spread">
                   <span class="lbl">配图</span>
-                  <span class="panel-sub">{{ shotTotal }} 张，随稿一起投</span>
+                  <span class="panel-sub">
+                    {{ shotTotal }} 张{{ defaultIsVideo ? '，发成片时用不上' : '，随图文一起投' }}
+                  </span>
                 </div>
                 <div class="shots">
                   <a v-for="m in shots" :key="m.path" :href="assetUrl(m.url)" target="_blank" rel="noreferrer" :title="'看原图 ' + m.name">
@@ -195,21 +210,27 @@ watch(() => [pub.open, pub.channelId], () => {
                   </a>
                 </div>
               </div>
-              <div v-else-if="draft.video" class="media">
+              <div v-if="draft.video" class="media">
                 <span class="lbl">成片</span>
-                <span class="panel-sub">{{ draft.video.name }} 会一起投上去</span>
+                <span class="panel-sub">
+                  {{ draft.video.name }}{{ defaultIsVideo ? ' 会投上去' : '，点下面「发布视频」才发它' }}
+                </span>
               </div>
 
-              <!-- 闸门：能投就给两个动作，不能投就说清为什么与下一步 -->
+              <!-- 闸门：能投就给动作，不能投就说清为什么与下一步 -->
               <div class="gate" :class="pub.canPublish ? 'ok' : 'blocked'">
                 <template v-if="pub.canPublish">
                   <p class="gate-line">
-                    发出后不可撤销：{{ draft.name }}上会立刻公开可见。
+                    <!-- 形态必须说在按钮正上方：小红书里图文笔记和视频笔记是两种笔记，发错撤不回来 -->
+                    这次发的是<strong>{{ formWord }}</strong>。发出后不可撤销：{{ draft.name }}上会立刻公开可见。
                     <template v-if="draft.reason">素材检查：{{ draft.reason }}。</template>
                   </p>
                   <div class="row wrap gap">
-                    <button class="btn primary" :disabled="pub.busy !== ''" @click="pub.deliver">
+                    <button class="btn primary" :disabled="pub.busy !== ''" @click="pub.deliver()">
                       {{ pub.busy === 'publish' ? '正在投递…' : '确认发布' }}
+                    </button>
+                    <button v-if="canPostVideo" class="btn" :disabled="pub.busy !== ''" @click="pub.deliver('video')">
+                      {{ pub.busy === 'video' ? '正在投递…' : '发布视频' }}
                     </button>
                     <button class="btn" :disabled="pub.busy !== ''" @click="pub.saveDraft">
                       {{ pub.busy === 'draft' ? '正在存…' : '仅存草稿' }}

@@ -21,6 +21,11 @@ const CHANNEL_ALIAS: Record<string, string> = {
   bilibili: 'bilibili',
   bili: 'bilibili',
   zhihu: 'zhihu',
+  // X（推特）：别名 twitter / x-com 都认；历史配置里把英文传播写成 'en' 的也归到 x
+  x: 'x',
+  twitter: 'x',
+  'x-com': 'x',
+  en: 'x',
 }
 
 /** 把任意写法归一成我们的渠道 id（认不出来就原样小写返回） */
@@ -63,15 +68,28 @@ export const usePlatformsStore = defineStore('platforms', {
         targets.length > 0 &&
         targets.every((t) => state.channels.find((c) => c.id === normalizeChannelId(t))?.state === 'ready')
     },
-    /** 未就绪的勾选渠道（原始写法），用于给出「为什么不能发布 / 哪些会被跳过」 */
+    /** 未就绪的勾选渠道（原始写法），用于给出「为什么不能发布 / 哪些会被跳过」。
+     *  `material_only`（X：只出素材包、没有投递通道）**不算未就绪** —— 它不是环境不对，是设计上就不投 */
     targetsBlocked(state) {
       return (targets: string[]) =>
-        targets.filter((t) => state.channels.find((c) => c.id === normalizeChannelId(t))?.state !== 'ready')
+        targets.filter((t) => {
+          const s = state.channels.find((c) => c.id === normalizeChannelId(t))?.state
+          return s !== 'ready' && s !== 'material_only'
+        })
     },
-    /** 至少有一个渠道真的能投递 —— 只有全都没就绪时才拦「确认发布」 */
+    /** 只出素材包的勾选渠道（X）：单独说一句，不混进「未就绪」 */
+    materialOnlyTargets(state) {
+      return (targets: string[]) =>
+        targets.filter((t) => state.channels.find((c) => c.id === normalizeChannelId(t))?.state === 'material_only')
+    },
+    /** 至少有一个渠道能走完这一轮 —— 全都没就绪时才拦「确认发布」。
+     *  material_only 也算「能走完」：放行它只是落素材包 + draft 回执，不会真发 */
     anyTargetReady(state) {
       return (targets: string[]) =>
-        targets.some((t) => state.channels.find((c) => c.id === normalizeChannelId(t))?.state === 'ready')
+        targets.some((t) => {
+          const s = state.channels.find((c) => c.id === normalizeChannelId(t))?.state
+          return s === 'ready' || s === 'material_only'
+        })
     },
   },
 

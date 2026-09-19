@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '../api'
 import { exampleRunConfig } from '../data/example'
+import { variantsFromText } from '../data/stylePick'
 import { useRunsStore } from './runs'
 import { useUiStore } from './ui'
 import { useStyleStore } from './style'
@@ -612,6 +613,10 @@ export const useChatStore = defineStore('chat', {
     runConfig(userWords = '') {
       const cfg = exampleRunConfig()
       const style = useStyleStore()
+      // 说出口的要真的算数：这句话里点到的平台/口吻直接改这一轮的 variants。
+      // （只写进 brief 的话，平台与校验规则其实没变 —— 那就成了「说了不认」。）
+      const fromWords = variantsFromText(userWords, style.effectiveVariants, style.maxVariants)
+      if (fromWords.length) cfg.article.variants = fromWords
       cfg.brief = style.buildBrief([cfg.brief ?? '', userWords].filter(Boolean).join('；'))
       return cfg
     },

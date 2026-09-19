@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { EXAMPLE_PAPER } from '../../data/example'
 import { useStyleStore } from '../../stores/style'
 
@@ -13,6 +13,10 @@ const emit = defineEmits<{
 
 /** 当前风格：决定这一轮内容写成什么样（接口见 stores/style.ts） */
 const style = useStyleStore()
+
+// 这一行要写成人话（「知乎 · 专业解读」而不是 zhihu-analyst），所以先把风格清单读进来；
+// store 自己有幂等保护，风格页再调一次不会重复请求。
+onMounted(() => void style.load())
 
 /**
  * 占位文案跟着屏宽走：原来那句「粘贴链接、拖一份 PDF，或者直接问我这次的结果」在
@@ -118,9 +122,11 @@ function say(t: string) {
       <button class="say" @click="say('这篇论文的局限是什么')">这篇论文的局限是什么</button>
     </p>
     <p class="hint">
-      风格：<button class="say" @click="emit('style')">{{ style.current }}</button>
-      <span class="sep">·</span>它决定这一轮文章的语气、海报的排版，会写进本次运行的 brief
-      <span class="sep">·</span>默认：一篇中文长文 + 一张海报 + 一段讲解视频，三个平台先排稿、发布要你点头
+      这轮写成：<button class="say" @click="emit('style')">{{ style.effectiveLabel }}</button>
+      <span class="sep">·</span>点开换平台或口吻，也可以直接说「做成小红书+知乎，用机器之心的口吻」
+    </p>
+    <p class="hint">
+      其它默认：一篇中文长文 + 一张海报 + 一段讲解视频，三个平台先排稿、发布要你点头
     </p>
   </div>
 </template>

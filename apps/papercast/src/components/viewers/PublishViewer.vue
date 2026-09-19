@@ -31,6 +31,12 @@ const CHANNELS = [
     needs: ['横版 16:9 视频', '竖版封面', '分区 / 简介 / 标签'],
     note: '需要先扫码登录；元数据校验已通过',
   },
+  {
+    id: 'x',
+    name: 'X（推特）',
+    needs: ['英文传播：6-10 条英文 thread'],
+    note: '只把英文 thread 落成本地素材包，不接投递通道 —— 这一轮不会真的发到 X',
+  },
 ]
 
 const targets = computed(() => props.run.config.publish.targets)
@@ -54,6 +60,8 @@ function noteOf(id: string, fallback: string) {
   return infoOf(id)?.detail || fallback
 }
 
+/** 只出素材包的渠道（X）：判定在 store 里（不算就绪、也不算未就绪），这里只管说一句话 */
+const materialOnly = computed(() => platforms.materialOnlyTargets(targets.value))
 /** 勾选了但登录态没就绪的渠道：这些渠道本轮投不出去（原始写法，'xiaohongshu' 与 'xhs' 等价） */
 const blocked = computed(() => platforms.targetsBlocked(targets.value))
 /** 中文名，用于文案展示 */
@@ -90,6 +98,10 @@ onMounted(() => {
           确认发布
         </button>
       </div>
+
+      <p v-if="materialOnly.length" class="muted">
+        {{ materialOnly.map((id) => infoOf(id)?.name ?? id).join('、') }}：只出素材包，不真发 —— 稿子会落在本地，可手动贴上去。
+      </p>
 
       <p v-if="blocked.length" class="warn-line">
         未就绪的渠道：{{ blockedNames.join('、') }}，本轮不会投递它们。

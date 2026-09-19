@@ -3,7 +3,7 @@ import type { RunConfig, SourceInput } from '../types'
 /**
  * 默认示例：**只在这一个文件里定义**。
  *
- * 之前这份元数据在 IntakePanel（写死了 authors: ['Zayn Zhu', 'Show Lab']）与
+ * 之前在改版前的输入面板里（写死了 authors: ['Zayn Zhu', 'Show Lab']，那个组件已随对话优先改版移除）与
  * mock 的种子运行（Zeyu Zhu / Kevin Qinghong Lin / Mike Zheng Shou）各存一份，
  * 两处不一致 —— 示例是用户看到的第一眼，错名字最扎眼。收敛到这里。
  */
