@@ -387,6 +387,39 @@ def _modal_uploaded_count(page: Any) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _modal_image_input(page: Any) -> Any:
+    """弹窗里那个上传输入框（找不到返回 None）。"""
+    for sel in IMAGE_INPUTS:
+        try:
+            inp = page.query_selector(sel)
+        except Exception:
+            inp = None
+        if inp is not None:
+            return inp
+    return None
+
+
+def _wait_modal_uploaded(page: Any, target: int, *, timeout: float = 150.0, stall: float = 12.0) -> int:
+    """等弹窗里的「已上传 N 张图片」涨到 target，返回最后看到的 N。
+
+    快在两点：0.25 秒一问（原来 1 秒一问），到了就立刻返回；
+    连续 stall 秒没变化就当卡住，不傻等到超时（2026-09-19 前逐张传 8 张，实测 61 秒里大半花在这里）。
+    """
+    deadline = time.monotonic() + timeout
+    last = _modal_uploaded_count(page)
+    last_change = time.monotonic()
+    while time.monotonic() < deadline:
+        n = _modal_uploaded_count(page)
+        if n >= target:
+            return n
+        if n != last:
+            last, last_change = n, time.monotonic()
+        elif time.monotonic() - last_change > stall:
+            return n
+        time.sleep(0.25)
+    return _modal_uploaded_count(page)
+
+
 def _insert_images(page: Any, warnings: list[str]) -> bool:
     """点弹窗里的「插入图片」—— 上传到弹窗只是进了队列，不点这个不会进正文。"""
     for _ in range(3):
@@ -440,33 +473,46 @@ def _set_images(page: Any, images: list[str], warnings: list[str]) -> tuple[int,
         return 0, len(images)
 
     uploaded = 0
-    for path in todo:
-        before = _modal_uploaded_count(page)
-        sent = False
-        for _ in range(2):
-            inp = None
-            for sel in IMAGE_INPUTS:
-                inp = page.query_selector(sel)
-                if inp is not None:
+    # 一次把全部图交给弹窗（若那个 input 支持 multiple）：弹窗自己排队上传。
+    # 逐张传时每张「一次 set_input_files + 最多 25 次 ×1 秒 轮询」，8 张实测光这一步就 ~50 秒。
+    inp0 = _modal_image_input(page)
+    multi = False
+    try:
+        multi = bool(inp0 is not None and inp0.get_attribute("multiple") is not None)
+    except Exception:
+        multi = False
+    if multi and len(todo) > 1:
+        logger.info(f"配图一次传 {len(todo)} 张（弹窗 input 支持 multiple，不再逐张）")
+        try:
+            inp0.set_input_files([str(p) for p in todo])
+            uploaded = _wait_modal_uploaded(page, len(todo))
+            if uploaded < len(todo):
+                # 只报告差额，**不重传**已排队的那些：重传会让同一张图进正文两次
+                warnings.append(f"一次传 {len(todo)} 张，弹窗里确认到 {uploaded} 张")
+        except Exception as exc:
+            warnings.append(f"一次传图失败（{type(exc).__name__}: {str(exc)[:80]}），改回逐张")
+            uploaded = 0
+
+    if uploaded == 0:
+        for path in todo:
+            before = _modal_uploaded_count(page)
+            sent = False
+            for _ in range(2):
+                inp = _modal_image_input(page)
+                if inp is None:
                     break
-            if inp is None:
-                break
-            try:
-                inp.set_input_files(str(path))
-            except Exception as exc:
-                warnings.append(f"配图塞不进去：{path.name}（{type(exc).__name__}: {str(exc)[:80]}）")
-                break
-            for _ in range(25):          # 上传有往返，最多等 25 秒
-                time.sleep(1.0)
-                if _modal_uploaded_count(page) > before:
+                try:
+                    inp.set_input_files(str(path))
+                except Exception as exc:
+                    warnings.append(f"配图塞不进去：{path.name}（{type(exc).__name__}: {str(exc)[:80]}）")
                     break
-            if _modal_uploaded_count(page) > before:
-                uploaded += 1
-                sent = True
-                break
-            time.sleep(1.0)
-        if not sent:
-            warnings.append(f"配图没传上去：{path.name}（弹窗里的已上传数没变）")
+                if _wait_modal_uploaded(page, before + 1, timeout=30.0, stall=8.0) > before:
+                    uploaded += 1
+                    sent = True
+                    break
+                time.sleep(0.5)
+            if not sent:
+                warnings.append(f"配图没传上去：{path.name}（弹窗里的已上传数没变）")
 
     if uploaded == 0:
         _dismiss_modals(page)

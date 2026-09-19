@@ -13,7 +13,7 @@ backend 只按 HTTP 调它，因此 backend venv 不需要 playwright。
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/health` | 存活 + cookies 路径 |
-| GET | `/api/v1/login/status` | `{is_logged_in, username, cookies_path, cookie_count}` |
+| GET | `/api/v1/login/status` | `{is_logged_in, username, account_token, cookies_path, cookie_count, checkedBy, detail}`。`checkedBy` 如实说明这次**怎么判的**：`api`=问过知乎本人接口、`browser`=起浏览器确认过、`cookies`=只看了 cookies 文件 |
 | POST | `/api/v1/login/start` | 弹有头浏览器，等人工登录；返回后前端**轮询 status**。无 DISPLAY 时返回 409 `NO_DISPLAY` |
 | DELETE | `/api/v1/login/cookies` | 清登录态 |
 | POST | `/api/v1/export` | **无副作用**：把标题/正文/图片/话题落到 `var/artifacts/zhihu/export/<runId>/` |
@@ -21,6 +21,26 @@ backend 只按 HTTP 调它，因此 backend venv 不需要 playwright。
 | GET | `/api/v1/verify?url=&title=` | **纯读**核验一个链接还在不在：账号文章列表里有没有它、文章页能不能打开；返回 `{verified, canonicalUrl, total, how, note}` |
 
 错误统一 `{"success": false, "error": {"code", "message"}}`，与 backend `PlatformError` 同形。
+
+## 快与慢：一次探测从 8 秒变 0.2 秒，以及两把锁
+
+2026-09-19 实测（本机）之后做的三件事，都是为了「点发布别卡那么久」：
+
+1. **探登录态不再起浏览器。** 老实现要起**两次**浏览器（先 `check_login_status()` 确认登录、再打一次
+   `/api/v4/me` 取昵称），冷的一次 6~9 秒。现在带 cookies 直接打一次
+   `https://www.zhihu.com/api/v4/me` 就拿到 `{name, url_token}` —— 这是向知乎本人接口核实，不是拿
+   cookies 猜；实测 **8.0s → 0.22s**，后端 `/api/platforms?force=1` 从 **32s → 0.24s**。
+   ⚠️ 这里只能用**标准库 urllib**：本服务的解释器是 `var/toolchains/zhihu-mcp-venv`，**没有 httpx**
+   （2026-09-19 踩过：写完 httpx 版直接 500）。HTTP 问不上（网络/被挡）时才退一步起浏览器确认，
+   并在 `checkedBy` 里如实标注。
+2. **两把锁分工。** `_PUBLISH_LOCK` 只给真发布（一个账号同时只能有一篇在写，发布之间必须串行）；
+   `_BROWSER_LOCK` 给其它要用浏览器的只读动作（运营数据、链接核验、登录态兜底探测）。原来所有动作
+   共用一把锁，前端一探渠道状态就把发布排到后面 —— 实测三个探测接口并发时 /api/env 61.7s、
+   /api/platforms 54.1s、drafts 45.8s；拆开后同一组并发 **1.0s / 0.002s / 1.1s**。
+3. **8 张图一次传完。** 弹窗的 `input[type=file]` 支持 `multiple` 时，一次
+   `set_input_files([...8 张])` 交给弹窗自己排队，轮询粒度 1s → 0.25s（还有 12s 无变化就认为卡住，
+   不傻等超时）；不支持 `multiple` 时才回退到原来逐张传的老路。相同材料 dry_run 实测
+   **61.1s → 24.0s**，8/8 张都进正文（正文块数 136 不变）。
 
 ## 发布后核验（`app/article_flow.py` 的 `verify_published`）
 

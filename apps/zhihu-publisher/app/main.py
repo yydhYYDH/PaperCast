@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -57,14 +58,21 @@ os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache" / "
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+logger = logging.getLogger("zhihu.publisher")
+
 app = FastAPI(title="zhihu-publisher", version="0.1.0")
 
-# 上游 ZhihuService 用的是 Playwright **同步** API，且每次探测都要开一次浏览器：
-# 必须丢到线程里执行（不能在事件循环里直接跑），并用锁串行化，避免并发开多个浏览器。
+# 两把锁，分工不同（2026-09-19 拆开）：
+#   _PUBLISH_LOCK：**只有真发布**（含 dry_run 填稿）占它。一个账号同一时刻只能有一个发布在写，
+#                  两个发布撞一起会把同一篇稿子点坏，所以发布之间必须串行。
+#   _BROWSER_LOCK：其它要用浏览器的只读动作（运营数据、链接核验、登录态兜底探测）之间串行。
+# 为什么要分开：原来所有动作共用一把锁，前端一探渠道状态（探一次要起一个浏览器）就把发布排在后面，
+# 用户点了发布要等几十秒才动 —— 实测并发三个探测接口时 /api/env 61s、/api/platforms 54s。
+_PUBLISH_LOCK = asyncio.Lock()
 _BROWSER_LOCK = asyncio.Lock()
 
-# 上游 check_login_status 只返回「已登录用户」这类占位名，真实账号名要打 /api/v4/me。
-# 探测一次要开一次浏览器，所以状态缓存 20s、账号名缓存 10min，避免前端轮询把浏览器打爆。
+# 上游 check_login_status 只返回「已登录用户」这类占位名。登录态现在一次 HTTP 就够（见 _probe_me_http），
+# 但前端的探测缓存仍保留：20s 内复用，别让轮询把知乎接口打爆；账号名缓存 10min。
 _STATE_TTL = float(os.environ.get("ZHIHU_STATE_TTL", "20"))
 _ACCOUNT_TTL = float(os.environ.get("ZHIHU_ACCOUNT_TTL", "600"))
 _STATE_CACHE: dict[str, Any] = {"at": 0.0, "data": None}
@@ -112,48 +120,140 @@ def _cookie_names() -> list[str]:
     return sorted({c.get("name", "") for c in data if isinstance(c, dict)})
 
 
-def _login_state() -> dict[str, Any]:
-    """登录态：以 cookies 里有没有 z_c0 为第一判据，再让浏览器确认一次。"""
+# --------------------------------------------------------------------------- #
+# 登录态：一次 HTTP 就够，别再起浏览器（2026-09-19）
+# --------------------------------------------------------------------------- #
+# 老实现要起**两次**浏览器：先 ZhihuService.check_login_status() 确认登录，再打一次 /api/v4/me 取昵称；
+# 冷的一次实测 6~9 秒，还会和发布抢同一把锁（前端一探渠道状态，发布就得排队）。
+# 实测：带着 cookies 直接打 https://www.zhihu.com/api/v4/me 就返回 {name, url_token} ——
+# 这是向知乎本人接口核实，不是拿 cookies 文件猜。
+_ME_URL = "https://www.zhihu.com/api/v4/me"
+_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/124.0.0.0 Safari/537.36")
+_LOGIN_HTTP_TIMEOUT = float(os.environ.get("ZHIHU_LOGIN_HTTP_TIMEOUT", "10"))
+
+
+def _cookie_header() -> str:
+    """cookies.json 拼成一行 Cookie 头（只取 zhihu 域；值不落日志、不外传）。
+
+    这里不用第三方 HTTP 客户端的 cookie jar：本服务的解释器是
+    var/toolchains/zhihu-mcp-venv（**没有 httpx** —— 2026-09-19 实测踩到，500 了一次），
+    所以只用标准库，别引入新依赖。
+    """
+    if not COOKIES_PATH.is_file():
+        return ""
+    try:
+        data = json.loads(COOKIES_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    out: list[str] = []
+    for c in data if isinstance(data, list) else []:
+        if not isinstance(c, dict) or not c.get("name"):
+            continue
+        if "zhihu" not in str(c.get("domain") or ""):
+            continue
+        out.append(f"{c['name']}={c.get('value') or ''}")
+    return "; ".join(out)
+
+
+def _probe_me_http() -> Optional[dict[str, str]]:
+    """带 cookies 问一次 /api/v4/me（标准库 urllib，走环境里的代理设置）。
+
+    返回 {'name','url_token'} = 知乎说「你是谁」，即已登录；
+    返回 {}                    = 知乎**明确**说未登录（401/403）；
+    返回 None                  = 这次问不上（超时/网络/被挡）→ 调用方可退一步起浏览器确认。
+    """
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(_ME_URL, headers={
+        "User-Agent": _UA, "Accept": "application/json", "Cookie": _cookie_header(),
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=_LOGIN_HTTP_TIMEOUT) as resp:  # noqa: S310
+            body = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return {}
+        logger.warning("HTTP 探登录态拿到状态码 %s（当作「问不上」处理）", exc.code)
+        return None
+    except Exception as exc:
+        logger.warning("HTTP 探登录态失败（网络/代理）：%s: %s", type(exc).__name__, str(exc)[:120])
+        return None
+    try:
+        d = json.loads(body)
+    except Exception:
+        logger.warning("HTTP 探登录态拿到非 JSON 回应（%d 字节，当作「问不上」处理）", len(body))
+        return None
+    return {"name": str(d.get("name") or ""), "url_token": str(d.get("url_token") or "")}
+
+
+def _login_state(*, allow_browser: bool = True) -> dict[str, Any]:
+    """登录态：cookies 里有没有 z_c0 → 一次 HTTP 问知乎 → （问不上时才）起浏览器兜底。
+
+    checkedBy 如实说明这次是**怎么**判断的：api = 问过知乎本人接口；
+    browser = 起浏览器确认过；cookies = 只看了 cookies 文件，没能向知乎确认。
+    """
     names = _cookie_names()
-    cookies_ok = "z_c0" in names
-    username = ""
-    if cookies_ok:
-        try:
-            info = _service().check_login_status(headless=True)
-            cookies_ok = bool(info.get("logged_in"))
-            username = str(info.get("username") or "")
-        except Exception as exc:
-            raise ChannelError(502, "PROBE_FAILED", f"登录态探测失败：{exc}") from exc
-        if cookies_ok:
-            acct = _account()
-            username = acct["name"] or acct["url_token"] or username
-            account_token = acct["url_token"]
-        else:
-            account_token = ""
-    else:
-        account_token = ""
-    return {
-        "is_logged_in": cookies_ok,
-        "username": username,
-        "account_token": account_token,
-        "cookies_path": str(COOKIES_PATH),
-        "cookie_count": len(_cookie_names()),
+    out: dict[str, Any] = {
+        "is_logged_in": False, "username": "", "account_token": "",
+        "cookies_path": str(COOKIES_PATH), "cookie_count": len(names),
+        "checkedBy": "cookies", "detail": "",
     }
+    if "z_c0" not in names:
+        out["detail"] = "cookies 里没有 z_c0：没登录过，或登录态已被清掉"
+        return out
+
+    me = _probe_me_http()
+    if me:                                    # 知乎回答了「你是谁」
+        out.update(is_logged_in=True, checkedBy="api",
+                   username=me.get("name") or me.get("url_token") or "",
+                   account_token=me.get("url_token") or "")
+        _ACCOUNT_CACHE.update(at=time.time(), data={
+            "name": out["username"], "url_token": out["account_token"]})
+        return out
+    if me == {}:                              # 知乎明确说未登录
+        out["detail"] = "cookies 里的 z_c0 已失效（知乎 /api/v4/me 明确回未登录），需要重新登录"
+        return out
+
+    if not allow_browser:                     # 问不上，且不允许起浏览器
+        out["detail"] = "这次没能向知乎确认登录态（HTTP 探测没成功）"
+        return out
+
+    # 兜底：起浏览器确认（慢但准），并如实标注 checkedBy=browser
+    try:
+        info = _service().check_login_status(headless=True)
+    except Exception as exc:
+        raise ChannelError(502, "PROBE_FAILED", f"登录态探测失败：{exc}") from exc
+    logged_in = bool(info.get("logged_in"))
+    out.update(is_logged_in=logged_in, checkedBy="browser",
+               username=str(info.get("username") or ""))
+    if logged_in:
+        acct = _account()
+        out["username"] = acct["name"] or acct["url_token"] or out["username"]
+        out["account_token"] = acct["url_token"]
+    else:
+        out["detail"] = "浏览器打开知乎后没看到写作入口：登录态已失效，需要重新登录"
+    return out
 
 
 def _account() -> dict[str, str]:
-    """取真实账号（昵称 + url_token）：打 /api/v4/me，结果缓存 10 分钟。"""
+    """取真实账号（昵称 + url_token）：优先一次 HTTP，问不上才起浏览器。缓存 10 分钟。"""
     now = time.time()
     if _ACCOUNT_CACHE["data"] and now - _ACCOUNT_CACHE["at"] < _ACCOUNT_TTL:
         return _ACCOUNT_CACHE["data"]
+    me = _probe_me_http()
+    if me:
+        info = {"name": me.get("name") or "", "url_token": me.get("url_token") or ""}
+        _ACCOUNT_CACHE.update(at=now, data=info)
+        return info
     info = {"name": "", "url_token": ""}
     try:
         from browser.manager import create_browser  # type: ignore[import-not-found]
 
         with create_browser(headless=True) as (_br, _ctx, page):
-            page.goto("https://www.zhihu.com/api/v4/me", wait_until="domcontentloaded")
-            raw = page.inner_text("body")
-        data = json.loads(raw)
+            page.goto(_ME_URL, wait_until="domcontentloaded")
+            data = json.loads(page.inner_text("body"))
         info = {"name": str(data.get("name") or ""), "url_token": str(data.get("url_token") or "")}
     except Exception:
         pass
@@ -182,11 +282,19 @@ async def health() -> dict[str, Any]:
 
 @app.get("/api/v1/login/status")
 async def login_status(force: bool = False) -> dict[str, Any]:
+    """登录态。正常路径是**一次 HTTP**（不打锁、不起浏览器），问到就问到了。
+
+    只有 HTTP 问不上（网络/被挡）时才退一步起浏览器确认 —— 那一步才占 _BROWSER_LOCK，
+    而且和真发布用的 _PUBLISH_LOCK 不是同一把，所以探状态不会再被发布堵住。
+    """
     now = time.time()
     if not force and _STATE_CACHE["data"] and now - _STATE_CACHE["at"] < _STATE_TTL:
         return {"success": True, "data": {**_STATE_CACHE["data"], "cached": True}}
-    async with _BROWSER_LOCK:
-        data = await asyncio.to_thread(_login_state)
+    data = await asyncio.to_thread(_login_state, allow_browser=False)
+    if data.get("checkedBy") == "cookies" and data.get("detail"):
+        # 没能向知乎确认（HTTP 没成功）→ 起浏览器兜底确认一次，慢但准；如实标注 checkedBy=browser
+        async with _BROWSER_LOCK:
+            data = await asyncio.to_thread(_login_state, allow_browser=True)
     _STATE_CACHE.update(at=now, data=data)
     return {"success": True, "data": {**data, "cached": False}}
 
@@ -344,8 +452,8 @@ async def publish(body: PublishBody) -> dict[str, Any]:
 
     # 只填不发也要求 confirmed=true：它是「验证」通道，不该被当成免闸门的后门，
     # 调用方必须显式表达「我知道这是发布接口」。
-    async with _BROWSER_LOCK:
-        state = await asyncio.to_thread(_login_state)
+    # 登录态这一探不打锁：现在它是一次 HTTP（问不上才起浏览器），不该排在别的动作后面。
+    state = await asyncio.to_thread(_login_state)
     if not state["is_logged_in"]:
         raise ChannelError(401, "NOT_LOGGED_IN", "知乎未登录或登录态失效，请先在桌面窗口登录")
 
@@ -360,7 +468,9 @@ async def publish(body: PublishBody) -> dict[str, Any]:
     # 上游那份靠 click + expect_file_chooser 传图，被上传弹窗挡住会整套失败还照样点发布，
     # 而且从不返回链接、也不上报失败。详见那个模块的模块注释。
     shot_dir = EXPORT_ROOT / (body.run_id or "adhoc") / "shots"
-    async with _BROWSER_LOCK:
+    # 真发布占 _PUBLISH_LOCK（发布之间必须串行：一个账号同时写两篇会互相点坏）；
+    # 运营数据 / 链接核验那些只读动作占的是 _BROWSER_LOCK，两者不互相排队。
+    async with _PUBLISH_LOCK:
         result = await asyncio.to_thread(
             article_flow.publish_article,
             title=body.title, content=body.content,
