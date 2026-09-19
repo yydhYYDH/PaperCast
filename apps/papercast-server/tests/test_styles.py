@@ -14,21 +14,30 @@ from app import styles
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("xhs-author", ("xhs", "author")),
+        ("xhs-author", ("xhs", "independent")),        # 退役 id：现落到第三方独立视角
         ("zhihu-analyst", ("zhihu", "analyst")),
         ("bilibili-peer", ("bilibili", "peer")),
         ("en-newsflash", ("en", "newsflash")),
         ("  XHS-Reviewer  ", ("xhs", "reviewer")),      # 大小写与空白都容错
-        ("xhs", ("xhs", "author")),                     # 旧 id：只写平台 → 默认人格
-        ("xhs-academic", ("xhs", "author")),            # 历史 id
+        ("xhs", ("xhs", styles.DEFAULT_VOICE)),         # 旧 id：只写平台 → 默认人格
+        ("xhs-academic", ("xhs", "independent")),       # 历史 id
         ("xhs-media", ("xhs", "newsflash")),
-        ("zhihu-academic", ("zhihu", "author")),
-        ("bilibili-academic", ("bilibili", "author")),
-        ("en", ("en", "author")),                       # 只写平台名也认
+        ("zhihu-academic", ("zhihu", "independent")),
+        ("bilibili-academic", ("bilibili", "independent")),
+        ("en", ("en", styles.DEFAULT_VOICE)),           # 只写平台名也认
     ],
 )
 def test_parse_variant_accepts_known_ids(raw, expected):
     assert styles.parse_variant(raw) == expected
+
+
+def test_retired_author_voice_falls_to_third_party():
+    # 2026-09-19 用户要求：不要「作者自述」。旧写法仍能解析（老配置不静默丢变体），
+    # 但一律落到第三方独立视角，不再冒充论文作者。
+    assert "author" not in styles.VOICES
+    assert styles.RETIRED_VOICES == {"author": "independent"}
+    assert styles.parse_variant("xhs-author") == ("xhs", "independent")
+    assert styles.parse_variant("en-author") == ("en", "independent")
 
 
 @pytest.mark.parametrize(
@@ -58,7 +67,7 @@ def test_variant_id_round_trips_with_parse_variant():
 
 
 def test_variant_label_uses_spec_labels():
-    assert styles.variant_label("xhs", "author") == "小红书 × 作者自述"
+    assert styles.variant_label("xhs", "independent") == "小红书 × 第三方独立视角"
     assert styles.variant_label("en", "analyst") == "英文传播（X / LinkedIn） × 技术解读"
 
 
@@ -75,8 +84,8 @@ def test_normalize_empty_falls_back_to_default():
 
 
 def test_normalize_dedupes_legacy_and_new_ids():
-    # xhs / xhs-academic 都归一到 (xhs, author)，只留一份
-    assert styles.normalize_variants(["xhs-author", "xhs", "xhs-academic"]) == [("xhs", "author")]
+    # xhs-author / xhs / xhs-academic 都归一到 (xhs, independent)，只留一份
+    assert styles.normalize_variants(["xhs-author", "xhs", "xhs-academic"]) == [("xhs", "independent")]
 
 
 def test_normalize_caps_at_max_variants():
@@ -84,11 +93,11 @@ def test_normalize_caps_at_max_variants():
     out = styles.normalize_variants(asked)
     assert len(out) == styles.MAX_VARIANTS == 4
     # 保序：保住前 MAX_VARIANTS 个解析结果
-    assert out == [("xhs", "author"), ("zhihu", "analyst"), ("bilibili", "peer"), ("en", "newsflash")]
+    assert out == [("xhs", "independent"), ("zhihu", "analyst"), ("bilibili", "peer"), ("en", "newsflash")]
 
 
 def test_normalize_respects_custom_limit():
-    assert styles.normalize_variants(["xhs-author", "zhihu-analyst"], limit=1) == [("xhs", "author")]
+    assert styles.normalize_variants(["xhs-author", "zhihu-analyst"], limit=1) == [("xhs", "independent")]
 
 
 def test_max_variants_is_a_sane_budget():
