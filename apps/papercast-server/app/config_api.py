@@ -63,6 +63,8 @@ SPEC: list[dict[str, Any]] = [
      "kind": "str", "desc": "pymupdf（本机无 GPU 时的正确选择）| mineru"},
     {"key": "PAPERCAST_CARDS", "attr": "cards_enabled", "group": "解析与渲染", "label": "卡片图渲染",
      "kind": "bool", "desc": "on = 生成 1080×1440 卡片；off = 跳过"},
+    {"key": "PAPERCAST_POSTER_DECK", "attr": "poster_deck", "group": "解析与渲染", "label": "小红书组图（guizang 技能）",
+     "kind": "str", "desc": "auto（默认）= 装了技能才跑 | on = 强制跑（技能没装则阶段里记 run 跳过）| off = 不跑"},
     {"key": "MAX_UPLOAD_MB", "attr": "max_upload_mb", "group": "解析与渲染", "label": "上传大小上限（MB）",
      "kind": "int", "desc": "PDF / LaTeX 源码包"},
     # ── 只读（由运行环境决定，改了也没用）──

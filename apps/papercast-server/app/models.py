@@ -39,8 +39,8 @@ STAGE_META: dict[str, dict[str, str]] = {
     },
     "poster": {
         "label": "Poster 生成",
-        "engine": "确定性排版 · poster.py（chrome-headless-shell 渲染）",
-        "hint": "digest → 版面 spec → 按渠道渲染海报/竖长图/封面，几何溢出即判失败",
+        "engine": "确定性排版 · poster.py ＋ 组图 · guizang 技能（可选）",
+        "hint": "digest → 版面 spec → 按渠道渲染海报/竖长图/封面；同一份 spec 可选重排成小红书 3:4 组图（技能自检 R1–R9），几何溢出即判失败",
     },
     "video": {
         "label": "视频合成",

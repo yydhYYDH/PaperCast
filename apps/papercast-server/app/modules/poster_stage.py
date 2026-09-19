@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .. import prompts as prompts_mod
+from . import cards_deck
 from . import poster as renderer
 
 SPEC_SYSTEM = """你是学术传播的视觉设计编辑。给你一篇论文的事实源（digest）和它可用的原图，
@@ -320,6 +321,76 @@ async def _render_with_budget(
     return last
 
 
+DECK_KIND_CN = {"cover": "封面", "panel": "要点", "figure": "证据", "closing": "判断"}
+
+
+async def _run_deck(ctx, spec: dict[str, Any], cover: Optional[dict[str, Any]], digest: dict[str, Any],
+                    figs_arg: str, out_dir: Path) -> None:
+    """小红书组图：把同一份（已核过数字的）spec 用 guizang 技能重排成 3:4 组图。
+
+    fail-closed 的三条边界：① 开关 off / 技能没装 → 记一条 run 状态、**不报 fail**（渠道画布照常交付）；
+    ② 装配或渲染异常 → 记 fail，但不动已经渲染好的画布；③ 自检有 FAIL → 先减内容重排（最多 2 次），
+    仍不过才如实记 fail —— 并把「砍了什么」写进日志。
+    """
+    mode = str(getattr(ctx.settings, "poster_deck", "auto") or "auto")
+    if not cards_deck.enabled(mode):
+        why = ("已关闭（PAPERCAST_POSTER_DECK=off）" if mode.lower() in ("off", "0", "false", "no")
+               else "技能未安装（跑 ./ops/install_skills.sh 装 guizang-social-card-skill）")
+        ctx.log("info", f"小红书组图跳过：{why}")
+        ctx.check("小红书组图（guizang 技能）", "run", f"跳过：{why}")
+        return
+
+    deck_dir = out_dir / "cards"
+    figures_dir = figs_arg.split(os.pathsep)[0]
+    note = f"{spec.get('venue') or ''} · {spec.get('title') or ''}".strip(" ·")
+    ctx.log("info", f"用 guizang 技能重排小红书组图（技能：{cards_deck.skill_dir()}）…")
+
+    last: dict[str, Any] = {}
+    for attempt, (max_items, keep) in enumerate(((4, None), (3, None), (3, 3))):
+        try:
+            built = await asyncio.to_thread(
+                cards_deck.build, spec, cover, digest, figures_dir, deck_dir,
+                max_items=max_items, keep_pages=keep, note=note,
+            )
+            rep = await asyncio.to_thread(cards_deck.render, deck_dir, scale=2)
+            chk = await asyncio.to_thread(cards_deck.validate, deck_dir)
+        except Exception as e:
+            ctx.log("warn", f"小红书组图失败：{type(e).__name__}: {str(e)[:160]}")
+            ctx.check("小红书组图（guizang 技能）", "fail", f"{type(e).__name__}: {str(e)[:140]}")
+            return
+        last = {"built": built, "render": rep, "check": chk, "attempt": attempt,
+                "max_items": max_items, "keep": keep}
+        if chk.get("fails", 0) == 0 and rep.get("ok"):
+            break
+        bad = [d for d in chk.get("details") or [] if d["level"] == "FAIL"][:2]
+        if attempt < 2:
+            ctx.log("warn", f"组图自检不过（{chk.get('fails')} fail），减内容重排：{bad}")
+
+    built, rep, chk = last["built"], last["render"], last["check"]
+    if last["attempt"]:
+        ctx.log("warn", f"组图第 {last['attempt'] + 1} 次尝试才通过（每页要点 {last['max_items']} 条"
+                        + (f"、只留前 {last['keep']} 页" if last["keep"] else "") + "）")
+
+    frames = rep.get("frames") or []
+    plan = built.get("plan") or []
+    for i, fr in enumerate(frames):
+        kind = (plan[i] or {}).get("kind") if i < len(plan) else ""
+        label = f"小红书组图 {i + 1}/{len(frames)}" + (f" · {DECK_KIND_CN.get(kind, '')}" if kind else "")
+        ctx.artifact("image", label, f"cards/{fr['id']}.png", preview=True,
+                     meta={"width": int(fr.get("w", 0) * 2), "height": int(fr.get("h", 0) * 2),
+                           "preset": "guizang-deck", "platform": "xhs", "theme": built.get("theme")})
+    ctx.artifact("html", "组图预览（技能模板渲染的 index.html）", "cards/index.html", preview=True)
+
+    warns, fails = chk.get("warns", 0), chk.get("fails", 0)
+    detail = f"{len(frames)} 张 · 技能自检 {chk.get('sections', 0)} 张里 {chk.get('clean', 0)} 张 clean · {fails} fail · {warns} warn"
+    if fails or warns:
+        first = (chk.get("details") or [{}])[0]
+        detail += f" · 首条：{first.get('rule', '')} {first.get('text', '')[:80]}"
+    detail += f" · 主题 {built.get('theme')}"
+    ctx.check("小红书组图（guizang 技能）", "pass" if (fails == 0 and rep.get("ok") and frames) else "fail",
+              detail if frames else "没有渲染出任何组图")
+
+
 async def run_poster(ctx) -> None:
     """poster 阶段：digest → spec → 按渠道渲染多张画布。"""
     intake = ctx.shared.get("intake") or {}
@@ -380,6 +451,10 @@ async def run_poster(ctx) -> None:
         if preview_html is None:      # 第一张画布（小红书首图）的 HTML 给查看器当预览
             preview_html = out_name
         ctx.progress(min(0.95, 0.15 + 0.8 * len(reports) / max(1, len(PRESETS_RENDER))))
+
+    # 组图（可选）：同一份 spec 再用 guizang 技能重排成小红书 3:4 组图。
+    # 放在画布之后登记产物，是为了让查看器的「第一张 png / 第一个 html」仍是渠道画布（poster-xhs-cover）。
+    await _run_deck(ctx, spec, cover, digest, figs_arg, out_dir)
 
     # 查看器（PosterViewer）按 kind==='html' 找预览；以前只登记 PNG，于是界面上永远是「尚未产出」。
     if preview_html:

@@ -74,6 +74,12 @@
 | 自检 | `node ~/.agents/skills/guizang-social-card-skill/validate-social-deck.mjs <task-dir>`（R1 溢出 / R2 页脚相撞 / R4 最小字号 / R5 四横带密度 / R6 标题行数上限…） |
 | 任务目录 | 一律放 `var/`（技能自己建议 `local-tests/`，我们不放技能目录里） |
 
+**已接进流水线（2026-09-19）**：`poster` 阶段里新增 `app/modules/cards_deck.py` —— 同一份已核过数字的
+`poster.spec.json` 被重排成 4–9 张 1080×1440 组图，落 `poster/cards/`；渲染走 `ops/shot/render_social_deck.mjs`，
+自检走技能自带的 `validate-social-deck.mjs` 并写成阶段闸门；开关 `PAPERCAST_POSTER_DECK=auto|on|off`
+（auto = 装了技能才跑）。技能没装 → 记一条 run「跳过」，不判失败。详见
+`apps/papercast-server/docs/07-poster-and-cards.md` §3.5（含真跑抓出来的四个坑）。
+
 实跑样本：`var/samples/guizang-deeprare/`（DeepRare 真 run 的事实 + 论文原图，5 张 3:4 卡片，
 **自检 5/5 clean、0 fail 0 warn**），证据图 `docs/evidence/guizang-xhs-{cover,method,results}.png`。
 本机适配三条（字体覆盖 / 图表 `fit-contain` 底色透明 / `.step-title` 间距 8→18px，最后一条**是上游自己的

@@ -162,6 +162,8 @@ class Settings:
     allow_origins: list[str] = field(default_factory=lambda: ["http://127.0.0.1:5178"])
     intake_engine: str = "pymupdf"
     cards_enabled: bool = True
+    # 小红书组图（guizang 技能链路）：on | off | auto（auto = 装了技能才跑，见 app/modules/cards_deck.py）
+    poster_deck: str = "auto"
     chrome: str = ""
     cjk_font: str = ""
     max_upload_mb: int = 200
@@ -196,6 +198,8 @@ class Settings:
         s.allow_origins = [o.strip() for o in origins.split(",") if o.strip()]
         s.intake_engine = pick("PAPERCAST_INTAKE_ENGINE", s.intake_engine)
         s.cards_enabled = pick("PAPERCAST_CARDS", "on").lower() in ("1", "on", "true", "yes")
+        deck_mode = pick("PAPERCAST_POSTER_DECK", "auto").lower()
+        s.poster_deck = deck_mode if deck_mode in ("on", "off", "auto") else "auto"
         s.chrome = pick("PAPERCAST_CHROME", "") or _detect_chrome()
         s.cjk_font = pick("PAPERCAST_CJK_FONT", "") or find_cjk_font()
         s.max_upload_mb = int(pick("MAX_UPLOAD_MB", str(s.max_upload_mb)))

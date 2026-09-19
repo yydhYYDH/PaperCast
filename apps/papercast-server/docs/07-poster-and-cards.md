@@ -30,6 +30,7 @@
 | 小红书单栏卡（正文版式） | `xhs` | 1080×1440（3:4） | 1 | 26–30px | 单栏正文卡（与 `cards/render.py` 的组图并存） |
 | 小红书/知乎 竖长图（信息图） | `xhs-long` | 1080×2400（3:4 长） | 1 | 23–26px | 一图讲完整篇论文 |
 | 小红书正文卡片 | （`app/cards/render.py`） | 1080×1440 ×N | — | PIL 固定版式 | 组图第 2..N 张 |
+| 小红书 **3:4 组图**（技能版式） | `guizang-deck` | 1080×1440 ×N（`--scale 2` → 2160×2880） | 技能版式（M01 封面 / M08 台账 / 图卡 / M07 结尾） | 由技能的 QA 门守着 | **信息流图文**：同一份 spec 用 guizang 技能重排，见 §3.5 |
 | B 站视频封面 | `bili-cover` | 1920×1080（16:9） | cover 版式 | 标题 ≥4% 画布宽 | 视频封面：左大标题 + 右主视觉（横竖两种封面排法见 §2.4） |
 
 > 公众号封面（900×383）按 2026-09-19 的决定**不做**；`wechat` 预设已从代码里移除。
@@ -189,6 +190,43 @@ cd apps/papercast-server
 
 ---
 
+## 3.5 路线 B+ · 小红书 3:4 组图（guizang 技能链路，2026-09-19 接入）
+
+**是什么**：`poster` 阶段在出完确定性画布之后，把**同一份** `poster.spec.json` 交给
+`app/modules/cards_deck.py`，用 `op7418/guizang-social-card-skill` 的 Editorial 版式**重排成一组
+1080×1440 的小红书图文**（封面 / 要点台账 / 证据图卡 / 判断页，4–9 张），产物落 `poster/cards/`。
+
+**为什么是「重排」而不是「再叫一次 LLM」**：spec 已经是 LLM 产出、并逐条核过数字可回溯的内容
+（`poster_stage._sanitize`）。组图要的是同一批事实的另一种版式。少一次 LLM 调用 = 少一处幻觉源、
+少一次等待，而且离线可复现（`var/scratch/poster_stage_offline.py` 跑的就是这段代码）。
+
+| 事项 | 做法 |
+| --- | --- |
+| 开关 | `PAPERCAST_POSTER_DECK` = `auto`（默认，**装了技能才跑**）/ `on` / `off`；设置页「解析与渲染」可改；`/api/env` 里有 `deck.{mode,skillInstalled,skillPath,active}` |
+| 技能从哪来 | 只从用户级安装目录**运行时读取**（`~/.agents/skills/guizang-social-card-skill`，可用 `GUIZANG_SKILL_DIR` / `SKILLS_ROOT` 覆盖）。**模板/CSS 不进本仓库**（它是 AGPL-3.0，本仓库 MIT 且公开发布）；本文件只带一层自写覆盖（字体栈、图卡底色、一处上游间距） |
+| 出图 | `ops/shot/render_social_deck.mjs`（我们自己的，逐个 `.poster` 节点截图，`--scale 2`） |
+| 自检 | 技能自带的 `validate-social-deck.mjs`（R1 溢出 / R2 页脚相撞 / R4 最小字号 / R5 四横带密度 / R6 标题行数上限 / R9 标题间距…），结果直接写成阶段闸门「小红书组图（guizang 技能）」 |
+| 装不下怎么办 | `_run_deck` 最多重排 3 次（每页要点 4→3 条、再砍到前 3 页），每次如实写日志；仍不过才记 fail |
+| fail-closed | 技能没装 / 开关 off → 记一条 `run`「跳过」，**不判失败**，渠道画布照常交付；装配或渲染异常 → 记 fail，但不动已渲染好的画布 |
+| 技能没装时 | 阶段里显示「技能未安装（跑 ./ops/install_skills.sh 装 guizang-social-card-skill）」 |
+
+单独跑（不联网、不调 LLM，用真 run 的 spec/原图）：
+
+```bash
+apps/papercast-server/.venv/bin/python var/scratch/poster_stage_offline.py var/runs/<runId>/poster
+DECK=off …   # 验证关掉时的行为
+```
+
+### 接入时被真跑抓出来的四个坑（都锁进了 `tests/test_cards_deck.py`）
+
+| 坑 | 症状 | 解法 |
+| --- | --- | --- |
+| **截字** | 封面标题 13 个字塞不进两行，第一版直接输出「罕见病诊断智…」 | `fit_title`：**先按标点砍从句，砍不动再整档降字号**，永不截半个词（技能 R4 的建议原文就是 "cut copy instead of shrinking type"） |
+| **稀疏页** | 只有 3 条要点时，模板的 `.ledger` 把内容挤在上半页、下半页一大片空 —— **技能的 R5 密度门抓不到**（它量的是"元素占位"不是"墨迹"） | 覆盖层 `.ledger{flex:1}` + 行高下限 118px（M08 配方的下限）、上限 260px |
+| **kicker 重复** | `Nature · VOL 651 · 2026` + `Nature` 拼一起，封面顶行读成两个 Nature | `dedupe_parts()`：互为子串的只留长的那个 |
+| **图卡页下方留白** | 模板的图卡按 16:10 定高，图卡页会空出四分之一页 | 图卡页的画框改成 `flex:1`（去掉 aspect-ratio），图本身仍 `contain` —— 不裁剪、不拉伸，只是画框变大 |
+| **字体依赖** | 换 `HOME` 跑时封面判失败 —— 因为雅黑在 `~/.local/share/fonts`，`HOME` 一变字体就没了，标题量出来的宽度掉到 `h1_pct` 下限以下 | 这其实是**正确**的 fail-closed（没字体的话字是看不见的），但要知道封面闸门依赖本机字体：换机器先装 `fonts-noto-cjk` |
+
 ## 4. 路线 C · 需要 AI 出图的主视觉（待千问 key）
 
 **只用于创作型视觉**：海报 hero 图、小红书封面。论文里的图一律不重画。
@@ -242,7 +280,11 @@ ops/imagegen.sh --prompt-file var/samples/papercast-lab/paper2video/poster/promp
 3. **路线 C 实测**：拿到 `DASHSCOPE_API_KEY` 后跑 `ops/imagegen.sh`，出 hero 图 → `poster.spec.hero.json` 重排。
 4. **视觉自检**：几何闸门只能保证"不溢出、不空"，不能保证"好看"。Paper2Poster 用 VLM 读图打分；
    本机没有 VLM key，可用千问多模态或 codex（当前不可用）补这一步。
-5. **投放侧封面还没分渠道**（不在本模块，别漏）：`publish._pick_media` 给所有渠道挑同一张封面
+5. **组图还没接进投递**：`publish._pick_media` 现在仍按 `poster/*.png` 挑封面（不含 `poster/cards/`），
+   所以真实投递用的还是渠道画布，不是这组 3:4 组图。要接的话得让发布侧按渠道认 `cards/xhs-*.png`。
+6. **封面短标题仍靠 LLM 的 cover.title**：`poster_stage` 现在是让 LLM 在 cover spec 里写短标题；
+   如果它写长了，`fit_title` 会砍从句 —— 更稳的做法是给封面标题单独一条 ≤14 字的生成约束。
+7. **投放侧封面还没分渠道**（不在本模块，别漏）：`publish._pick_media` 给所有渠道挑同一张封面
    （按文件名排序会挑到 `poster-bili-cover.png`），所以**投到小红书的封面目前不是那张 3:4 首图**；
    前端 `src/data/works.ts` 的小红书封面回退也没优先认 `poster-xhs-cover.png`。
    两处都在别的轨道正在改的文件里，本轮**没动**，交接给他们。
