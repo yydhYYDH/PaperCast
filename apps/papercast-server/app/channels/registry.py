@@ -3,7 +3,8 @@
 新增一个平台只需要三步：
 1. 写一个 Channel 子类（放本包下，参照 bilibili.py）；
 2. 在 BUILTIN 里登记；
-3. 在 docs/conventions.md 的端口表里给它一个本机端口（通道服务）。
+3. 有通道服务的，在 docs/conventions.md 的端口表里给它一个本机端口；
+   只出素材包的（material_only=True，如 x.py）没有服务，跳过第 3 步。
 """
 
 from __future__ import annotations
@@ -12,10 +13,12 @@ from typing import Any, Iterable, Optional
 
 from .base import Channel
 from .bilibili import BilibiliChannel
+from .x import XChannel
 from .xiaohongshu import XiaohongshuChannel
 from .zhihu import ZhihuChannel
 
-BUILTIN: tuple[type[Channel], ...] = (XiaohongshuChannel, ZhihuChannel, BilibiliChannel)
+# 三个真渠道 + x（material-only：只出素材包、不接投递，见 x.py）
+BUILTIN: tuple[type[Channel], ...] = (XiaohongshuChannel, ZhihuChannel, BilibiliChannel, XChannel)
 
 # 渠道 id 与别名 → 规范 id。前端的「平台账号」页用 xhs，run 配置里写 xiaohongshu，都认。
 ALIASES: dict[str, str] = {}
@@ -56,6 +59,15 @@ def class_of(channel_id: str) -> Optional[type[Channel]]:
 def orientation_of(channel_id: str) -> str:
     """这个渠道成片要横版(landscape)还是竖版(portrait)。未知渠道按横版（母版）。"""
     return str(getattr(class_of(channel_id), "video_orientation", "landscape") or "landscape")
+
+
+def default_media_of(channel_id: str) -> str:
+    """这个渠道没特别指定时发什么形态：images（图文）还是 video（成片）。
+
+    未知渠道按 `images`：图文是流水线的常规产物，成片是加项，拿不准时错误要偏保守
+    （多发一条卡片组图，比误发一条成片更容易收拾）。
+    """
+    return str(getattr(class_of(channel_id), "default_media", "images") or "images")
 
 
 def build_all(settings: Any) -> list[Channel]:

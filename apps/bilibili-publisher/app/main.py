@@ -85,6 +85,14 @@ LOG_ROOT = Path(os.environ.get("BILIBILI_LOG_ROOT") or WS / "var" / "logs")
 LOGIN_DIR = Path(os.environ.get("BILIBILI_LOGIN_DIR") or WS / "var" / "artifacts" / "bilibili" / "login")
 # biliup 自己的凭据/配置目录（HOME 换掉，免得写进别人的家目录）
 BILIUP_HOME = Path(os.environ.get("BILIBILI_HOME") or WS / "var" / "home")
+# biliup 的「本地数据目录」：账号级上传互斥锁与断点续传都写在这里。
+# Rust 侧见 crates/biliup-cli/src/upload_lock.rs：锁文件是
+# <data_local_dir>/biliup/locks/biliup_upload_<mid>.lock，而
+# dirs::data_local_dir() = $XDG_DATA_HOME 或 $HOME/.local/share。
+# 不显式改的话它写的是**真实家目录**：家目录只读时（只读挂载 / 沙箱）投稿会以
+# 「Failed to create upload lock: Read-only file system (os error 30)」整单失败，
+# 现象是「素材包都落盘了，就是投不出去」。所以一律压到 var/home 下。
+BILIUP_DATA_HOME = Path(os.environ.get("BILIBILI_DATA_HOME") or BILIUP_HOME / ".local" / "share")
 BILIUP = os.environ.get("BILIBILI_BILIUP") or shutil.which("biliup") or _find_biliup()
 DEFAULT_TID = int(os.environ.get("BILIBILI_TID", "231"))   # 学术向分区；以投稿页当前口径为准，可用环境变量改
 
@@ -92,7 +100,7 @@ DEFAULT_TID = int(os.environ.get("BILIBILI_TID", "231"))   # 学术向分区；�
 # 2026-09-19 实测，拿一篇 3624 字的知乎文章当简介 → biliup 退出码 1，
 # `ResponseData { code: 21052, message: "稿件描述长度太长，已超过限制" }` —— 上传白跑一趟。
 BILI_TITLE_LIMIT = 80        # 标题上限（创作中心口径）
-BILI_DESC_LIMIT = 2000       # 简介上限
+BILI_DESC_LIMIT = 2000       # 简介上限   # 学术向分区；以投稿页当前口径为准，可用环境变量改
 UPLOAD_TIMEOUT = int(os.environ.get("BILIBILI_UPLOAD_TIMEOUT", "2400"))
 EXTRA_ARGS = os.environ.get("BILIBILI_UPLOAD_EXTRA", "")    # 追加参数，例如 "--submit web --line cnbd"
 # 413（文件被拒）时的一次补救重试：换固定线路 + 限并发。方向以 biliup 文档为准，可用环境变量覆盖。
@@ -100,7 +108,72 @@ RETRY_ARGS = shlex.split(os.environ.get("BILIBILI_RETRY_ARGS", "--line cnbd --li
 NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
 BV_RE = re.compile(r"BV[0-9A-Za-z]{10}")
 AUTH_HINTS = ("未登录", "登录失败", "鉴权", "-101", "cookie", "Cookie", "请先登录")
+# 上传锁相关（不是账号问题，别误报成 NOT_LOGGED_IN）
+LOCK_HINTS = ("Failed to create upload lock", "另一个使用该账号", "上传锁")
 SIZE_HINTS = ("413", "too large", "文件过大", "Payload Too Large")
+
+
+def _biliup_env() -> dict[str, str]:
+    """所有 biliup 子进程共用的一份环境变量：HOME 与 XDG_* 全部钉到 var/home 里。
+
+    只改 HOME 不够稳（调用方可能已经设了 XDG_DATA_HOME，那它优先级更高），
+    所以四个目录变量一起指到工作区里可写的位置 —— 上传锁、断点续传、
+    biliup 自己的缓存/配置就都不会再去碰真实家目录。
+    """
+    return {
+        **os.environ,
+        "HOME": str(BILIUP_HOME),
+        "XDG_DATA_HOME": str(BILIUP_DATA_HOME),
+        "XDG_CACHE_HOME": str(BILIUP_HOME / ".cache"),
+        "XDG_CONFIG_HOME": str(BILIUP_HOME / ".config"),
+    }
+
+
+def lock_dir() -> Path:
+    """biliup 的上传锁目录（对齐 dirs::data_local_dir()/biliup/locks）。"""
+    return BILIUP_DATA_HOME / "biliup" / "locks"
+
+
+def _unwritable_reason(path: Path) -> str:
+    """path（或它最近的已存在祖先）不可写时返回原因，可写返回空串。只读检查，不建目录。"""
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    if not os.access(probe, os.W_OK):
+        return f"{probe} 不可写（read-only 挂载或权限不足）"
+    return ""
+
+
+def ensure_biliup_dirs() -> str:
+    """投稿前把 biliup 要写的目录建好；建不出来就返回一句人话，可写返回空串。
+
+    宁可在这里说清「锁目录写不进去」，也不要让 biliup 从 Rust 里抛一句
+    「Failed to create upload lock: Read-only file system (os error 30)」。
+    """
+    reason = _unwritable_reason(lock_dir())
+    if reason:
+        return (f"biliup 数据目录不可写：{reason}。biliup 投稿前必须先写上传锁，"
+                f"把 BILIBILI_HOME / BILIBILI_DATA_HOME 指到可写路径（默认 {BILIUP_HOME}）后重试")
+    for path in (BILIUP_HOME, BILIUP_DATA_HOME, lock_dir()):
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return (f"biliup 数据目录建不出来：{path}（{type(exc).__name__}: {exc}）；"
+                    f"投稿前 biliup 必须能在这里写上传锁")
+    return ""
+
+
+def _list_locks() -> list[dict[str, Any]]:
+    """列出上传锁文件（含年龄），供人工判断是活锁还是上次异常退出的僵尸锁。"""
+    out: list[dict[str, Any]] = []
+    for f in sorted(lock_dir().glob("*.lock")):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        out.append({"name": f.name, "path": str(f), "age_sec": int(time.time() - st.st_mtime)})
+    return out
+
 
 app = FastAPI(title="bilibili-publisher", version="0.1.0")
 
@@ -246,7 +319,9 @@ async def _account_state() -> dict[str, Any]:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"status": "ok", "biliup": BILIUP, "cookies": str(COOKIES_PATH), "tid": DEFAULT_TID}
+    """locks / locks_error 是给运维看的：锁目录不可写时，投稿一定会在写上传锁这步失败。"""
+    return {"status": "ok", "biliup": BILIUP, "cookies": str(COOKIES_PATH), "tid": DEFAULT_TID,
+            "locks": str(lock_dir()), "locks_error": _unwritable_reason(lock_dir())}
 
 
 @app.get("/api/v1/login/status")
@@ -272,7 +347,7 @@ def _spawn_in_pty(argv: list[str], log_name: str, cwd: Optional[Path] = None,
         cwd.mkdir(parents=True, exist_ok=True)
     BILIUP_HOME.mkdir(parents=True, exist_ok=True)
     log_path = LOG_ROOT / log_name
-    env = {**os.environ, "HOME": str(BILIUP_HOME), "XDG_CONFIG_HOME": str(BILIUP_HOME / ".config")}
+    env = _biliup_env()
     master, slave = pty.openpty()
     proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave,
                             close_fds=True, start_new_session=True,
@@ -408,6 +483,31 @@ async def logout() -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# 上传锁（biliup 的账号级互斥锁，落在 var/home/.local/share/biliup/locks）
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/v1/locks")
+async def list_locks() -> dict[str, Any]:
+    """看当前有哪些上传锁：biliup 正常跑完会自己删；异常退出会留下僵尸锁挡下一次投稿。"""
+    return {"success": True, "data": {"dir": str(lock_dir()), "error": _unwritable_reason(lock_dir()),
+                                      "locks": _list_locks()}}
+
+
+@app.delete("/api/v1/locks")
+async def clear_locks() -> dict[str, Any]:
+    """清上传锁。只该在**确认没有别的上传进程在跑**时用：并发投稿会被 B 站限流。"""
+    removed = []
+    for item in _list_locks():
+        try:
+            Path(item["path"]).unlink()
+            removed.append(item["name"])
+        except OSError:
+            pass
+    return {"success": True, "data": {"dir": str(lock_dir()), "removed": removed},
+            "note": "仅在确认没有其他上传进程在跑时清理；并发上传会触发 B 站限流"}
+
+
+# --------------------------------------------------------------------------- #
 # 导出素材包 / 投稿
 # --------------------------------------------------------------------------- #
 
@@ -467,7 +567,15 @@ def _upload_argv(body: PublishBody, extra: list[str]) -> list[str]:
 
 
 def _run_upload(argv: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, timeout=UPLOAD_TIMEOUT)
+    """biliup 子进程必须带上 _biliup_env() 与固定 cwd。
+
+    - env：否则上传锁写到真实家目录（可能只读）→ EROFS；
+    - cwd：biliup 会把 tracing 日志写成相对当前目录的 download.log，不固定的话
+      它会掉在服务进程的 cwd 里（实测掉到了仓库根目录），这里统一落 var/logs。
+    """
+    LOG_ROOT.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(argv, capture_output=True, text=True, timeout=UPLOAD_TIMEOUT,
+                          env=_biliup_env(), cwd=str(LOG_ROOT))
 
 
 @app.post("/api/v1/publish")
@@ -493,6 +601,9 @@ async def publish(body: PublishBody) -> dict[str, Any]:
     extra = shlex.split(EXTRA_ARGS)
     argv = _upload_argv(body, extra)
     command = " ".join(shlex.quote(a) for a in argv)
+    problem = ensure_biliup_dirs()          # 锁目录写不了就别启动 biliup，省得只拿到一句 EROFS
+    if problem:
+        raise ChannelError(500, "UPLOAD_LOCK_UNWRITABLE", problem)
     try:
         proc = _run_upload(argv)
     except subprocess.TimeoutExpired:
@@ -513,6 +624,12 @@ async def publish(body: PublishBody) -> dict[str, Any]:
 
     if proc.returncode != 0:
         tail = (stderr or stdout)[-400:]
+        if any(h in tail for h in LOCK_HINTS):
+            held = _list_locks()
+            where = "、".join(i["path"] for i in held) or f"（{lock_dir()} 下暂无锁文件）"
+            raise ChannelError(409, "UPLOAD_LOCKED",
+                               f"biliup 没能拿到该账号的上传锁（{tail}）。当前锁目录 {lock_dir()}：{where}；"
+                               "确认没有其他上传进程在跑后，可 DELETE /api/v1/locks 清掉残留锁再重试")
         if any(h in tail for h in AUTH_HINTS):
             raise ChannelError(401, "NOT_LOGGED_IN",
                                f"biliup 报登录态失效（{tail}）→ 重新扫码登录，或在过期前用 /api/v1/login/renew 续期")

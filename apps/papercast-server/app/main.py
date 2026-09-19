@@ -26,6 +26,7 @@ from .config_api import router as config_router
 from .config import settings
 from .interactions import router as interactions_router
 from .skills_api import router as skills_router
+from .styles_api import router as styles_router
 from .models import CreateRunRequest, GateRequest, PaperRun, SourceInput, new_run
 from .pipeline import Pipeline
 from .store import RunStore
@@ -52,6 +53,8 @@ app.include_router(chat_router)
 app.include_router(interactions_router)
 # 技能目录（个性化层）：GET /api/skills、GET /api/skills/{name}（只读 SKILL.md）
 app.include_router(skills_router)
+# 文章风格清单：GET /api/styles（平台 × 讲述者人格，给风格页直接展示）
+app.include_router(styles_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -207,6 +210,10 @@ async def api_env() -> dict:
     #      环境页于是间歇显示小红书探测失败。
     # 顺带这也让 /api/env 与 /api/platforms 共用同一份结果，不会再同一瞬间双双未命中。
     mcp: dict[str, Any] = {"base": settings.xhs_mcp_base, "reachable": False, "loggedIn": False, "account": ""}
+    # 素材路径映射如实上报。MCP 跑在另一台机器上（Windows）时，不配映射就只会在**发布**
+    # 那一步失败，而且失败发生在起浏览器之前、界面与回执都看不出原因（2026-09-19 实测：
+    # 一句 AttributeError 盖住了真原因「视频文件不存在」）。留空 = 同机部署，路径原样传。
+    mcp["pathMap"] = settings.channel_path_map or ""
     try:
         ch = await platforms_mod.get_channel("xhs", force=False)
         # state: offline = MCP 不可达；login_required = 在线但未登录；ready = 已登录
@@ -357,13 +364,33 @@ async def run_drafts(run_id: str) -> dict[str, Any]:
 async def run_publish_work(run_id: str, body: RunPublishBody) -> dict[str, Any]:
     """**把作品投到一个渠道**：`confirmed=false` 只落 export/（无副作用），`true` 才真投递。
 
+    形态按**渠道默认**走：小红书默认图文、B 站默认视频（见 `Channel.default_media`）。
+    要发成片走 `POST /api/runs/{id}/publish/video`。
+
     投不出去时返回 `status="blocked"` + 人话原因（不是 4xx）：界面要把「为什么投不了」原样显示。
     """
     return await direct_publish_mod.publish_work(
         store, run_id, body.channelId,
         confirmed=bool(body.confirmed),
-        overrides={"title": body.title, "content": body.content, "tags": body.tags},
+        overrides=body.model_dump(exclude_unset=True, include={"title", "content", "tags"}),
         confirm_account=body.confirmAccount or "",
+    )
+
+
+@app.post("/api/runs/{run_id}/publish/video")
+async def run_publish_work_video(run_id: str, body: RunPublishBody) -> dict[str, Any]:
+    """**把作品当视频笔记/成片投递**（小红书视频笔记、B 站投稿都走这条）。
+
+    单独一个端点而不是给上面那个加开关：小红书里图文笔记和视频笔记是两种笔记，形态选错的
+    代价是发出一条形态完全不同的内容，值得让调用方**显式**说一次"这次是视频"。
+    run 里没有成片时不会 4xx —— 返回 `status="blocked"` + 「缺成片」的人话原因。
+    """
+    return await direct_publish_mod.publish_work(
+        store, run_id, body.channelId,
+        confirmed=bool(body.confirmed),
+        overrides=body.model_dump(exclude_unset=True, include={"title", "content", "tags"}),
+        confirm_account=body.confirmAccount or "",
+        media="video",
     )
 
 

@@ -1,4 +1,9 @@
-"""M3：发布 —— **每个渠道投自己那份文案**（渠道层：小红书 / 知乎 / B 站）。
+"""M3：发布 —— **每个渠道投自己那份文案**（渠道层：小红书 / 知乎 / B 站 / X）。
+
+X（推特）是 **material-only** 渠道（channels/x.py，2026-09-19 加）：它一样按渠道取自己那份
+文案（en 变体）、一样在闸门之前落 publish/x/export/、一样写回执，但**不接投递通道** ——
+回执恒为 draft，闸门放行也不会发出任何请求。本模块里凡是判定「能不能投」的地方，都用
+`channel.material_only` 把它摘出来单独处理，不许把它算进「可投递渠道」。
 
 渠道抽象在 app/channels/（见该包 base.py 的分层说明）。本模块只做**编排**：
 
@@ -23,7 +28,7 @@ from typing import Any, Optional
 
 from .. import styles
 from ..channels import registry
-from ..channels.base import Channel, Delivery, Materials, Preflight
+from ..channels.base import Channel, Delivery, Materials, Preflight, is_material_only
 
 
 def _is_confirmed(chosen: str | None) -> bool:
@@ -55,7 +60,9 @@ CHANNEL_PLATFORMS: dict[str, tuple[str, ...]] = {
     "xiaohongshu": ("xhs",),
     "zhihu": ("zhihu",),
     "bilibili": ("bilibili",),
-    # 英文传播（X / LinkedIn）还没有独立渠道服务，映射先留着：将来接上时不会又共用中文文案。
+    # X（推特）：material-only 渠道，投的就是英文传播那份 thread —— 不许它退到中文稿上。
+    # （"en" 保留一份：渠道注册表把 en 当 x 的别名，这里也认原始平台写法。）
+    "x": ("en",),
     "en": ("en",),
 }
 
@@ -271,30 +278,95 @@ def _pick_video(run_dir: Path, orientation: str = "landscape") -> Optional[Path]
     return (landscape or vertical or cands)[0]
 
 
+#: 组图落盘位置（guizang 技能产出的小红书 3:4 组图）
+DECK_REL = ("poster", "cards", "output")
+#: 人工选定的一套图。形如 {"images": ["poster/.../xhs-01.png", ...], "cover": "..."}，
+#: 路径一律相对 run 目录，越界（../）或不存在会被跳过并记 warn。
+SELECTED_REL = ("poster", "selected.json")
+
+
+def _deck_images(run_dir: Path) -> list[Path]:
+    """组图（3:4，排版过、带图注）。同目录下有 JPEG 侧车就用 JPEG（体积小、投递快）。
+
+    PNG 是母版（1080×1440，~900KB/张），JPEG 是渠道那份（q88 不抽色，~300KB/张）；
+    两者内容一致，所以「有 jpg 就优先」不会投出不一样的东西。
+    """
+    deck = run_dir.joinpath(*DECK_REL)
+    if not deck.is_dir():
+        return []
+    return sorted(deck.glob("xhs-*.jpg")) or sorted(deck.glob("xhs-*.png"))
+
+
+def _in_run_dir(run_dir: Path, rel: Any) -> Optional[Path]:
+    """把清单里的相对路径解析成 run 目录内的真实文件；越界或不存在返回 None。"""
+    if not rel:
+        return None
+    base = run_dir.resolve()
+    target = (run_dir / str(rel)).resolve()
+    if target != base and base not in target.parents:
+        return None
+    return target if target.is_file() else None
+
+
+def _selected_images(run_dir: Path, *, warn: Any = None) -> tuple[list[Path], Optional[Path]]:
+    """读 poster/selected.json：人工选定的一套图优先于任何自动顺序。"""
+    man = run_dir.joinpath(*SELECTED_REL)
+    if not man.is_file():
+        return [], None
+    try:
+        data = json.loads(man.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _warn(warn, f"poster/selected.json 读不出来（{exc}）：改用默认选图顺序")
+        return [], None
+    if not isinstance(data, dict):
+        _warn(warn, "poster/selected.json 不是对象：改用默认选图顺序")
+        return [], None
+    images: list[Path] = []
+    for rel in data.get("images") or []:
+        p = _in_run_dir(run_dir, rel)
+        if p is None:
+            _warn(warn, f"poster/selected.json 里的 {rel} 不存在或越出 run 目录，已跳过")
+            continue
+        images.append(p)
+    return images, _in_run_dir(run_dir, data.get("cover"))
+
+
 def _pick_media(run_dir: Path, *, warn: Any = None,
                 video_orientation: str = "landscape") -> tuple[list[Path], Optional[Path], Optional[Path]]:
     """图片 / 视频 / 封面。视频是 B 站渠道的前提，封面优先用 poster 的成图。
 
-    图片顺序：小红书卡片（3:4，排版过）→ intake/figures.json（机器可读清单）→
-    intake/images/fig-*.png glob。glob 只认新命名，旧命名 img-pXX-N.png 会一张都取不到
-    （run_720e83bdae91 实测 imageCount=0、回执写「无配图」，而 intake 里躺着 4 张图），
-    所以它只当最后一层兜底并记 warn。
+    图片顺序（2026-09-19 调整）：**poster/selected.json（人工选定）→ 小红书组图
+    poster/cards/output/xhs-*.png（3:4、带图注、按论文原图排版）→ 自研 PIL 卡片
+    article/cards/p*.png → intake/figures.json（机器可读清单）→ intake/images/fig-*.png glob**。
+    组图排在卡片前面，是因为卡片是「一页一个要点的总览」，而组图才是真正投出去的那套；
+    再往后两层是兜底：figures.json 缺失时退回 glob，glob 只认新命名，旧命名 img-pXX-N.png
+    会一张都取不到（run_720e83bdae91 实测 imageCount=0、回执写「无配图」，而 intake 里
+    躺着 4 张图），所以它只当最后一层并记 warn。
     """
-    images = sorted((run_dir / "article" / "cards").glob("p*.png"))
-    if not images:
-        images = _intake_figures(run_dir, warn)
+    selected, sel_cover = _selected_images(run_dir, warn=warn)
+    deck = _deck_images(run_dir)
+    images = selected or deck or sorted((run_dir / "article" / "cards").glob("p*.png"))
+    if not selected and not deck:
         if not images:
-            images = sorted((run_dir / "intake" / "images").glob("fig-*.png"))
-            _warn(warn, "intake/figures.json 里没有可用图片，退回 intake/images/fig-*.png glob 兜底"
-                        "（只认新命名，img-pXX-N.png 这类旧命名会被漏掉）")
-        images = images[:MAX_INTAKE_IMAGES]
+            images = _intake_figures(run_dir, warn)
+            if not images:
+                images = sorted((run_dir / "intake" / "images").glob("fig-*.png"))
+                _warn(warn, "intake/figures.json 里没有可用图片，退回 intake/images/fig-*.png glob 兜底"
+                            "（只认新命名，img-pXX-N.png 这类旧命名会被漏掉）")
+            images = images[:MAX_INTAKE_IMAGES]
     # 顶层成片优先（video/*.mp4）；上游套件会把中间产物放在嵌套目录里，别抓错
     video = _pick_video(run_dir, video_orientation)
-    cover: Optional[Path] = None
-    for cand in [run_dir / "poster" / "cover.png", *(sorted((run_dir / "poster").glob("*.png")) if (run_dir / "poster").is_dir() else [])]:
-        if cand.is_file():
-            cover = cand
-            break
+    cover: Optional[Path] = sel_cover
+    if cover is None and (selected or deck) and images:
+        # 组图/人工选定这套的首图就是它的封面；poster/*.png 里按字母序第一个是
+        # poster-bili-cover.png（16:9），拿它当封面是错的。
+        cover = images[0]
+    if cover is None:
+        for cand in [run_dir / "poster" / "cover.png",
+                     *(sorted((run_dir / "poster").glob("*.png")) if (run_dir / "poster").is_dir() else [])]:
+            if cand.is_file():
+                cover = cand
+                break
     if cover is None and images:
         cover = images[0]
     return [p for p in images if p.is_file()], video, cover
@@ -328,9 +400,14 @@ def previous_delivery(run_dir: Path) -> dict[str, Any]:
 
 def _build_materials(run_dir: Path, run: Any, *, title: str, body: str, tags: list[str],
                      variant: str, variant_platform: str, warn: Any,
+                     allow_empty_title: bool = False,
                      video_orientation: str = "landscape") -> Materials:
-    """组一份物料。标题为空直接拒发（宁可不发，也不发一份没标题的东西）。"""
-    if not title.strip():
+    """组一份物料。标题为空直接拒发（宁可不发，也不发一份没标题的东西）。
+
+    `allow_empty_title=True` 只给「先让界面看见这条运行有什么可投的」用（成片已经在磁盘上、
+    文案还没人填），真投递一律走默认的严格判定。
+    """
+    if not allow_empty_title and not title.strip():
         raise PublishError("TITLE_MISSING", "标题为空，拒绝发布（先修 M2 的文章变体或 article/export/title.txt）")
     images, video, cover = _pick_media(run_dir, warn=warn, video_orientation=video_orientation)
     source = ""
@@ -388,6 +465,27 @@ def collect_materials_for(run_dir: Path, run: Any, channel_id: str, *, warn: Any
     return _build_materials(run_dir, run, title=title, body=content, tags=tags,
                             variant="export/", variant_platform="", warn=warn,
                             video_orientation=orientation)
+
+
+def collect_materials_from_text(run_dir: Path, run: Any, *, title: str, body: str,
+                                tags: Optional[list[str]] = None, warn: Any = None,
+                                require_text: bool = True) -> Materials:
+    """用**调用方给的文案**组物料，一个字节都不读 `article/`。
+
+    给「没有文章产物、只出了成片」的运行用（`ops/make_short_video.py` 那类独立脚本产出的
+    视频包就落在这种 run 里）：文案来自发布界面里填的标题/正文，媒体照常从 run 目录里挑。
+
+    `require_text=False` 只用于界面预览 —— 允许空标题/空正文，好让 `supports()` 把
+    「缺标题、正文」如实报出来；真投递一律用默认的 True。
+    """
+    if require_text:
+        if not (title or "").strip():
+            raise PublishError("TITLE_MISSING", "标题为空，拒绝发布")
+        if not (body or "").strip():
+            raise PublishError("BODY_MISSING", "正文为空，拒绝发布")
+    return _build_materials(run_dir, run, title=title or "", body=body or "",
+                            tags=list(tags or []), variant="overrides", variant_platform="",
+                            warn=warn, allow_empty_title=not require_text)
 
 
 def collect_materials(run_dir: Path, run: Any, *, warn: Any = None) -> Materials:
@@ -485,6 +583,8 @@ def _gate_detail(rows: list[dict[str, Any]], previous: Optional[dict[str, Any]] 
         where = _material_note(row)
         if not suitable:
             lines.append(f"· {channel.name}：跳过 —— {reason}{where}")
+        elif is_material_only(channel):
+            lines.append(f"· {channel.name}：只落素材包，不真投递 —— {state.detail}{where}")
         elif state.ready:
             who = f"，账号 {state.account}" if state.account else ""
             lines.append(f"· {channel.name}：将投递 {reason}{who}{where}")
@@ -502,16 +602,23 @@ def _gate_detail(rows: list[dict[str, Any]], previous: Optional[dict[str, Any]] 
 
 async def _deliver(ctx: StageContext, rows: list[dict[str, Any]], confirmed: bool) -> dict[str, Delivery]:
     """并发投递 + 失败隔离。只有 ready 且素材适配的渠道真的投。"""
-    todo = [row for row in rows if row["state"].ready and row["suitable"]]
+    # material-only 渠道不进 todo：它们没有投递接口可调，只落素材包（见下面的分支）
+    todo = [row for row in rows if row["state"].ready and row["suitable"] and not is_material_only(row["channel"])]
     deliveries: dict[str, Delivery] = {}
 
     for row in rows:
-        if row["state"].ready and row["suitable"]:
-            continue
         channel, state = row["channel"], row["state"]
+        if row["state"].ready and row["suitable"] and not is_material_only(channel):
+            continue
         if not row["suitable"]:
             deliveries[channel.id] = Delivery(channel=channel.id, status="skipped",
                                               error={"code": "MATERIAL_UNSUITABLE", "message": row["reason"]})
+        elif is_material_only(channel):
+            # 恒为 draft：素材包已落盘，一次发布接口都没调（这正是「不会真发」的证据）
+            deliveries[channel.id] = Delivery(channel=channel.id, status="draft",
+                                              export_dir=str(ctx.work / channel.id / "export"),
+                                              raw={"note": channel.why})
+            ctx.log("info", f"[{channel.name}] 只落素材包：{channel.why}")
         else:
             deliveries[channel.id] = Delivery(channel=channel.id, status="blocked",
                                               error={"code": state.state.upper(), "message": state.detail})
@@ -538,6 +645,26 @@ async def _deliver(ctx: StageContext, rows: list[dict[str, Any]], confirmed: boo
     return deliveries
 
 
+def _with_auto_x(ctx: StageContext, targets: list[Channel], run_dir: Path) -> list[Channel]:
+    """这一轮真的产出了英文 thread，就顺手把 X 加进目标（X 只落素材包，不真发）。
+
+    只在磁盘上真有 `article/en*.md` 时才加 —— 免得给没有英文稿的运行塞一个投不了的渠道；
+    X 不触网、素材包纯本地，加进来没有任何副作用。用户显式勾了 x 时原样返回；
+    渠道被 PAPERCAST_CHANNELS 停用时也不越过配置。
+    """
+    if any(is_material_only(c) for c in targets):
+        return targets
+    if "en" not in _variant_index(run_dir / "article"):
+        return targets
+    if "x" not in registry.enabled_ids(ctx.settings):
+        return targets
+    channel = registry.get(ctx.settings, "x")
+    if channel is None:
+        return targets
+    ctx.log("info", "这一轮有英文 thread：顺手备好 X 的素材包（只落本地，不真发）")
+    return [*targets, channel]
+
+
 async def run_publish(ctx: StageContext) -> None:
     run_dir = ctx.store.dir(ctx.run.id)
     if not (run_dir / "article").is_dir():
@@ -555,6 +682,9 @@ async def run_publish(ctx: StageContext) -> None:
         ctx.check(f"渠道：{problem['id']}", "fail", problem["message"])
     if not targets:
         raise PublishError("NO_CHANNEL", "没有任何可用渠道（检查 run.config.publish.targets 与 PAPERCAST_CHANNELS）")
+    # 英文 thread 在 → 顺手把 X 的素材包也备上（material-only：不接投递、不会真发）。
+    # 刻意**不写回** run.config.publish.targets —— 那是用户的勾选，替用户改配置是另一回事。
+    targets = _with_auto_x(ctx, targets, run_dir)
     ctx.log("info", f"目标渠道 {len(targets)} 个：" + "、".join(c.name for c in targets))
 
     # ---- 1. 物料：**每个渠道各取自己那份文案**（不再三渠道共用一份 export/） ----
@@ -581,10 +711,13 @@ async def run_publish(ctx: StageContext) -> None:
         suitable, reason = channel.supports(mine)
         rows.append({"channel": channel, "state": state, "suitable": suitable, "reason": reason,
                      "materials": mine})
-        ctx.check(f"素材适配：{channel.name}", "pass" if suitable else "fail", reason)
+        # material-only 渠道（X）不参与「能不能投」的判定：它本来就不投，判 fail 是冤枉它，
+        # 但也不许判 pass（pass 会被读成「投出去了」）。用 run（中性）如实说清它在干嘛。
+        neutral = is_material_only(channel)
+        ctx.check(f"素材适配：{channel.name}", "pass" if suitable else ("run" if neutral else "fail"), reason)
         ctx.check(
             f"渠道状态：{channel.name}",
-            "pass" if state.ready else "fail",
+            "pass" if state.ready else ("run" if neutral else "fail"),
             f"账号 {state.account}（{state.detail}）" if state.ready else state.detail,
         )
 
@@ -622,12 +755,15 @@ async def run_publish(ctx: StageContext) -> None:
     published = [cid for cid, d in deliveries.items() if d.ok]
     failed = [cid for cid, d in deliveries.items() if d.status == "failed"]
     blocked = [cid for cid, d in deliveries.items() if d.status == "blocked"]
+    drafted = [cid for cid, d in deliveries.items() if d.status == "draft"]
     if published:
         status = "published"          # 部分成功也是 published，失败渠道在 failed 里单列
     elif failed:
         status = "failed"
     elif chosen == "draft":
         status = "draft"
+    elif drafted and not blocked:
+        status = "draft"              # 全是 material-only 渠道（X）：素材包落了，一次真投都没有
     elif confirmed:
         status = "blocked"            # 确认要发，但没有任何渠道可投（离线/未登录/素材不适用）
     else:
@@ -732,6 +868,12 @@ async def run_publish(ctx: StageContext) -> None:
     elif chosen == "draft":
         ctx.check("发布结果", "run", "仅存草稿（素材包已就绪）")
         ctx.log("ok", "M3 完成：draft")
+    elif status == "draft" and drafted:
+        # 闸门放行了，但目标里只有 material-only 渠道（X）：它没有投递通道，只出素材包。
+        # 这不算失败 —— 如实说成「只落素材包」，别让人以为发出去了。
+        names = "、".join(receipts[c]["channelName"] for c in drafted)
+        ctx.check("发布结果", "run", f"{names} 只落素材包（本轮不接投递通道）")
+        ctx.log("ok", f"M3 完成：{names} 只落素材包（没有真投递）")
     elif confirmed and not failed:
         why = "；".join(f"{receipts[c]['channelName']}：{receipts[c].get('error', {}).get('message', '不可投')[:60]}" for c in blocked)
         ctx.check("发布结果", "fail", f"闸门已放行，但没有渠道可投：{why}"[:160])

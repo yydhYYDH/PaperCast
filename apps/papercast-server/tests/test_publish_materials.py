@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app import styles
-from app.channels.base import Delivery, Materials, Preflight
+from app.channels.base import Delivery, HttpChannel, Materials, Preflight, map_remote_path, parse_path_map
 from app.modules import publish as P
 
 # --------------------------------------------------------------------------- #
@@ -283,12 +283,89 @@ def test_broken_figures_json_warns_and_falls_back(tmp_path):
         assert any("figures.json" in w for w in warns)
 
 
-def test_cards_still_win_over_intake_figures(tmp_path):
-    """小红书卡片（3:4，排版过）依旧是第一优先，行为不变。"""
+def test_cards_win_over_intake_figures_when_no_deck(tmp_path):
+    """没有组图、也没有人工选定清单时，小红书卡片（3:4，排版过）仍是第一优先。"""
     run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD}, cards=2,
                         figures=[{"file": "images/fig-1.png"}], image_files=("images/fig-1.png",))
     m = _collect(run_dir, "xiaohongshu")
     assert [p.name for p in m.images] == ["p1.png", "p2.png"]
+
+
+# --------------------------------------------------------------------------- #
+# 选图优先级（2026-09-19 调整）：人工选定 > 组图 > 自研卡片 > intake
+# 事故：组图（poster/cards/output/xhs-0N.png）是真正要投出去的那一套，
+# 但 _pick_media 只认 article/cards/p*.png，于是「组图做得再好也发不出去」；
+# 封面还会按字母序取到 poster/poster-bili-cover.png（16:9）。
+# --------------------------------------------------------------------------- #
+
+def _deck(run_dir: Path, n: int = 3) -> None:
+    for i in range(1, n + 1):
+        _write(run_dir, "poster/cards/output/xhs-%02d.png" % i, "")
+
+
+def test_deck_wins_over_article_cards(tmp_path):
+    """有组图就用组图，不再用自研卡片；封面取组图首图（不是 poster/*.png 里字母序那张 B 站封面）。"""
+    run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD}, cards=2)
+    _deck(run_dir, 3)
+    _write(run_dir, "poster/poster-bili-cover.png", "")   # 字母序第一，不该被当封面
+    m = _collect(run_dir, "xiaohongshu")
+    assert [p.name for p in m.images] == ["xhs-01.png", "xhs-02.png", "xhs-03.png"]
+    assert m.cover is not None and m.cover.name == "xhs-01.png"
+
+
+def test_deck_jpeg_sidecar_wins_over_png(tmp_path):
+    """组图目录里同时有 PNG（母版）和 JPEG（渠道那份）时，投 JPEG。"""
+    run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD}, cards=2)
+    _deck(run_dir, 2)
+    for i in (1, 2):
+        _write(run_dir, "poster/cards/output/xhs-%02d.jpg" % i, "")
+    m = _collect(run_dir, "xiaohongshu")
+    assert [p.suffix for p in m.images] == [".jpg", ".jpg"]
+    assert m.cover is not None and m.cover.suffix == ".jpg"
+
+
+def test_selected_json_wins_over_deck(tmp_path):
+    """poster/selected.json（人工挑的一套）优先于管线默认组图。"""
+    run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD}, cards=2)
+    _deck(run_dir, 2)
+    for i in (1, 2):
+        _write(run_dir, "poster/variants2/s3-midnight/output/xhs-%02d.png" % i, "")
+    _write(run_dir, "poster/selected.json", json.dumps({
+        "images": ["poster/variants2/s3-midnight/output/xhs-02.png",
+                   "poster/variants2/s3-midnight/output/xhs-01.png"],
+        "cover": "poster/variants2/s3-midnight/output/xhs-02.png",
+    }, ensure_ascii=False))
+    m = _collect(run_dir, "xiaohongshu")
+    assert [p.name for p in m.images] == ["xhs-02.png", "xhs-01.png"]
+    assert str(m.images[0]).endswith("variants2/s3-midnight/output/xhs-02.png")
+    assert m.cover is not None and str(m.cover).endswith("s3-midnight/output/xhs-02.png")
+
+
+def test_selected_json_skips_broken_entries(tmp_path):
+    """清单里越界（../）或不存在的一律跳过并记 warn，不许把 run 目录外的文件投出去。"""
+    run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD}, cards=2)
+    _deck(run_dir, 1)
+    outside = tmp_path / "outside.png"
+    outside.write_text("", encoding="utf-8")
+    warns: list[str] = []
+    _write(run_dir, "poster/selected.json", json.dumps({
+        "images": ["../../outside.png", "poster/nope.png",
+                   "poster/cards/output/xhs-01.png"],
+    }, ensure_ascii=False))
+    m = _collect(run_dir, "xiaohongshu", warns)
+    assert [p.name for p in m.images] == ["xhs-01.png"]
+    assert any("selected.json" in w for w in warns)
+
+
+def test_selected_json_broken_falls_back(tmp_path):
+    """清单坏了（不是 JSON）就退回默认顺序，不能把整条投递卡死。"""
+    run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD}, cards=2)
+    _deck(run_dir, 2)
+    warns: list[str] = []
+    _write(run_dir, "poster/selected.json", "{ 这不是 json")
+    m = _collect(run_dir, "xiaohongshu", warns)
+    assert [p.name for p in m.images] == ["xhs-01.png", "xhs-02.png"]
+    assert any("selected.json" in w for w in warns)
 
 
 # --------------------------------------------------------------------------- #
@@ -415,6 +492,46 @@ def test_markdown_variant_words_use_platform_unit(fake_ctx):
     asyncio.run(_gen_markdown_variant(ctx2, styles.PLATFORMS["zhihu"], "analyst", digest, "{}", []))
     zh = ctx2.run.articles[-1]
     assert zh.words == styles.cjk_len(ZHIHU_MD) > 0
+
+
+# --------------------------------------------------------------------------- #
+# 渠道错误形状：各通道的 error 字段并不统一（2026-09-19 实测踩到）
+# --------------------------------------------------------------------------- #
+
+def test_error_of_accepts_string_error_from_xhs_mcp():
+    """小红书 MCP 的 `error` 是**字符串**，不是 {code,message}。
+
+    实测（2026-09-19 13:25 真发一条视频笔记）：MCP 回了
+    `{"error":"视频发布失败","code":"PUBLISH_VIDEO_FAILED","details":"…CreateFile …"}`，
+    而 `error_of()` 把 `error` 当 dict 用 → `AttributeError: 'str' object has no attribute 'get'`。
+    结果真原因（视频路径在 MCP 那侧不存在）被一句崩溃信息盖掉，排查绕了一大圈。
+    """
+    body = {
+        "error": "视频发布失败",
+        "code": "PUBLISH_VIDEO_FAILED",
+        "details": "视频文件不存在或不可访问: CreateFile /home/yydh/hack/x.mp4: "
+                   "The system cannot find the path specified.",
+    }
+    err = HttpChannel.error_of(500, body)
+
+    assert err["code"] == "PUBLISH_VIDEO_FAILED"
+    # 真原因必须露出来 —— 界面上要能看见「路径不存在」，而不是「AttributeError」
+    assert "视频文件不存在" in err["message"]
+    assert "CreateFile" in err["message"]
+
+
+def test_error_of_still_reads_dict_error():
+    """知乎/B 站的 error 是 {code,message} 字典 —— 修小红书不能把这边的形状改坏。"""
+    err = HttpChannel.error_of(403, {"error": {"code": "NEED_LOGIN", "message": "请先登录"}})
+    assert err == {"code": "NEED_LOGIN", "message": "请先登录"}
+
+
+def test_error_of_falls_back_when_no_error_field():
+    """没有 error 字段时退回 HTTP_<状态码>（老行为不变）。"""
+    assert HttpChannel.error_of(502, {})["code"] == "HTTP_502"
+
+
+# --------------------------------------------------------------------------- #
 # B7：成片朝向按渠道口径挑（横版/竖版不再由字典序决定）
 # --------------------------------------------------------------------------- #
 
@@ -473,3 +590,114 @@ def test_orientation_is_channel_class_metadata(tmp_path):
     assert registry.orientation_of("nope") == "landscape"       # 未知按母版
     assert registry.class_of("bilibili").__name__ == "BilibiliChannel"
     assert registry.class_of("nope") is None
+
+
+# --------------------------------------------------------------------------- #
+# B8：素材路径映射（MCP 跑在 Windows 侧时，后端递的本机 Linux 路径对面读不到）
+#
+# 2026-09-19 实测：真发一条视频笔记，MCP 回
+# `{"error":"视频发布失败","code":"PUBLISH_VIDEO_FAILED","details":"视频文件不存在或不可访问:
+#   CreateFile /home/yydh/hack/…: The system cannot find the path specified."}`
+# —— 1.8ms 就失败，浏览器都没起（小红书侧零痕迹）。同一时刻 Windows 侧
+# `Test-Path /home/...` = False，而 `//wsl.localhost/Ubuntu/home/...` = True 且字节数一致。
+# 所以跨 WSL/Windows 时素材路径必须在**递给通道服务之前**换写法。
+# --------------------------------------------------------------------------- #
+
+def test_map_remote_path_replaces_prefix_and_respects_directory_boundary():
+    mapping = "/home/yydh/hack=//wsl.localhost/Ubuntu/home/yydh/hack"
+
+    assert map_remote_path("/home/yydh/hack/var/runs/r1/video/v.mp4", mapping) == \
+        "//wsl.localhost/Ubuntu/home/yydh/hack/var/runs/r1/video/v.mp4"
+    # 前缀必须按目录边界匹配：/home/yydh/hacker 不能被 /home/yydh/hack 吃掉
+    assert map_remote_path("/home/yydh/hacker/v.mp4", mapping) == "/home/yydh/hacker/v.mp4"
+
+
+def test_map_remote_path_is_identity_when_unconfigured():
+    """同机部署（Linux 服务器上通道服务与后端同机）不配映射 —— 路径必须原样传，零影响。"""
+    p = "/home/yydh/hack/var/runs/r1/video/v.mp4"
+
+    assert map_remote_path(p, "") == p
+    assert map_remote_path(p, "   ") == p
+
+
+def test_map_remote_path_longest_prefix_wins():
+    """短前缀写在前面会把长前缀吃掉，所以按长度排序。"""
+    assert map_remote_path("/a/b/c.mp4", "/a=/short,/a/b=/long") == "/long/c.mp4"
+
+
+def test_parse_path_map_skips_malformed_entries():
+    """配置写错（缺等号、空值）不该让发布挂掉 —— 跳过就好。"""
+    assert parse_path_map("坏条目,/a=/b,=,/c=") == [("/a", "/b")]
+
+
+def test_xhs_publish_sends_mapped_video_path(tmp_path):
+    """发布载荷里的 video 必须是**映射后**的写法 —— 就是真发失败的那一处。"""
+    from types import SimpleNamespace
+
+    from app.channels.xiaohongshu import XiaohongshuChannel
+
+    video = tmp_path / "video-vertical.mp4"
+    video.write_bytes(b"x")
+    ch = XiaohongshuChannel(
+        SimpleNamespace(channel_path_map=f"{tmp_path}=//wsl.localhost/Ubuntu{tmp_path}"))
+    sent = {}
+
+    async def fake_request(method, path, *, timeout, **kw):
+        sent.update({"path": path, "body": kw.get("json") or {}})
+        return 200, {"success": True, "data": {"title": "t", "status": "发布完成"}}
+
+    ch._request = fake_request          # 只换传输层：一个字节都不会发出去
+    m = Materials(title="标题", body="正文", tags=["话题"], video=video)
+    delivery = asyncio.run(ch.publish(m, confirmed=True))
+
+    assert delivery.status == "published"
+    assert sent["path"] == "/api/v1/publish_video"
+    assert sent["body"]["video"] == f"//wsl.localhost/Ubuntu{tmp_path}/video-vertical.mp4"
+
+
+def test_xhs_publish_sends_mapped_image_paths(tmp_path):
+    """图文那条同理：images 也要映射，否则换到 Windows 侧一样全军覆没。"""
+    from types import SimpleNamespace
+
+    from app.channels.xiaohongshu import XiaohongshuChannel
+
+    img = tmp_path / "p1.png"
+    img.write_bytes(b"x")
+    ch = XiaohongshuChannel(
+        SimpleNamespace(channel_path_map=f"{tmp_path}=//wsl.localhost/Ubuntu{tmp_path}"))
+    sent = {}
+
+    async def fake_request(method, path, *, timeout, **kw):
+        sent.update({"path": path, "body": kw.get("json") or {}})
+        return 200, {"success": True, "data": {"title": "t", "status": "发布完成"}}
+
+    ch._request = fake_request
+    m = Materials(title="标题", body="正文", images=[img])
+    delivery = asyncio.run(ch.publish(m, confirmed=True))
+
+    assert delivery.status == "published"
+    assert sent["path"] == "/api/v1/publish"
+    assert sent["body"]["images"] == [f"//wsl.localhost/Ubuntu{tmp_path}/p1.png"]
+
+
+def test_xhs_publish_keeps_paths_untouched_without_mapping(tmp_path):
+    """没配映射（同机部署）时递的仍是本机路径 —— 老行为不能被这次改动带跑。"""
+    from types import SimpleNamespace
+
+    from app.channels.xiaohongshu import XiaohongshuChannel
+
+    video = tmp_path / "video-vertical.mp4"
+    video.write_bytes(b"x")
+    ch = XiaohongshuChannel(SimpleNamespace(channel_path_map=""))
+    sent = {}
+
+    async def fake_request(method, path, *, timeout, **kw):
+        sent.update({"path": path, "body": kw.get("json") or {}})
+        return 200, {"success": True, "data": {"title": "t", "status": "发布完成"}}
+
+    ch._request = fake_request
+    delivery = asyncio.run(
+        ch.publish(Materials(title="标题", body="正文", video=video), confirmed=True))
+
+    assert delivery.status == "published"
+    assert sent["body"]["video"] == str(video)

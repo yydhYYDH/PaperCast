@@ -25,6 +25,10 @@ class XiaohongshuChannel(HttpChannel):
     # 小红书是竖版平台：成片优先用 9:16 的 video-vertical.mp4（这是 2026-09-19 之前
     # 靠 sorted() 的字典序偶然得到的结果，现在把它写明白，别让它再随文件名漂移）
     video_orientation = "portrait"
+    # **默认发图文**（2026-09-19 定）：卡片组图是流水线的常规产物，成片是加项；
+    # 而且实测视频笔记这条分支在 Windows 侧连续 3 次卡在"点发布"不落地，
+    # 图文在 Linux 侧一次就成功。想发成片走 `POST /api/runs/{id}/publish/video`。
+    default_media = "images"
     login_kind = "qrcode"
     transport = "mcp-http"
     why = "图文/视频笔记：MCP 开无头浏览器操作网页版，扫码登录"
@@ -79,14 +83,19 @@ class XiaohongshuChannel(HttpChannel):
             return Delivery(channel=self.id, status="blocked",
                             error={"code": "MATERIAL_UNSUITABLE", "message": reason})
 
+        # 素材一律经 remote_path()：MCP 跑在 Windows 上时要把本机 Linux 路径换成它读得到的
+        # 写法，否则它回一句「视频文件不存在或不可访问」，而且是在起浏览器之前就失败
+        # （2026-09-19 实测：真发一条视频笔记就这么失败的，小红书侧零痕迹）。
         if m.video is not None:
             path, body = "/api/v1/publish_video", {
-                "title": m.title, "content": m.body, "video": str(m.video), "tags": m.tags,
+                "title": m.title, "content": m.body,
+                "video": self.remote_path(m.video), "tags": m.tags,
             }
         else:
             path, body = "/api/v1/publish", {
                 "title": m.title, "content": m.body,
-                "images": [str(p) for p in m.images], "tags": m.tags, "is_original": True,
+                "images": [self.remote_path(p) for p in m.images],
+                "tags": m.tags, "is_original": True,
             }
         try:
             status, data = await self._request("POST", path, timeout=self.publish_timeout, json=body)

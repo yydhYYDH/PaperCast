@@ -21,6 +21,7 @@ import pytest
 
 from app import direct_publish
 from app.channels.base import Channel, Delivery, Materials, Preflight
+from app.channels import registry
 from app.models import RunConfig, SourceInput, new_run
 
 
@@ -141,12 +142,22 @@ def test_drafts_report_blocked_reason_without_raising(tmp_path: Path) -> None:
     assert "先登录" in draft["reason"]
 
 
-def test_drafts_without_article_is_409(tmp_path: Path) -> None:
-    """没有文章产物：接口层面拦住（409）—— 这时候发什么都没意义。"""
+def test_drafts_without_article_still_preview(tmp_path: Path) -> None:
+    """没有文章产物：草稿**照出**（界面要能先看见这条运行有什么可投的），只是文案是空的。
+
+    2026-09-19 改：原来是整页 409。独立脚本产的成片（`ops/make_short_video.py` 那类）就落在
+    这种没有 article/ 的 run 里，409 掉等于界面上连成片都看不见。文案现在由人在发布面板里填，
+    再由 /publish 的 overrides 带进来（见 publish_work 那几条用例）。
+    """
     _, store, _ = make_run(tmp_path, with_article=False)
-    with pytest.raises(Exception) as excinfo:
-        asyncio.run(direct_publish.list_drafts(store, store.run.id, channels=[FakeChannel()]))
-    assert getattr(excinfo.value, "code", "") == "ARTICLE_MISSING"
+    payload = asyncio.run(direct_publish.list_drafts(store, store.run.id, channels=[FakeChannel()]))
+
+    draft = channel_of(payload, "fake")
+    assert draft["hasDraft"] is True
+    assert draft["title"] == ""
+    assert draft["body"] == ""
+    # 文案来源可审计：界面要能看出这一版投的不是任何一份文章变体
+    assert draft["variant"] == "overrides"
 
 
 def test_drafts_unknown_run_is_404(tmp_path: Path) -> None:
@@ -278,6 +289,60 @@ def test_overrides_are_rechecked_against_platform_rules(tmp_path: Path) -> None:
     assert fake.published == []
 
 
+def test_publish_work_without_article_needs_text(tmp_path: Path) -> None:
+    """没有文章产物、调用方也没给文案：仍然 409 ARTICLE_MISSING（老保证不松）。"""
+    _, store, _ = make_run(tmp_path, with_article=False)
+    with pytest.raises(Exception) as excinfo:
+        asyncio.run(direct_publish.publish_work(store, store.run.id, "fake",
+                                                confirmed=True, channels=[FakeChannel()]))
+    assert getattr(excinfo.value, "code", "") == "ARTICLE_MISSING"
+
+
+def test_publish_work_without_article_partial_text_is_409(tmp_path: Path) -> None:
+    """只给标题不给正文：算「没给文案」，照样 409（不发半份东西出去）。"""
+    _, store, _ = make_run(tmp_path, with_article=False)
+    with pytest.raises(Exception) as excinfo:
+        asyncio.run(direct_publish.publish_work(store, store.run.id, "fake",
+                                                confirmed=True, channels=[FakeChannel()],
+                                                overrides={"title": "只有标题"}))
+    assert getattr(excinfo.value, "code", "") == "ARTICLE_MISSING"
+
+
+def test_publish_work_without_article_uses_overrides(tmp_path: Path) -> None:
+    """只出了成片的 run（没有 article/）：文案由 overrides 给，照样能真投递。"""
+    _, store, run_dir = make_run(tmp_path, with_article=False)
+    fake = FakeChannel()
+    result = asyncio.run(direct_publish.publish_work(
+        store, store.run.id, "fake", confirmed=True, channels=[fake],
+        overrides={"title": "独立脚本产的成片", "content": "正文也来自 overrides",
+                   "tags": ["论文", "#分享"]},
+    ))
+
+    assert result["status"] == "published"
+    sent = fake.published[0]
+    assert sent.title == "独立脚本产的成片"
+    assert sent.body == "正文也来自 overrides"
+    assert sent.tags == ["论文", "分享"]      # 前导 # 照常去掉
+    # 文案来源要能审计：这一版投的不是任何一份文章变体
+    assert sent.extra["variant"] == "overrides"
+    # 素材兜底照落（跟有 article/ 的运行同口径）
+    assert (run_dir / "publish" / "direct" / "fake" / "export" / "title.txt").is_file()
+
+
+def test_publish_work_without_article_still_gates_on_confirmed(tmp_path: Path) -> None:
+    """没有文章产物的运行同样过闸门：confirmed=False 只落 export/，一个发布接口都不调。"""
+    _, store, run_dir = make_run(tmp_path, with_article=False)
+    fake = FakeChannel()
+    result = asyncio.run(direct_publish.publish_work(
+        store, store.run.id, "fake", channels=[fake],
+        overrides={"title": "独立脚本产的成片", "content": "正文来自 overrides"},
+    ))
+
+    assert result["status"] == "draft"
+    assert fake.published == []
+    assert (run_dir / "publish" / "direct" / "fake" / "export" / "title.txt").is_file()
+
+
 def test_failed_delivery_reports_error_not_exception(tmp_path: Path) -> None:
     _, store, _ = make_run(tmp_path)
     fake = FakeChannel(publish_status="failed")
@@ -384,3 +449,126 @@ def test_receipt_without_degradations_stays_clean(tmp_path: Path) -> None:
     )
     assert "degradations" not in receipt
     assert "upstreamMessage" not in receipt
+
+
+# --------------------------------------------------------------------------- #
+# 媒体形态覆盖：同一条 run 既有成片又有卡片组图时，得能选「这次发图文」
+#
+# 背景（2026-09-19）：小红书渠道只看到 `video` 非空就一定走视频笔记分支
+# （channels/xiaohongshu.py 的 supports），于是 6 张卡片一张都用不上、图文根本发不了。
+# 改用**渠道口径**表达形态：默认发图文（Channel.default_media），要成片才显式说一次。
+# --------------------------------------------------------------------------- #
+
+def run_with_video_and_cards(tmp_path: Path) -> tuple[Any, FakeStore, Path]:
+    """一条 run：竖版成片 + 卡片组图都有 —— 现实里就是这么同时存在的。"""
+    run, store, run_dir = make_run(tmp_path)
+    cards = run_dir / "article" / "cards"
+    cards.mkdir(parents=True, exist_ok=True)
+    for i in (1, 2):
+        (cards / f"p{i}.png").write_bytes(b"png")
+    video = run_dir / "video"
+    video.mkdir(parents=True, exist_ok=True)
+    (video / "video-vertical.mp4").write_bytes(b"mp4")
+    return run, store, run_dir
+
+
+def test_default_media_is_image_note_so_cards_are_used(tmp_path: Path) -> None:
+    """不指定形态 = 按渠道默认 = 图文：成片被摘掉、卡片发得出去。
+
+    这是这次改动的**核心行为**：以前 video 非空就一定走视频分支，6 张卡片全废。
+    """
+    _, store, _ = run_with_video_and_cards(tmp_path)
+    fake = FakeChannel()
+    result = asyncio.run(direct_publish.publish_work(
+        store, store.run.id, "fake", confirmed=True, channels=[fake], overrides=None,
+    ))
+
+    assert result["status"] == "published"
+    sent = fake.published[0]
+    assert sent.video is None                    # 默认不发成片
+    assert sent.images                           # 卡片在，图文发得出去
+    assert result["receipt"]["media"] == "images"
+    assert result["receipt"]["video"] == ""      # 回执如实记「没有视频」
+    assert result["receipt"]["imageCount"] == 2
+
+
+def test_explicit_video_media_keeps_the_film(tmp_path: Path) -> None:
+    """显式 `media="video"` 才发成片（`POST /api/runs/{id}/publish/video` 走的就是这条）。"""
+    _, store, _ = run_with_video_and_cards(tmp_path)
+    fake = FakeChannel()
+    result = asyncio.run(direct_publish.publish_work(
+        store, store.run.id, "fake", confirmed=True, channels=[fake], media="video",
+    ))
+
+    assert result["status"] == "published"
+    assert fake.published[0].video is not None
+    assert result["receipt"]["media"] == "video"
+    assert result["receipt"]["video"] == "video-vertical.mp4"
+
+
+def test_video_media_without_film_is_blocked_not_silently_image(tmp_path: Path) -> None:
+    """**要发视频但 run 里没有成片**：必须 blocked + 人话原因。
+
+    这条是防"形态悄悄变了"：成片留 None 的话 supports() 会退回图文分支、把卡片当图文笔记
+    发出去还报成功。宁可挡住，也不能发出一条调用方没要的形态。
+    """
+    _, store, run_dir = make_run(tmp_path)        # 只有卡片、没有 video/
+
+    cards = run_dir / "article" / "cards"
+    cards.mkdir(parents=True, exist_ok=True)
+    (cards / "p1.png").write_bytes(b"png")
+
+    fake = FakeChannel()
+    result = asyncio.run(direct_publish.publish_work(
+        store, store.run.id, "fake", confirmed=True, channels=[fake], media="video",
+    ))
+
+    assert result["status"] == "blocked"
+    assert result["error"]["code"] == "MEDIA_UNAVAILABLE"
+    assert "缺成片" in result["error"]["message"]
+    assert fake.published == []                  # 一张都没发出去
+
+
+def test_unknown_media_value_is_400(tmp_path: Path) -> None:
+    """不认的形态值：明确报错，不静默当成默认 —— 否则发出来的形态和调用方以为的不一样。"""
+    _, store, _ = run_with_video_and_cards(tmp_path)
+    fake = FakeChannel()
+    with pytest.raises(Exception) as excinfo:
+        asyncio.run(direct_publish.publish_work(
+            store, store.run.id, "fake", confirmed=True, channels=[fake], media="图片",
+        ))
+
+    assert getattr(excinfo.value, "status", 0) == 400
+
+
+def test_channel_default_media_is_declared_per_channel() -> None:
+    """形态默认值声明在渠道层：小红书图文、B 站成片、未知按图文（保守）。"""
+    assert registry.default_media_of("xiaohongshu") == "images"
+    assert registry.default_media_of("xhs") == "images"        # 别名也认
+    assert registry.default_media_of("bilibili") == "video"
+    assert registry.default_media_of("nope") == "images"
+
+
+def test_drafts_preview_matches_the_main_action_but_still_shows_the_film(tmp_path: Path) -> None:
+    """草稿预览要跟「点主按钮会发生什么」一致，同时把成片露出来给第二个动作。
+
+    界面就靠这两个字段：`defaultMedia` 说主按钮发什么，`video` 说还有成片可发。
+    以前草稿里 `video` 非空 + `reason=视频笔记` 会让小红书主按钮看起来要发视频，
+    而它其实发的是图文（2026-09-19 改）。
+    """
+    _, store, _ = run_with_video_and_cards(tmp_path)
+
+    class ImageFirst(FakeChannel):
+        default_media = "images"
+
+    class VideoFirst(FakeChannel):
+        default_media = "video"
+
+    for cls, want in ((ImageFirst, "images"), (VideoFirst, "video")):
+        payload = asyncio.run(direct_publish.list_drafts(store, store.run.id, channels=[cls()]))
+        d = payload["channels"][0]
+        assert d["defaultMedia"] == want, cls.__name__
+        # 成片始终可见（有没有是一回事，这次发不发是另一回事）
+        assert d["video"] and d["video"]["name"] == "video-vertical.mp4", cls.__name__
+        # 配图也始终列出来：界面要能显示"还有 6 张图"
+        assert [i["name"] for i in d["images"]] == ["p1.png", "p2.png"], cls.__name__

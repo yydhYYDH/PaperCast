@@ -26,6 +26,8 @@ class BilibiliChannel(HttpChannel):
     id = "bilibili"
     name = "B站"
     capabilities = frozenset({"text", "video", "images"})
+    # B 站是投稿平台，没有"图文笔记"这种产物，所以默认就是成片。
+    default_media = "video"
     login_kind = "cookies"
     transport = "biliup-http"
     why = "视频投稿（横版 16:9）：成片 + 封面 + 简介交给本机通道服务调 biliup 投递"

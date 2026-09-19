@@ -31,7 +31,12 @@ from .channels import registry
 from .channels.base import Channel, Delivery, Materials, Preflight, is_material_only
 from .config import settings
 from .models import Artifact, new_id
-from .modules.publish import PublishError, collect_materials_for, previous_delivery
+from .modules.publish import (
+    PublishError,
+    collect_materials_for,
+    collect_materials_from_text,
+    previous_delivery,
+)
 
 #: run 目录下不属于 M3 的那一半：M3 写 `publish/<渠道>/`，这里写 `publish/direct/<渠道>/`。
 #: 必须分开 —— 否则作品库直投会把 M3 的回执覆盖掉，「这次到底是谁投的」就查不清了。
@@ -43,15 +48,60 @@ def _err(status: int, code: str, message: str, details: Any = None) -> platforms
     return platforms_mod.PlatformError(status, code, message, details)
 
 
-def _load(store: Any, run_id: str) -> tuple[Any, Path]:
-    """取运行与它的产物目录，并挡住「还没有文章产物」的运行。"""
+def _load(store: Any, run_id: str, *, allow_missing_article: bool = False) -> tuple[Any, Path]:
+    """取运行与它的产物目录。
+
+    `allow_missing_article=True` 放行**没有 `article/` 的运行**：独立脚本产出的成片就落在这种
+    run 里（`run.json` 的 video 阶段一直是 skipped，成片不在流水线产物里），这种运行没有原文案，
+    投递文案只能由调用方在 `overrides` 里给。默认仍然拦住 —— 没文章又没文案时发什么都没意义。
+    """
     run = store.get(run_id)
     if run is None:
         raise _err(404, "RUN_NOT_FOUND", f"没有这次运行：{run_id}")
     run_dir = store.dir(run_id)
-    if not (run_dir / "article").is_dir():
+    if not allow_missing_article and not (run_dir / "article").is_dir():
         raise _err(409, "ARTICLE_MISSING", "这次运行还没有产出文章，先把写作阶段跑完再来发布")
     return run, run_dir
+
+
+def _has_override_text(overrides: Optional[dict[str, Any]]) -> bool:
+    """调用方是不是给了可用的文案（标题和正文都要：缺一个都组不出能投的物料）。"""
+    data = overrides or {}
+    title, content = data.get("title"), data.get("content")
+    return bool(isinstance(title, str) and title.strip()
+                and isinstance(content, str) and content.strip())
+
+
+def _collect(run_dir: Path, run: Any, channel_id: str, overrides: Optional[dict[str, Any]],
+             warn: Any) -> tuple[Optional[Materials], str]:
+    """收物料：有 `article/` 走常规口径；没有的（只出成片的 run）用调用方给的文案。
+
+    返回 `(物料, 人话原因)`，两者必有一个为空 —— 与 `_safe_materials` 同口径。
+    """
+    if (run_dir / "article").is_dir():
+        return _safe_materials(run_dir, run, channel_id, warn)
+    data = overrides or {}
+    try:
+        m = collect_materials_from_text(
+            run_dir, run,
+            title=str(data.get("title") or ""), body=str(data.get("content") or ""),
+            tags=[str(t) for t in (data.get("tags") or [])], warn=warn)
+    except PublishError as exc:
+        return None, f"这次运行没有文章产物，发布要在发布面板里自己填标题和正文：{exc.message}"
+    return m, ""
+
+
+def _preview_without_article(run_dir: Path, run: Any, warn: Any) -> tuple[Optional[Materials], str]:
+    """没有文章产物的运行：先把成片摆出来，并说清缺的是文案（人是可以在面板里填的）。
+
+    故意用 `require_text=False`：界面要能看见「这条运行有什么可投的」，`supports()` 会照实
+    报「缺标题、正文」，而不是让整个草稿列表 409 掉。
+    """
+    try:
+        return collect_materials_from_text(run_dir, run, title="", body="", warn=warn,
+                                           require_text=False), ""
+    except PublishError as exc:
+        return None, exc.message
 
 
 def _pick(pool: list[Channel], channel_id: str) -> Optional[Channel]:
@@ -97,12 +147,21 @@ def _safe_materials(run_dir: Path, run: Any, channel_id: str, warn: Any) -> tupl
 
 
 def _draft(run_id: str, run_dir: Path, channel: Channel, state: Preflight,
-           materials: Optional[Materials], reason: str) -> dict[str, Any]:
-    """一个渠道的待发草稿（给界面预览用）。物料缺失时只有原因，没有正文。"""
+           materials: Optional[Materials], reason: str, *,
+           film: Optional[Path] = None) -> dict[str, Any]:
+    """一个渠道的待发草稿（给界面预览用）。物料缺失时只有原因，没有正文。
+
+    `materials` 必须已经按**这个渠道的默认形态**整理过（见 list_drafts）：界面预览的
+    `reason`/`images` 就是主按钮真会发出去的那一版。`film` 是**另立**的：这条 run 对这个
+    渠道还另有成片可发（小红书默认发图文，但成片按钮要用它）—— 界面靠它决定要不要亮出
+    第二个动作，别从 `images`/`video` 的位置反推。
+    """
     out: dict[str, Any] = {
         "channelId": channel.id,
         "name": channel.name,
         "capabilities": sorted(channel.capabilities),
+        # 不指定形态时这个渠道发什么（images/video）：界面用它给主按钮定性
+        "defaultMedia": channel.default_media,
         "transport": channel.transport,
         "state": state.state,
         "account": state.account,
@@ -123,7 +182,9 @@ def _draft(run_id: str, run_dir: Path, channel: Channel, state: Preflight,
         "body": materials.body,
         "tags": list(materials.tags),
         "images": [_rel(run_id, run_dir, p) for p in materials.images],
-        "video": _rel(run_id, run_dir, materials.video) if materials.video is not None else None,
+        # 这个渠道**可用**的成片（不一定被这次默认形态用到）：界面显示成片名 + 决定要不要
+        # 给「发布视频」。这次真发哪个形态看上面的 defaultMedia 与 reason。
+        "video": _rel(run_id, run_dir, film) if film is not None else None,
         "cover": _rel(run_id, run_dir, materials.cover) if materials.cover is not None else None,
         # 文案来源可审计：界面要能说清「这一版投的是哪份文案」（与 M3 的闸门详情同口径）
         "variant": str(materials.extra.get("variant") or ""),
@@ -141,16 +202,28 @@ async def list_drafts(store: Any, run_id: str, *, channels: Optional[Iterable[Ch
 
     `channels` 只为测试注入；生产走 registry.build_all(settings)。
     """
-    run, run_dir = _load(store, run_id)
+    run, run_dir = _load(store, run_id, allow_missing_article=True)
     pool = list(channels) if channels is not None else registry.build_all(settings)
     states = await _probe(pool)
 
     warnings: list[str] = []
-    drafts = [
-        _draft(run_id, run_dir, channel, states[channel.id],
-               *_safe_materials(run_dir, run, channel.id, warnings.append))
-        for channel in pool
-    ]
+    has_article = (run_dir / "article").is_dir()
+    drafts = []
+    for channel in pool:
+        # 没有文章产物的运行（只出成片的 run）：草稿照出，只是文案缺 —— 界面要能先看见成片，
+        # 再由人把标题/正文填上（填了就由 /publish 的 overrides 带进来）。
+        materials, reason = (
+            _safe_materials(run_dir, run, channel.id, warnings.append) if has_article
+            else _preview_without_article(run_dir, run, warnings.append)
+        )
+        # 形态口径要跟「点主按钮会发生什么」一致：先按渠道默认摘掉/保留成片再预览，
+        # 否则小红书草稿会写着「视频笔记」，而主按钮其实发的是图文（界面自相矛盾）。
+        # 成片先记下来再摘：界面要靠它显示成片名、决定要不要给「发布视频」这个动作。
+        film = materials.video if materials is not None else None
+        if materials is not None:
+            _apply_media(materials, _default_media(channel))
+        drafts.append(_draft(run_id, run_dir, channel, states[channel.id], materials, reason,
+                             film=film))
     return {
         "runId": run_id,
         "previous": previous_delivery(run_dir) or None,
@@ -173,6 +246,49 @@ def _apply_overrides(materials: Materials, overrides: Optional[dict[str, Any]]) 
         materials.tags = [str(t).strip().lstrip("#") for t in tags if str(t).strip()]
 
 
+#: 允许的投递形态（渠道 capabilities 用的是同一套词）。
+MEDIA_KINDS = ("images", "video")
+
+
+def _resolve_media(channel: Channel, media: str) -> str:
+    """定下这次到底发什么形态：调用方指定优先，没指定就用渠道口径。
+
+    同一条 run 往往**两个产物都有**（卡片组图 + 竖版成片），而小红书里图文笔记和视频笔记
+    是两种不同的笔记 —— 渠道只看到 `materials.video` 非空就一定走视频分支
+    （channels/xiaohongshu.py 的 supports），所以"这次发图文"必须能把已挑好的成片**明确摘掉**，
+    否则那几张卡片一张都不会被用到。2026-09-19 实测踩过：默认没摘，6 张卡全被跳过。
+    """
+    kind = (media or "").strip() or _default_media(channel)
+    if kind not in MEDIA_KINDS:
+        raise _err(400, "MEDIA_UNSUPPORTED",
+                   f"不认的投递形态「{kind}」：只能填 {' / '.join(MEDIA_KINDS)}。"
+                   f"不填就用渠道默认（{channel.name} 默认发"
+                   f"{'图文' if _default_media(channel) == 'images' else '视频'}）")
+    return kind
+
+
+def _default_media(channel: Channel) -> str:
+    """渠道默认形态：先问手里这个实例，再退回按 id 查注册表（测试里的假渠道两个都不是）。"""
+    return str(getattr(channel, "default_media", "")
+               or registry.default_media_of(channel.id))
+
+
+def _apply_media(materials: Materials, kind: str) -> str:
+    """按定下来的形态整理物料，返回空串=可以发，否则返回「为什么这个形态发不了」。
+
+    不是发视频就把成片摘掉，让渠道走图文分支。反过来（**要发视频但 run 里没有成片**）必须
+    在这里挡住：`materials.video` 留 None 的话，channels/xiaohongshu.py 的 supports() 会
+    顺着往下走回图文分支、把卡片当成"图文笔记"发出去 —— 调用方要的是视频笔记，结果收到一条
+    图文，形态悄悄变了还报成功。所以宁可返回一句人话原因，让调用方按 blocked 处理。
+    """
+    if kind != "video":
+        materials.video = None
+        return ""
+    if materials.video is None:
+        return "缺成片：这条 run 里没有 video/，发不了视频笔记（要发图文就别指定形态）"
+    return ""
+
+
 def _receipt(channel: Channel, state: Preflight, materials: Materials, delivery: Delivery,
              export: dict[str, Any], option: str) -> dict[str, Any]:
     """与 M3 的回执同字段口径（字段名不同就得多写一套前端渲染，不值得）。"""
@@ -185,6 +301,8 @@ def _receipt(channel: Channel, state: Preflight, materials: Materials, delivery:
         "contentChars": len(materials.body),
         "imageCount": len(materials.images),
         "video": materials.video.name if materials.video is not None else "",
+        # 这次发的是什么形态（图文/成片）：回执要能自证，不然事后翻记录看不出"发的是哪一种笔记"
+        "media": "video" if materials.video is not None else "images",
         "tags": list(materials.tags),
         "variant": str(materials.extra.get("variant") or ""),
         "source": materials.source,
@@ -333,16 +451,22 @@ async def publish_work(store: Any, run_id: str, channel_id: str, *,
                        confirmed: bool = False,
                        overrides: Optional[dict[str, Any]] = None,
                        confirm_account: str = "",
+                       media: str = "",
                        channels: Optional[Iterable[Channel]] = None) -> dict[str, Any]:
     """把这次运行的作品投到一个渠道（或只落草稿）。
 
     - `confirmed=False`：**只落 export/**，一个发布接口都不调 → status="draft"；
     - `confirmed=True`：先落 export/ 兜底，再调渠道 publish() → status 由 Delivery 决定；
+    - `media`：`images`（图文）或 `video`（成片）；**留空就用渠道口径**
+      （小红书默认图文、B 站默认视频，见 `Channel.default_media`）。想发成片走
+      `POST /api/runs/{id}/publish/video`；
     - 账号二次校验：`confirm_account` 与探测到的账号不一致时 409（防投错号）；
     - 素材不适配 / 渠道没就绪 / 没有文案：**不报 4xx**，返回 `status="blocked"` + 人话原因 ——
-      界面要把「为什么投不了」原样显示出来，而不是把它当成一次失败请求。
+      界面要把「为什么投不了」原样显示出来，而不是把它当成一次失败请求；
+    - **没有 `article/` 的运行**（独立脚本只出了成片）：文案由 `overrides` 里的标题/正文给，
+      没给才按老规矩 409 `ARTICLE_MISSING`。
     """
-    run, run_dir = _load(store, run_id)
+    run, run_dir = _load(store, run_id, allow_missing_article=_has_override_text(overrides))
     pool = list(channels) if channels is not None else registry.build_all(settings)
     channel = _pick(pool, channel_id)
     if channel is None:
@@ -350,12 +474,16 @@ async def publish_work(store: Any, run_id: str, channel_id: str, *,
                    f"未知渠道：{channel_id}（可用：{', '.join(c.id for c in pool)}）")
 
     warnings: list[str] = []
-    materials, reason = _safe_materials(run_dir, run, channel.id, warnings.append)
+    materials, reason = _collect(run_dir, run, channel.id, overrides, warnings.append)
     if materials is None:
         return {"channelId": channel.id, "status": "blocked", "warnings": warnings,
                 "error": {"code": "MATERIAL_MISSING", "message": reason}, "receipt": None}
 
     _apply_overrides(materials, overrides)
+    # 形态口径先定下来再落盘/判定：回执里 imageCount/video 要如实反映**这次实际会发什么**，
+    # 否则界面上写着"图片 6 张"、真发出去的却是成片（2026-09-19 踩过）。
+    media_kind = _resolve_media(channel, media)
+    media_problem = _apply_media(materials, media_kind)
 
     state = (await _probe([channel]))[channel.id]
     suitable, why = channel.supports(materials)
@@ -378,6 +506,8 @@ async def publish_work(store: Any, run_id: str, channel_id: str, *,
             notes.append(f"{channel.name}只出素材包、不接投递：{channel.why}")
         if not suitable:
             notes.append(f"另外，这版素材这个渠道还投不了：{why}")
+        if media_problem:
+            notes.append("另外，" + media_problem)
         if not state.ready and not is_material_only(channel):
             notes.append("另外，这个渠道现在还没就绪：" + "；".join(x for x in (state.detail, state.hint) if x))
         return _result(store, run_id, run, channel, state, materials,
@@ -386,6 +516,10 @@ async def publish_work(store: Any, run_id: str, channel_id: str, *,
                        export, "draft", warnings, note="；".join(notes))
 
     # ---- 2. 只有「真投递」才做严格判定：素材适配 → 渠道就绪 → 账号对得上 ----
+    # 形态先判：它比「素材适配」更具体 —— "要发视频但没成片"比"素材不适配"更能说明问题。
+    if media_problem:
+        return {"channelId": channel.id, "status": "blocked", "warnings": warnings,
+                "error": {"code": "MEDIA_UNAVAILABLE", "message": media_problem}, "receipt": None}
     if not suitable:
         return {"channelId": channel.id, "status": "blocked", "warnings": warnings,
                 "error": {"code": "MATERIAL_UNSUITABLE", "message": why}, "receipt": None}

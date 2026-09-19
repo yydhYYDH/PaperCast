@@ -30,10 +30,46 @@ biliup 1.2.4 的 `login` 是**交互菜单**（账号密码 / 短信登录 / 扫
 | DELETE | `/api/v1/login/cookies` | 删掉本机 cookies |
 | POST | `/api/v1/export` | **无副作用**：落素材包（title/desc/tags/视频/封面 + 投稿指引） |
 | POST | `/api/v1/publish` | 真实投稿；需 `confirmed=true`；返回 `{bvid, url, command, stdoutTail}` |
+| GET | `/api/v1/locks` | 看 biliup 的上传锁目录与当前锁文件（含年龄） |
+| DELETE | `/api/v1/locks` | 清上传锁（只在**确认没有别的上传进程**时用，否则会被 B 站限流） |
 
 错误统一 `{"success": false, "error": {"code", "message"}}`，与 backend `PlatformError` 同形。
 常见 code：`BILIUP_MISSING`(501)、`NOT_LOGGED_IN`(401)、`VIDEO_MISSING`(400)、
-`NOT_CONFIRMED`(409)、`UPLOAD_TIMEOUT`(504)、`PUBLISH_FAILED`(502)。
+`NOT_CONFIRMED`(409)、`UPLOAD_LOCKED`(409)、`UPLOAD_LOCK_UNWRITABLE`(500)、
+`UPLOAD_TIMEOUT`(504)、`PUBLISH_FAILED`(502)。
+
+## 上传锁：为什么它曾经让投稿整单失败（2026-09-19 修复）
+
+biliup（Rust 侧 `crates/biliup-cli/src/upload_lock.rs`）投稿前要写一把**账号级互斥锁**：
+
+```
+<dirs::data_local_dir()>/biliup/locks/biliup_upload_<mid>.lock
+dirs::data_local_dir() = 绝对路径的 $XDG_DATA_HOME，否则 $HOME/.local/share
+```
+
+断点续传文件 `biliup_checkpoint_*.json` 也落在同一个数据目录。服务原先只把 `HOME`
+换给了 login 的 pty，**投稿子进程继承真实 HOME**；家目录只读时（只读挂载 / 沙箱）
+投稿就会整单挂掉，而素材包已经落盘：
+
+```
+RuntimeError: Failed to create upload lock: Read-only file system (os error 30)
+  at crates/biliup-cli/src/uploader.rs:459
+```
+
+修法：所有 biliup 子进程统一走 `_biliup_env()`，`HOME`/`XDG_DATA_HOME`/`XDG_CACHE_HOME`/
+`XDG_CONFIG_HOME` 一起钉到 `var/home`（锁目录 = `var/home/.local/share/biliup/locks`）；
+投稿子进程的 cwd 也固定到 `var/logs`（biliup 的 tracing 日志 `download.log` 是相对 cwd 写的，
+不固定会掉在服务进程的 cwd，实测掉到了仓库根目录）。
+
+排障顺序：`GET /health` 看 `locks` / `locks_error`（不为空就是目录不可写）→
+`GET /api/v1/locks` 看有没有上次异常退出留下的僵尸锁（biliup 自己 30 分钟后也会清）→
+确认没有并发的上传进程后 `DELETE /api/v1/locks` 再重投。
+
+回归测试（用假 biliup 复刻锁路径推导，不联网、不真投稿）：
+
+```bash
+cd apps/bilibili-publisher && ../papercast-server/.venv/bin/python -m pytest tests -q
+```
 
 ## 启用步骤（唯一的人工步骤是扫码）
 
@@ -68,6 +104,7 @@ cookies 有效期约 1~3 个月，失效后 `POST /api/v1/login/renew` 或重新
 | `BILIBILI_BILIUP` | `which biliup` → `var/toolchains/bili-venv/bin/biliup` | biliup 可执行文件（工作区把 biliup 装在自己的 venv 里，不在 PATH 中） |
 | `BILIBILI_LOGIN_DIR` | `var/artifacts/bilibili/login` | biliup login 的 cwd：`qrcode.png` 就写在这里 |
 | `BILIBILI_HOME` | `var/home` | 跑 biliup 时的 `HOME`，免得它把凭据写进别人的家目录 |
+| `BILIBILI_DATA_HOME` | `$BILIBILI_HOME/.local/share` | biliup 的数据目录（`XDG_DATA_HOME`）：上传锁与断点续传写在这里；家目录只读时必须指到可写路径 |
 | `BILIBILI_TID` | `231` | 分区 id（以投稿页当前口径为准） |
 | `BILIBILI_UPLOAD_EXTRA` | 空 | 追加投稿参数，如 `--submit web` |
 | `BILIBILI_RETRY_ARGS` | `--line cnbd --limit 1` | 被 413 拒绝时的一次补救重试参数 |

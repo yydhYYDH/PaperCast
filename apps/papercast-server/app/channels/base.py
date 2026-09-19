@@ -151,6 +151,11 @@ class Channel(ABC):
     # 选哪个是**平台口径**，所以声明在这里由 channels 层决定，别让素材收集去猜。
     # 默认横版：B 站等 16:9 平台的题材以横版为母版；竖版平台（小红书）自己覆盖。
     video_orientation: str = "landscape"
+    # 没特别指定时这个渠道发什么形态：`images`（图文/卡片）还是 `video`（成片）。
+    # 同一条 run 常常两个产物都有（卡片组图 + 竖版成片），而平台只认一种笔记形态，
+    # 所以"默认发哪个"是**平台口径**，和 video_orientation 一样声明在渠道层。
+    # 默认图文：卡片是流水线的常规产物，成片是加项，想发成片就走 /publish/video。
+    default_media: str = "images"
 
     def __init__(self, settings: Any) -> None:
         self.settings = settings
@@ -169,6 +174,8 @@ class Channel(ABC):
             "name": self.name,
             "aliases": list(self.aliases),
             "capabilities": sorted(self.capabilities),
+            # 不特别指定时发什么形态：界面拿它给按钮定性（主按钮发默认形态、次按钮发成片）
+            "defaultMedia": self.default_media,
             "login": self.login_kind,
             "transport": self.transport,
             "endpoint": self.base_url,
@@ -286,12 +293,55 @@ class Channel(ABC):
         """真实投递。confirmed=False 时必须直接返回 status=blocked，不发任何请求。"""
 
 
+def parse_path_map(text: str) -> list[tuple[str, str]]:
+    """解析 `本机前缀=对端前缀` 列表（逗号分隔）。
+
+    按前缀**长的优先**排序：短前缀在前会把长前缀吃掉（`/a=/x` 会先命中 `/a/b/...`）。
+    不符合形状的条目直接跳过 —— 配置写错不该让发布挂掉。
+    """
+    pairs: list[tuple[str, str]] = []
+    for item in (text or "").split(","):
+        item = item.strip()
+        if not item or "=" not in item:
+            continue
+        src, dst = (part.strip() for part in item.split("=", 1))
+        if src and dst:
+            pairs.append((src.rstrip("/") or "/", dst.rstrip("/")))
+    return sorted(pairs, key=lambda p: len(p[0]), reverse=True)
+
+
+def map_remote_path(path: Path | str, mapping: str) -> str:
+    """把素材路径换成**通道服务所在机器**读得到的写法（见 `Settings.channel_path_map`）。
+
+    只在同前缀时替换；没配、或路径不在任何映射里，就原样返回。前缀按目录边界匹配
+    （`/a/b` 不会命中 `/a/bc`）。同机部署（Linux 服务器上通道服务与后端同机）不需要配，
+    这里就是恒等函数。
+    """
+    text = str(path)
+    for src, dst in parse_path_map(mapping):
+        if text == src:
+            return dst
+        if text.startswith(src + "/"):
+            return dst + text[len(src):]
+    return text
+
+
 class HttpChannel(Channel):
     """走本机 HTTP 通道服务的渠道基类（小红书 / 知乎 / B 站都是这一形状）。"""
 
     health_timeout: float = 8.0
     probe_timeout: float = 45.0
     publish_timeout: float = 300.0
+
+    def remote_path(self, path: Path | str) -> str:
+        """递给通道服务前，把**本机素材路径**换成对端读得到的写法。
+
+        只有跨机器才需要。本仓默认就是跨机器：后端在 WSL 里，小红书 MCP 特意跑在 Windows
+        上（要的是原生 Windows 指纹，别拿 Linux 无头 + Windows 指纹这种组合去撞风控）——
+        所以 `/home/yydh/hack/...` 对面根本不认，MCP 只会回「视频文件不存在或不可访问:
+        CreateFile …」。配 `CHANNEL_PATH_MAP` 即可（见 .env.example）。
+        """
+        return map_remote_path(path, getattr(self.settings, "channel_path_map", "") or "")
 
     @property
     def base_url(self) -> str:
@@ -312,11 +362,28 @@ class HttpChannel(Channel):
 
     @staticmethod
     def error_of(status: int, body: dict[str, Any]) -> dict[str, str]:
-        """把各渠道的错误统一成 {code, message}。"""
-        err = body.get("error") or {}
+        """把各渠道的错误统一成 {code, message}。
+
+        各通道的 `error` 形状并不一致：知乎/B站 是 `{code, message}`，**小红书 MCP 是字符串**
+        （`{"error":"视频发布失败","code":"PUBLISH_VIDEO_FAILED","details":"CreateFile …"}`）。
+        原来一律当 dict 用，于是真原因（视频路径在 MCP 那侧不存在）被一句
+        `AttributeError: 'str' object has no attribute 'get'` 盖掉，排查绕了一大圈
+        （2026-09-19 实测）。所以这里两种形状都认，并把 `details` 拼进 message ——
+        那句才是能定位问题的。
+        """
+        raw = body.get("error")
+        if isinstance(raw, dict):
+            err: dict[str, Any] = raw
+        elif isinstance(raw, str):
+            err = {"message": raw}
+        else:
+            err = {}
         code = err.get("code") or body.get("code") or f"HTTP_{status}"
-        msg = err.get("message") or body.get("message") or "渠道返回失败"
-        return {"code": str(code)[:64], "message": str(msg)[:400]}
+        msg = str(err.get("message") or body.get("message") or "渠道返回失败")
+        details = err.get("details") or body.get("details")
+        if details and str(details) not in msg:
+            msg = f"{msg}：{details}"
+        return {"code": str(code)[:64], "message": msg[:400]}
 
     async def health(self) -> tuple[bool, str, dict[str, Any]]:
         """返回 (可达, 说明, 原始 body)。"""

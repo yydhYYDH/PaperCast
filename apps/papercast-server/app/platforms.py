@@ -70,11 +70,27 @@ class Channel:
 
 
 def _static_channels() -> list[Channel]:
-    """不发网络请求的渠道（当前为空：三个渠道都要探测，公众号已按用户要求下线）。
+    """不发网络请求的渠道：**X（推特）**—— 没有通道服务、没有账号，状态是配置性事实。
 
-    保留这个函数是为了让「加一个只靠配置判定的渠道」仍然有地方落 —— 返回空列表即无此类渠道。
+    X 是 material-only 渠道（见 app/channels/x.py）：只把英文 thread 落成素材包，不接投递。
+    所以它在「平台账号」页既不该显示成未登录，也不该给一个登录按钮 —— state 用 material_only，
+    login 用 none。
     """
-    return []
+    return [
+        Channel(
+            id="x",
+            name="X（推特）",
+            kind="export",
+            login="none",
+            state="material_only",
+            account="",
+            detail="只把英文 thread 落成本地素材包，不会真的发到 X（本轮不接投递通道）",
+            endpoint="本地素材包（无通道服务）",
+            needs=["英文传播：6-10 条英文 thread"],
+            capabilities=["英文 thread 素材包"],
+            loginHint="不用登录：导出后打开 X 网页端手动发；接投递通道是 R2 的事",
+        )
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -291,7 +307,7 @@ async def list_channels(force: bool = False) -> list[dict[str, Any]]:
     bilibili = await _bilibili_cached(force)
 
     channels = [xhs, zhihu, bilibili, *_static_channels()]
-    order = {"xhs": 0, "zhihu": 1, "bilibili": 2}
+    order = {"xhs": 0, "zhihu": 1, "bilibili": 2, "x": 3}
     channels.sort(key=lambda c: order.get(c.id, 99))
     return [c.dump() for c in channels]
 

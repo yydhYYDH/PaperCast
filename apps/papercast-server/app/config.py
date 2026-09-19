@@ -177,8 +177,17 @@ class Settings:
     xhs_mcp_base: str = "http://127.0.0.1:18060"
     zhihu_publisher_base: str = "http://127.0.0.1:18070"
     bilibili_publisher_base: str = "http://127.0.0.1:18080"
-    # 启用的投递渠道（规范 id，逗号分隔）；渠道实现见 app/channels/
-    channels: list[str] = field(default_factory=lambda: ["xiaohongshu", "zhihu", "bilibili"])
+    # 素材路径映射（可选）：「本机前缀=通道服务那侧的前缀」，逗号分隔多条，长的优先。
+    # **跨机器时必须配**：后端在 WSL 里、小红书 MCP 跑在 Windows 上时，我们递过去的
+    # `/home/yydh/hack/...` 在对面根本不存在，MCP 只会回一句
+    # 「视频文件不存在或不可访问: CreateFile …: The system cannot find the path specified.」
+    # （2026-09-19 实测，1.8ms 就失败，浏览器都没起）。配好后递的是对端读得到的写法。
+    # 例：CHANNEL_PATH_MAP=/home/yydh/hack=//wsl.localhost/Ubuntu/home/yydh/hack
+    # 同机部署（Linux 服务器上通道服务与后端同机）留空即可 —— 路径原样传递，零影响。
+    channel_path_map: str = ""
+    # 启用的渠道（规范 id，逗号分隔）；渠道实现见 app/channels/
+    # x = X（推特）：material-only 渠道 —— 只把英文 thread 落成素材包，不接投递、不会真发
+    channels: list[str] = field(default_factory=lambda: ["xiaohongshu", "zhihu", "bilibili", "x"])
     # 真实投递前的二次校验账号（可选）：填了的话渠道服务会比对该账号，防串号
     publish_confirm_account: str = ""
 
@@ -212,6 +221,7 @@ class Settings:
         s.xhs_mcp_base = pick("XHS_MCP_BASE", s.xhs_mcp_base).rstrip("/")
         s.zhihu_publisher_base = pick("ZHIHU_PUBLISHER_BASE", s.zhihu_publisher_base).rstrip("/")
         s.bilibili_publisher_base = pick("BILIBILI_PUBLISHER_BASE", s.bilibili_publisher_base).rstrip("/")
+        s.channel_path_map = pick("CHANNEL_PATH_MAP", s.channel_path_map)
         s.channels = [c.strip() for c in pick("PAPERCAST_CHANNELS", ",".join(s.channels)).split(",") if c.strip()]
         s.publish_confirm_account = pick("PUBLISH_CONFIRM_ACCOUNT", s.publish_confirm_account)
 

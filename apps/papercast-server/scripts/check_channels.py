@@ -70,9 +70,12 @@ def sample_materials(*, with_video: bool, run_id: str, tmp: Path) -> Materials:
 def offline_checks(tmp: Path) -> None:
     print("\n[1] 契约与注册表")
     channels = registry.build_all(settings)
-    check("内置三个渠道", [c.id for c in channels] == ["xiaohongshu", "zhihu", "bilibili"],
+    check("内置三个真渠道 + material-only 的 X",
+          [c.id for c in channels] == ["xiaohongshu", "zhihu", "bilibili", "x"],
           "、".join(c.name for c in channels))
+    check("X 只出素材包（material_only=True）", registry.get(settings, "x").material_only is True)
     check("别名 xhs → xiaohongshu", registry.canonical("xhs") == "xiaohongshu")
+    check("别名 twitter / en → x", registry.canonical("twitter") == "x" and registry.canonical("en") == "x")
     got, problems = registry.resolve_targets(settings, ["xhs", "zhihu", "bilibili", "not-a-platform"])
     check("目标解析含别名", [c.id for c in got] == ["xiaohongshu", "zhihu", "bilibili"])
     check("未知渠道不静默丢弃", [p["id"] for p in problems] == ["not-a-platform"], json.dumps(problems, ensure_ascii=False))
@@ -82,7 +85,8 @@ def offline_checks(tmp: Path) -> None:
     print("\n[2] 素材适配规则（平台差异留在 adapter 里）")
     no_video = sample_materials(with_video=False, run_id="run_offline", tmp=tmp)
     with_video = sample_materials(with_video=True, run_id="run_offline", tmp=tmp)
-    xhs, zhihu, bili = channels
+    by_id = {c.id: c for c in channels}
+    xhs, zhihu, bili, x = by_id["xiaohongshu"], by_id["zhihu"], by_id["bilibili"], by_id["x"]
     check("小红书要图片", xhs.supports(no_video)[0] and "图文笔记" in xhs.supports(no_video)[1])
     check("小红书有视频走视频笔记", xhs.supports(with_video)[1] == "视频笔记")
     long_title = dataclasses.replace(no_video, title="标题" * 30)
@@ -93,6 +97,10 @@ def offline_checks(tmp: Path) -> None:
     check("B站缺视频时如实报不可投", not ok and "缺视频" in why, why)
     check("B站有视频可投", bili.supports(with_video)[0])
     check("知乎能力声明不含视频（没接就不吹）", "video" not in zhihu.capabilities)
+    ok, why = x.supports(dataclasses.replace(no_video, extra={"variantPlatform": "zhihu"}))
+    check("X 拒绝中文稿（它只投英文 thread）", not ok and "英文 thread" in why, why)
+    check("X 收英文 thread", x.supports(dataclasses.replace(no_video, extra={"variantPlatform": "en"}))[0])
+    check("X preflight 报 material_only（不触网）", asyncio.run(x.preflight()).state == "material_only")
 
     print("\n[3] 兜底素材包（渠道服务全挂也要能手动发）")
     out = tmp / "exports"
@@ -105,10 +113,13 @@ def offline_checks(tmp: Path) -> None:
     check("B站素材包含视频", "video.mp4" in (out / "bilibili" / "publish_request.json").read_text(encoding="utf-8"))
 
     print("\n[4] 未过闸门绝不允许真投")
-    for channel in channels:
+    for channel in [c for c in channels if not c.material_only]:
         delivery = asyncio.run(channel.publish(with_video if channel.id == "bilibili" else no_video, confirmed=False))
         check(f"{channel.name} 未确认 → blocked/NOT_CONFIRMED",
               delivery.status == "blocked" and delivery.error["code"] == "NOT_CONFIRMED")
+    # X 是 material-only：**放行了也只回 draft** —— 这是「不接投递通道」的机器可验证证据
+    check("X 闸门放行也只回 draft（一个字节都不发）",
+          asyncio.run(x.publish(no_video, confirmed=True)).status == "draft")
 
 
 def duplicate_guard_checks(tmp: Path) -> None:
@@ -168,11 +179,17 @@ async def run_m3(tmp: Path, option: str, with_video: bool, already: bool) -> Non
     stage.status = "running"
     ctx = StageContext(pipe, run, stage, {})
     task = asyncio.create_task(publish_mod.run_publish(ctx))
-    for _ in range(200):                       # 等闸门出现
+    # 等闸门出现：真渠道探测很慢（本机实测小红书 47s / 知乎 28s），所以给足 120s ——
+    # 原先是 10s，本机服务在跑的时候等不到闸门，resolve_gate 打空、任务永远等下去。
+    for _ in range(1200):
         if stage.gate is not None or task.done():
             break
-        await asyncio.sleep(0.05)
-    check("闸门出现且 detail 列清各渠道", stage.gate is not None and "本次发布计划" in stage.gate.detail)
+        await asyncio.sleep(0.1)
+    if stage.gate is None:
+        task.cancel()
+        check("闸门出现（探测完成）", False, "120s 内没等到闸门：探测太慢或编排提前失败")
+        return
+    check("闸门出现且 detail 列清各渠道", "本次发布计划" in stage.gate.detail)
     if stage.gate is not None:
         print("    闸门 detail:\n" + "\n".join("      " + line for line in stage.gate.detail.splitlines()))
         check("闸门给出 export 兜底说明", "export" in stage.gate.detail or "素材包" in stage.gate.detail)
@@ -203,13 +220,63 @@ async def run_m3(tmp: Path, option: str, with_video: bool, already: bool) -> Non
     check("产物已登记（receipts.json）", any(a.label == "发布回执总表" for a in stage.artifacts))
 
 
+async def run_m3_with_x(tmp: Path) -> None:
+    """英文 thread 在 → X 自动进这一轮目标；闸门放行也只落素材包（回执 draft、零真投递）。"""
+    print("\n[8] M3 的 X 路径（material-only 渠道）")
+    runs, uploads = tmp / "runs-x", tmp / "uploads-x"
+    store = RunStore(runs, uploads)
+    # 只启用 x：这一节**不许碰到任何真渠道**（否则闸门一放行就会往真账号上投）
+    isolated = dataclasses.replace(settings, data_dir=runs, upload_dir=uploads, channels=["x"])
+    pipe = Pipeline(store, isolated)
+    run = new_run(SourceInput(kind="arxiv", value="2510.05096", title="示例论文"),
+                  RunConfig(publish=PublishConfig(targets=["x"])), "示例论文")
+    store.add(run)
+    run_dir = store.dir(run.id)
+    (run_dir / "article").mkdir(parents=True, exist_ok=True)
+    (run_dir / "article" / "zhihu-analyst.md").write_text(
+        "# 中文长文\n\n正文。\n\n## 标签\n#论文\n", encoding="utf-8")
+    (run_dir / "article" / "en-analyst.md").write_text(
+        "# English thread: three layers\n\n1/ hook\n\n2/ method\n\n## Tags\n- #Paper\n", encoding="utf-8")
+
+    stage = next(s for s in run.stages if s.id == "publish")
+    stage.status = "running"
+    ctx = StageContext(pipe, run, stage, {})
+    task = asyncio.create_task(publish_mod.run_publish(ctx))
+    for _ in range(1200):
+        if stage.gate is not None or task.done():
+            break
+        await asyncio.sleep(0.1)
+    detail = stage.gate.detail if stage.gate is not None else ""
+    check("闸门写清「只落素材包，不真投递」", "X（推特）：只落素材包" in detail, detail.replace("\n", " | ")[:120])
+    check("X 的文案说明写清用的是英文 thread", "[变体 en-analyst]" in detail)
+    if stage.gate is not None:
+        pipe.resolve_gate(run.id, "publish", "continue")   # 放行也不许真发 X
+    await asyncio.wait_for(task, timeout=180)
+
+    work = store.stage_dir(run.id, "publish")
+    receipts = json.loads((work / "receipts.json").read_text(encoding="utf-8"))
+    xr = receipts["channels"].get("x")
+    check("X 有独立回执", isinstance(xr, dict), json.dumps(xr, ensure_ascii=False)[:100] if xr else "（没有）")
+    check("X 回执恒为 draft（闸门放行也没真发）", bool(xr) and xr["status"] == "draft")
+    check("X 投的是英文 thread 那份（不是中文稿）", bool(xr) and xr["variant"].startswith("en"),
+          xr["variant"] if xr else "")
+    check("X 素材包已落盘", (work / "x" / "export" / "content.txt").is_file())
+    xs = {c.label: c.state for c in stage.checks
+          if c.label in ("素材适配：X（推特）", "渠道状态：X（推特）")}
+    check("X 的渠道状态是中性 run（它本来就不投，不许判 fail）",
+          xs.get("渠道状态：X（推特）") == "run", json.dumps(xs, ensure_ascii=False))
+    check("X 的素材适配有英文 thread 就判 pass（按事实，不按渠道种类）",
+          xs.get("素材适配：X（推特）") == "pass")
+    check("X 不进「可投递渠道」", all("X（推特）" not in c.detail for c in stage.checks if c.label == "可投递渠道"))
+
+
 async def live_checks() -> None:
     print("\n[7] 真实探测三个通道服务（--live）")
     for channel in registry.build_all(settings):
         state = await channel.preflight()
         print(f"  · {channel.name:<4} {state.state:<15} {state.detail[:70]}")
         check(f"{channel.name} 探测有明确结论", state.state in
-              ("ready", "login_required", "offline", "unconfigured", "blocked"),
+              ("ready", "login_required", "offline", "unconfigured", "blocked", "material_only"),
               f"{state.state} / hint={'有' if state.hint or state.ready else '无'}")
         check(f"{channel.name} 不可用时必须给下一步动作", state.ready or bool(state.hint))
 
@@ -232,6 +299,7 @@ def main() -> int:
             asyncio.run(live_checks())
         if args.run:
             asyncio.run(run_m3(tmp, args.option, args.with_video, args.already_published))
+            asyncio.run(run_m3_with_x(tmp))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
