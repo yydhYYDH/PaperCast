@@ -78,7 +78,7 @@ function fmt(s: number) {
     <div v-if="!video" class="empty">视频阶段尚未产出</div>
     <template v-else>
       <div class="player-wrap">
-        <video ref="el" :src="video.url" controls playsinline @timeupdate="onTime" @loadedmetadata="onLoaded" />
+        <video ref="el" :src="assetUrl(video.url)" controls playsinline @timeupdate="onTime" @loadedmetadata="onLoaded" />
         <div class="meta row wrap">
           <span class="chip accent mono">1920×1080 · 16:9</span>
           <span class="chip mono">{{ props.run.config.video.voice }}</span>

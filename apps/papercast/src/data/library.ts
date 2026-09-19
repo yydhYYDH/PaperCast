@@ -12,17 +12,29 @@ export type PlatformId = 'xhs' | 'zhihu' | 'bilibili' | 'en' | 'generic'
 
 export type Tone = 'red' | 'blue' | 'green' | 'amber' | 'ink'
 
-export interface PlatformMeta { label: string; hint: string; tone: Tone }
+export interface PlatformMeta {
+  label: string
+  hint: string
+  tone: Tone
+  /** 这个平台自己的封面比例：小红书 3:4、知乎横版 4:3、B 站 16:9 —— 作品卡按它开框 */
+  ratio: number
+  /** 后端渠道 id（publish/receipts.json 的 channels 键）；没有渠道的为空串 */
+  channel: string
+  /** 一件作品在这个平台上的量词：「3 篇图文」「2 条视频」 */
+  unit: string
+  /** 卡片最小列宽：小红书窄、B 站宽，格子跟着内容走 */
+  min: number
+}
 
 /** 板块顺序：三个真实渠道 → 英文变体 → 不针对单一平台的跨平台作品。 */
 export const PLATFORM_ORDER: PlatformId[] = ['xhs', 'zhihu', 'bilibili', 'en', 'generic']
 
 export const PLATFORM_META: Record<PlatformId, PlatformMeta> = {
-  xhs: { label: '小红书', hint: '竖长图与短文案，手机上看', tone: 'red' },
-  zhihu: { label: '知乎', hint: '长文与横版配图，给深度读者', tone: 'blue' },
-  bilibili: { label: 'B 站', hint: '成片视频与横屏封面', tone: 'green' },
-  en: { label: '英文', hint: '英文变体，本轮只生成不发布', tone: 'amber' },
-  generic: { label: '跨平台', hint: '海报母版、成片、发布回执这类不针对单一平台的作品', tone: 'ink' },
+  xhs: { label: '小红书', hint: '竖长图与短文案，手机上看', tone: 'red', ratio: 3 / 4, channel: 'xiaohongshu', unit: '篇图文', min: 214 },
+  zhihu: { label: '知乎', hint: '长文与横版配图，给深度读者', tone: 'blue', ratio: 4 / 3, channel: 'zhihu', unit: '篇长文', min: 292 },
+  bilibili: { label: 'B 站', hint: '成片视频与横屏封面', tone: 'green', ratio: 16 / 9, channel: 'bilibili', unit: '条视频', min: 336 },
+  en: { label: '英文', hint: '英文变体，本轮只生成不发布', tone: 'amber', ratio: 3 / 4, channel: 'en', unit: '件', min: 214 },
+  generic: { label: '跨平台', hint: '海报母版、成片这类不针对单一平台的作品', tone: 'ink', ratio: 3 / 2, channel: '', unit: '件', min: 252 },
 }
 
 /** 命名记号 → 平台。顺序有意义：先命中的先算。 */

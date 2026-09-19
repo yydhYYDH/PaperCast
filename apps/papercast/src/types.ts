@@ -90,6 +90,47 @@ export interface PaperDigest {
   stagesNote: string
 }
 
+/* ---------- 发布回执（作品库用它回答「这件发了没有」） ---------- */
+
+/** 一个渠道在这次发布里的结果：后端 publish/<渠道>/receipt.json，也是 receipts.json 的 channels.<id> */
+export interface ChannelReceipt {
+  channel: string
+  channelName: string
+  /** published 才算真的发出去了；draft 只落了素材包，blocked/skipped 是没投成 */
+  status: 'published' | 'failed' | 'draft' | 'blocked' | 'skipped'
+  optionId: string
+  /** **这个渠道实际会投的那份**标题（与 run.title 不同，也与别的平台不同） */
+  title: string
+  contentChars: number
+  imageCount: number
+  video: string
+  tags: string[]
+  /** 用的哪份文案变体，例如 xhs-author；知乎没有专属变体时会退回中文优先的那份 */
+  variant: string
+  source: string
+  exportDir: string
+  state?: { state: string; account?: string; detail?: string; hint?: string; reachable?: boolean }
+  /** 只有真投出去才有 */
+  url?: string
+  remoteId?: string
+  account?: string
+  error?: { code: string; message: string }
+  /** 秒级时间戳 */
+  at: number
+}
+
+/** 一次运行的发布总表：后端 publish/receipts.json */
+export interface RunReceipts {
+  optionId: string
+  status: 'published' | 'failed' | 'draft' | 'blocked' | 'skipped'
+  material?: { title: string; contentChars: number; imageCount: number; video: string; tags: string[]; variant: string }
+  channels: Record<string, ChannelReceipt>
+  published: string[]
+  failed: string[]
+  blocked: string[]
+  at: number
+}
+
 /* ---------- 运营维护 ---------- */
 
 export interface OpsHealth {
@@ -239,6 +280,89 @@ export interface PlatformPublishResult {
   account: string
   transport?: string
   receipt?: string
+}
+
+/* ---------------- 作品库直投：不走流水线闸门的那条发布路径 ---------------- */
+/* 契约：GET /api/runs/:id/drafts —— 逐渠道待发草稿；POST /api/runs/:id/publish —— 一个渠道一次确认 */
+
+/** 待发草稿里的一张图 / 一段视频：后端给的是相对地址，界面必须走 assetUrl() */
+export interface DraftMedia {
+  path: string
+  name: string
+  url: string
+}
+
+/**
+ * 一个渠道的待发草稿。**文案是后端按渠道拣好的那一份**（小红书投 xhs 变体、知乎投 zhihu 变体），
+ * 前端不许自己挑变体 —— 那套规则在后端只存在一处。
+ */
+export interface RunDraft {
+  channelId: string
+  name: string
+  capabilities: string[]
+  transport: string
+  state: PlatformState
+  account: string
+  detail: string
+  hint: string
+  ready: boolean
+  /** 后端有没有拣到可投的文案（false 时下面几项都不存在） */
+  hasDraft: boolean
+  /** 素材本身适不适配这个平台（小红书标题超重、B 站缺视频…） */
+  suitable: boolean
+  /** 一句人话：适配说明，或「为什么投不了」 */
+  reason: string
+  title?: string
+  body?: string
+  tags?: string[]
+  images?: DraftMedia[]
+  video?: DraftMedia | null
+  cover?: DraftMedia | null
+  /** 文案出处（xhs / zhihu-analyst…）：界面要靠它说清「这一版投的是哪份文案」 */
+  variant?: string
+  variantPlatform?: string
+  source?: string
+  blockedBy?: string
+}
+
+/** 这次运行的逐渠道草稿 + 「已经投过一次」的历史证据 */
+export interface RunDrafts {
+  runId: string
+  /** 本机检出这个 run 已投递过的证据（例如 B 站成片回执），有值时发布前要二次提醒 */
+  previous: { channel: string; url: string; bvid: string; source: string; at: string } | null
+  /** 后端拣文案时的真话（例如「B 站没有专属变体，借了小红书那份」） */
+  warnings: string[]
+  channels: RunDraft[]
+}
+
+export interface RunPublishRequest {
+  channelId: string
+  /** false = 只落草稿（无副作用）；true = 真投递（不可逆，必须过人工确认） */
+  confirmed: boolean
+  /** 可选：与当前登录账号不一致时后端直接拒绝（防投错号） */
+  confirmAccount?: string
+  title?: string
+  content?: string
+  tags?: string[]
+}
+
+export type RunPublishStatus = 'published' | 'failed' | 'blocked' | 'draft'
+
+export interface RunPublishResult {
+  channelId: string
+  channelName?: string
+  status: RunPublishStatus
+  url?: string
+  remoteId?: string
+  account?: string
+  error?: { code: string; message: string } | null
+  /** 落到 export/ 的素材包文件（投递失败也一定有） */
+  files?: string[]
+  exportDir?: string
+  exportError?: string
+  receipt?: Record<string, unknown> | null
+  receiptUrl?: string
+  warnings?: string[]
 }
 
 /** 扫码登录二维码。timeout 是 MCP 给的字符串（"4m0s"），expiresAt 是毫秒时间戳 */

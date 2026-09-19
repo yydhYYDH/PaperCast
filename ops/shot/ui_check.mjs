@@ -46,18 +46,23 @@ const pages = []
 pages.push(await visit('平台账号', 'ui-platforms.png'))
 
 // 退出登录：只打开确认框再取消（不动真实凭证）
-await page.locator('.ch.ready .btn.danger').first().click()
-await page.waitForSelector('.sheet', { timeout: 8000 })
-await page.waitForTimeout(400)
-const dialog = {
-  title: await page.locator('.sheet-title').innerText().catch(() => null),
-  text: (await page.locator('.sheet-text').innerText().catch(() => '')).slice(0, 80),
-  noWindowConfirm: true,
+// 没有「已登录」的渠道时跳过这一步 —— 这台机器上登录态会变，
+// 整条核验不该因为「此刻谁都没登录」而崩在第一个页面。
+let dialog = { skipped: '此刻没有已登录的渠道，退出登录确认框没法验' }
+if (await page.locator('.ch.ready .btn.danger').count()) {
+  await page.locator('.ch.ready .btn.danger').first().click()
+  await page.waitForSelector('.sheet', { timeout: 8000 })
+  await page.waitForTimeout(400)
+  dialog = {
+    title: await page.locator('.sheet-title').innerText().catch(() => null),
+    text: (await page.locator('.sheet-text').innerText().catch(() => '')).slice(0, 80),
+    noWindowConfirm: true,
+  }
+  await page.screenshot({ path: WS + '/docs/evidence/ui-logout-confirm.png' })
+  await page.locator('.sheet-foot .btn').first().click()
+  await page.waitForTimeout(600)
+  dialog.closedAfterCancel = (await page.locator('.sheet').count()) === 0
 }
-await page.screenshot({ path: WS + '/docs/evidence/ui-logout-confirm.png' })
-await page.locator('.sheet-foot .btn').first().click()
-await page.waitForTimeout(600)
-dialog.closedAfterCancel = (await page.locator('.sheet').count()) === 0
 
 pages.push(await visit('运营维护', 'ui-ops.png'))
 // 更新数据 → 应出现回执气泡
