@@ -536,6 +536,143 @@ def _set_tags(page: Any, tags: list[str], warnings: list[str]) -> int:
     return added
 
 
+# --------------------------------------------------------------------------- #
+# 发布后核验：点完「发布」不等于发出去了
+# --------------------------------------------------------------------------- #
+
+# 知乎的「这篇不存在」页：登录态打开一条被删/从未存在过的文章就会看到它
+_ZH_MISSING_MARKERS = ("没有知识存在的荒原", "内容不存在", "你似乎来到了")
+
+# 账号文章列表接口（和 scripts/list_articles.py 用的是同一个，**纯读**）
+_ARTICLE_LIST_API = "https://www.zhihu.com/api/v4/members/{t}/articles?limit=20&offset=0&sort_by=created"
+
+
+def _norm_title(t: str) -> str:
+    return re.sub(r"\s+", "", t or "")
+
+
+def account_articles(page: Any, account_token: str) -> Optional[list[dict[str, Any]]]:
+    """列出当前账号的文章。
+
+    **读不到返回 None（≠ 空表）**：空表是「读到了，但一篇都没有」，None 是「这次没读上」。
+    两者在结论里必须分开说 —— 否则「没读上」会被写成「账号里没有它」。
+    """
+    if not account_token:
+        return None
+    try:
+        page.goto(_ARTICLE_LIST_API.format(t=account_token), wait_until="domcontentloaded", timeout=30000)
+        data = json.loads(page.inner_text("body"))
+    except Exception as exc:
+        logger.warning(f"读账号文章列表失败：{type(exc).__name__}: {str(exc)[:120]}")
+        return None
+    return [it for it in (data.get("data") or []) if isinstance(it, dict)]
+
+
+def verify_published(
+    page: Any,
+    account_token: str,
+    url: str,
+    title: str,
+    *,
+    tries: int = 4,
+    gap: float = 5.0,
+) -> dict[str, Any]:
+    """核验「这一篇真的发出去了吗」：账号文章列表里有没有它 / 文章页能不能打开。
+
+    为什么必须核验：点完「发布」知乎可能根本没发（校验没过、触发风控），页面照样停在
+    /p/<id>，于是回执把「没发出去」写成「已发布」。2026-09-19 实测两次（22:24 与 22:53 的回执
+    都写 published，登录态打开那个链接是知乎 404、账号文章列表里也没有它）；同一天另外两篇
+    则是**记了 /edit 编辑页地址**。所以这里只认「账号列表里有它」或「文章页打得开且标题对得上」。
+
+    返回 {verified, canonicalUrl, matchedTitle, total, how, note}。**纯读，不改任何东西。**
+    """
+    want_id = ""
+    m = re.search(r"/p/(\d+)", url or "")
+    if m:
+        want_id = m.group(1)
+    want_title = _norm_title(title)
+
+    total = 0
+    readable = False      # 读到过列表吗？没有的话结论只能是「无法确认」，不能说「账号里没有」
+    for attempt in range(max(1, tries)):
+        items = account_articles(page, account_token)
+        if items is None:
+            if attempt < tries - 1:
+                time.sleep(gap)
+            continue
+        readable = True
+        total = len(items)
+        for it in items:
+            if want_id and str(it.get("id") or "") == want_id:
+                return {
+                    "verified": True, "canonicalUrl": str(it.get("url") or url), "matchedTitle": str(it.get("title") or ""),
+                    "total": total, "how": "account-list", "readable": True, "note": "",
+                }
+        if want_title:
+            for it in items:
+                if _norm_title(str(it.get("title") or "")) == want_title:
+                    note = ""
+                    if want_id and str(it.get("id") or "") != want_id:
+                        note = "回执里的地址不是这篇文章的地址（登录页拿到的多是编辑页/草稿地址），已按账号列表里的正式地址记"
+                    return {
+                        "verified": True, "canonicalUrl": str(it.get("url") or url), "matchedTitle": str(it.get("title") or ""),
+                        "total": total, "how": "account-list-title", "readable": True, "note": note,
+                    }
+        if attempt < tries - 1:
+            time.sleep(gap)      # 刚发出去可能还没进列表，给它几次机会再判死
+
+    # 列表里没有：再看文章页本身（可能是刚发布、还在审核，列表滞后）
+    if url:
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            time.sleep(2.5)
+            body = ""
+            try:
+                body = str(page.inner_text("body") or "")
+            except Exception:
+                body = ""
+            head = body[:400]
+            page_title = str(page.title() or "")
+            missing = any(k in head or k in page_title for k in _ZH_MISSING_MARKERS)
+            if not missing and want_title and want_title in _norm_title(page_title):
+                return {
+                    "verified": True, "canonicalUrl": url, "matchedTitle": page_title.strip(),
+                    "total": total, "how": "article-page", "readable": readable,
+                    "note": f"账号文章列表（{total} 篇）里暂时没看到它（可能刚发布或还在审核），但文章页能打开且标题对得上",
+                }
+        except Exception as exc:
+            logger.warning(f"打开文章页核验失败：{type(exc).__name__}: {str(exc)[:120]}")
+
+    if not readable:
+        note = "连续几次都没能读到账号文章列表，文章页也打不开，无法确认这一篇真的发出去了"
+    else:
+        note = f"账号文章列表（{total} 篇）里没有这一篇，链接打开也不是这篇文章" + (
+            "（回执里那个地址多半是编辑页/草稿地址）" if want_id else ""
+        )
+    return {
+        "verified": False, "canonicalUrl": "", "matchedTitle": "", "total": total, "how": "",
+        "readable": readable, "note": note,
+    }
+
+
+def check_article(url: str, title: str = "", *, tries: int = 1) -> dict[str, Any]:
+    """独立核验一个链接（给 /api/v1/verify 用）：自己起一个浏览器上下文，纯读。"""
+    from browser.manager import create_browser  # type: ignore[import-not-found]
+
+    with create_browser(headless=True) as (_b, _ctx, page):
+        page.set_default_timeout(30000)
+        token = ""
+        try:
+            page.goto("https://www.zhihu.com/api/v4/me", wait_until="domcontentloaded", timeout=30000)
+            token = str(json.loads(page.inner_text("body")).get("url_token") or "")
+        except Exception as exc:
+            logger.warning(f"读账号身份失败：{type(exc).__name__}: {str(exc)[:120]}")
+        out = verify_published(page, token, url, title, tries=tries)
+        out["url"] = url
+        out["account"] = token
+        return out
+
+
 def _capture_url(page: Any, account_token: str, title: str) -> str:
     """发布后抓文章链接。
 
@@ -701,9 +838,24 @@ def publish_article(
             time.sleep(2.0)
         out["url"] = _capture_url(page, account_token, title)
         save_browser_cookies(context)
-        out["success"] = True
-        out["message"] = "文章发布流程完成" + ("（已取回链接）" if out["url"] else "（没取到链接）")
-        if not out["url"]:
-            warnings.append("发布流程走完了，但没取到文章链接：请到知乎「创作中心」确认这一篇")
         out["screenshot"] = _screenshot(page, shot_dir, "after-publish")
+
+        # 7) 核验：点完发布不算数，账号文章列表里真有这一篇才算（2026-09-19 实测过两次假成功）
+        verify = verify_published(page, account_token, out["url"], title)
+        out["verify"] = verify
+        if verify.get("canonicalUrl"):
+            out["url"] = verify["canonicalUrl"]
+        if verify.get("note"):
+            warnings.append(verify["note"])
+        if not verify.get("verified"):
+            out["success"] = False
+            out["message"] = "点了发布但没能确认发出去：" + str(verify.get("note") or "核验不通过")
+            logger.warning(f"发布未确认：{out['message']}")
+            return out
+
+        out["success"] = True
+        out["message"] = (
+            "文章发布流程完成（已核验：" + ("账号文章列表里有它" if verify["how"].startswith("account-list") else "文章页能打开且标题对得上") + "）"
+            + ("，链接 " + out["url"] if out["url"] else "")
+        )
         return out

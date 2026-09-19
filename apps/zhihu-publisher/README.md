@@ -17,9 +17,32 @@ backend 只按 HTTP 调它，因此 backend venv 不需要 playwright。
 | POST | `/api/v1/login/start` | 弹有头浏览器，等人工登录；返回后前端**轮询 status**。无 DISPLAY 时返回 409 `NO_DISPLAY` |
 | DELETE | `/api/v1/login/cookies` | 清登录态 |
 | POST | `/api/v1/export` | **无副作用**：把标题/正文/图片/话题落到 `var/artifacts/zhihu/export/<runId>/` |
-| POST | `/api/v1/publish` | 真实发布；需 `confirmed=true`，可选 `confirm_account` 二次校验；`run_id` 会给回执 `zhihu_receipt.json` |
+| POST | `/api/v1/publish` | 真实发布；需 `confirmed=true`，可选 `confirm_account` 二次校验；`run_id` 会给回执 `zhihu_receipt.json`。**发布后会核验**（见下），核验不过则报 502 `PUBLISH_NOT_CONFIRMED` |
+| GET | `/api/v1/verify?url=&title=` | **纯读**核验一个链接还在不在：账号文章列表里有没有它、文章页能不能打开；返回 `{verified, canonicalUrl, total, how, note}` |
 
 错误统一 `{"success": false, "error": {"code", "message"}}`，与 backend `PlatformError` 同形。
+
+## 发布后核验（`app/article_flow.py` 的 `verify_published`）
+
+**点完「发布」不等于发出去了。** 2026-09-19 实测：回执里写过四次「知乎已发布」，只有两次是真的 ——
+两次账号文章列表里根本没有那一篇（登录态打开链接是知乎 404「没有知识存在的荒原」），
+另外两次文章确实在，但回执记的是 `…/edit` 编辑页地址。原因是老实现点完发布就 `success = True`，
+URL 从编辑页地址栏取，取不到还会退而求其次拿「列表里第一条」顶上。
+
+现在的判定（全部只读）：
+
+1. 从链接里取文章 id，轮询账号文章列表（`/api/v4/members/<token>/articles`，4 次 / 每次隔 5s，
+   刚发布可能还没进列表）—— id 命中或**标题命中**才算通过，并把列表里的**正式地址**写回 `url`；
+2. 列表里没有，再打开文章页：不是知乎的「没有知识存在的荒原」且页面标题对得上 → 也算通过
+   （附一条 warning 说明是「列表滞后」）；
+3. 都不成立 → `success=false`，`/api/v1/publish` 报 502 `PUBLISH_NOT_CONFIRMED`，
+   回执按**失败**落盘，错误里写清「账号文章列表（N 篇）里没有这一篇」或「连续几次都没读到列表」。
+
+回放历史案例（**只读，不发布任何东西**）：
+
+```bash
+bash apps/zhihu-publisher/scripts/replay_verify_cases.sh      # 服务在跑即可
+```
 
 ## 启动
 

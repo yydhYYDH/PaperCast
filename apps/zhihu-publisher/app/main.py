@@ -225,6 +225,23 @@ async def stats(url: str) -> dict[str, Any]:
     }}
 
 
+@app.get("/api/v1/verify")
+async def verify(url: str, title: str = "") -> dict[str, Any]:
+    """只读核验一个知乎链接到底还在不在：账号文章列表里有没有它、文章页能不能打开。
+
+    为什么单独给一个接口：回执里写着「已发布」的链接可能是死的（编辑页地址、或根本没发出去），
+    而这件事只能由**握着登录态**的这一侧来判。**纯读，不改文章、不发任何东西。**
+    """
+    if not url.startswith("http"):
+        raise ChannelError(400, "BAD_URL", "需要完整的文章 URL")
+    async with _BROWSER_LOCK:
+        try:
+            data = await asyncio.to_thread(article_flow.check_article, url, title)
+        except Exception as exc:
+            raise ChannelError(502, "VERIFY_FAILED", f"核验失败：{type(exc).__name__}: {str(exc)[:160]}") from exc
+    return {"success": True, "data": data}
+
+
 @app.post("/api/v1/login/start")
 async def login_start() -> dict[str, Any]:
     """起一个有头浏览器等你人工登录（知乎风控会拦纯 HTTP 扫码）。
@@ -352,6 +369,11 @@ async def publish(body: PublishBody) -> dict[str, Any]:
             dry_run=body.dry_run, headless=True, shot_dir=shot_dir,
         )
     if not result.get("success"):
+        # 「点了发布但没确认发出去」单独一个错误码：调用方（通道 → 回执）能区分
+        # 「压根没点上」与「点上了但账号里查不到这一篇」——后者以前会被写成 published。
+        verify = result.get("verify") or {}
+        if verify and not verify.get("verified"):
+            raise ChannelError(502, "PUBLISH_NOT_CONFIRMED", str(result.get("message") or "发布未确认"))
         raise ChannelError(502, "PUBLISH_FAILED", str(result.get("message") or "发布失败"))
 
     data = {
@@ -370,6 +392,8 @@ async def publish(body: PublishBody) -> dict[str, Any]:
         "tagsAdded": result.get("tagsAdded", 0),
         "upstreamMessage": result.get("message") or "",
         "screenshot": result.get("screenshot") or "",
+        # 发布后核验的结果：账号文章列表里有没有这一篇（见 article_flow.verify_published）
+        "verify": result.get("verify") or {},
     }
     if body.run_id:
         receipt = EXPORT_ROOT / body.run_id / "zhihu_receipt.json"
