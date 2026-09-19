@@ -30,6 +30,16 @@ export const useRunsStore = defineStore('runs', {
     active(state): PaperRun | undefined {
       return state.runs.find((r) => r.id === state.activeId)
     },
+
+    /**
+     * 当前这条运行还活着（在跑 / 等闸门）。
+     * 「新开一个对话」要挡的正是这种：它不会因为你换了对话就停下，而「等你确认」一旦
+     * 从工作台消失，你要点的那一下就被错过了（见 chat.newThread）。
+     */
+    activeIsLive(state): boolean {
+      const r = state.runs.find((x) => x.id === state.activeId)
+      return !!r && LIVE.has(r.status)
+    },
     liveRun(state): PaperRun | undefined {
       return state.runs.find((r) => LIVE.has(r.status))
     },
@@ -74,6 +84,14 @@ export const useRunsStore = defineStore('runs', {
 
     select(id: string) {
       this.activeId = id
+    },
+
+    /**
+     * 把当前这条运行从工作台上收起来（回到最开始那一屏）。
+     * 运行本身不停、数据不动：右栏「运行历史」点一下就能回来。
+     */
+    closeActive() {
+      this.activeId = null
     },
 
     /**

@@ -436,17 +436,31 @@ export const useChatStore = defineStore('chat', {
     },
 
     /**
-     * 新开一个对话：清掉问答记录，回到干净的一屏。
+     * 新开一个对话：把工作台清回最开始那一屏。
      *
-     * 清的是**对话**，不是运行：这条运行的来龙去脉（论文、六段进度、产物）还挂在上面，随时接着问；
-     * 已经起草落盘的回复草稿（var/interactions/）也不动 —— 所以清之前只需要提醒一句「问答会没」。
+     * 要清的不只是问答 —— 整屏叙述是**从这条运行推导**出来的（getters.messages 先读 runs.active，
+     * 再拼问答），所以只清 turns 的话，旧运行的论文卡和六个阶段卡还会原样挂在上面，
+     * 右栏「谁在干活」也还是那六个人，那就不是新开（2026-09-19 用户报的就是这个）。
+     * 因此这里把「当前这条运行」一起从工作台收起来（runs.closeActive）。
+     *
+     * 收起来 ≠ 删掉：运行照跑、产物照存、已经落盘的回复草稿（var/interactions/）也不动，
+     * 右栏「运行历史」点一下就能回来。但**在途的运行不收**：它不会因为你换了对话就停下，
+     * 而「等你确认」一旦从工作台消失，你要点的那一下就被错过了。
      */
     async newThread() {
       const ui = useUiStore()
-      if (this.turns.length) {
+      const runs = useRunsStore()
+      const run = runs.active
+      if (runs.activeIsLive) {
+        ui.toast('这条还在跑（或者正等你确认），先把它弄完再新开', 'warn')
+        return
+      }
+      if (this.turns.length || run) {
         const ok = await ui.askConfirm({
           title: '新开一个对话？',
-          text: '下面这些问答会从对话里清掉。这条运行的进度、产物和已经落盘的回复草稿都不动。',
+          text: run
+            ? '对话和这条运行的进度会从工作台收起来，回到最开始那一屏。运行本身、产物和已经落盘的草稿都还在，右栏「运行历史」点一下就能回来。'
+            : '下面这些问答会从对话里清掉，回到最开始那一屏。',
           okLabel: '新开',
           cancelLabel: '先不清',
           tone: 'warn',
@@ -456,7 +470,8 @@ export const useChatStore = defineStore('chat', {
       this.turns = []
       this.items = []
       this.error = ''
-      ui.toast('对话清好了，接着问就行', 'info')
+      runs.closeActive()
+      ui.toast('清好了，重新开始就行', 'info')
     },
 
     /** 用户点了「先不做」：卡片收起来，别一直悬在那儿 */

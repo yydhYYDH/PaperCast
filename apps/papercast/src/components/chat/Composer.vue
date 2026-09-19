@@ -55,6 +55,13 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
+/** 新开一个对话：半截草稿也一起清 —— 不然"干净的一屏"里还留着你刚打了一半的话 */
+function onNewThread() {
+  text.value = ''
+  nextTick(grow)
+  emit('newThread')
+}
+
 function pick(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
   if (f) emit('send', { text: '', file: f })
@@ -104,7 +111,7 @@ function say(t: string) {
           <input type="file" accept="application/pdf,.pdf" @change="pick" />
         </label>
         <button class="btn sm ghost" :disabled="busy" @click="useExample">用示例论文试试</button>
-        <button class="btn sm ghost" :disabled="busy" @click="emit('newThread')">新开一个对话</button>
+        <button class="btn sm ghost" :disabled="busy" @click="onNewThread">新开一个对话</button>
         <span class="grow" />
         <button class="btn primary" :disabled="busy || !text.trim()" @click="send">
           {{ uploading ? '上传中…' : busy ? '开始中…' : '开始' }}
