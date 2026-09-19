@@ -200,6 +200,15 @@ def _receipt(channel: Channel, state: Preflight, materials: Materials, delivery:
             out[dst] = value
     if delivery.error:
         out["error"] = delivery.error
+    # 渠道报告的降级（配图没插进去、标签没加上、正文结构被压平……）必须进回执。
+    # 2026-09-19 的教训：知乎那条「发布成功」的文章其实是无图无标签的纯文字版，
+    # 而回执里只有 status=published —— 看回执的人根本不知道降级了。
+    degradations = list((delivery.raw or {}).get("warnings") or [])
+    if degradations:
+        out["degradations"] = degradations
+    upstream = str((delivery.raw or {}).get("upstreamMessage") or "")
+    if upstream:
+        out["upstreamMessage"] = upstream
     return out
 
 
@@ -278,6 +287,11 @@ def _result(store: Any, run_id: str, run: Any, channel: Channel, state: Prefligh
     `note` 是给人看的一句话（例如「只存了草稿，因为渠道还没就绪」），进回执也进返回体，
     界面上要和文件数一起显示 —— 不然「存成草稿了」会被误读成「发出去了」。
     """
+    # 渠道报告的降级先并进 warnings：前端/调用方只看 warnings 也跑不掉
+    for item in (delivery.raw or {}).get("warnings") or []:
+        text = str(item)
+        if text and text not in warnings:
+            warnings.append(text)
     receipt = _receipt(channel, state, materials, delivery, export, option)
     if note:
         receipt["note"] = note

@@ -29,6 +29,8 @@ from typing import Any, Optional
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+
+from . import article_flow   # 我们自己实现的文章流程（不走上游那份会吞图片错误的实现）
 from pydantic import BaseModel, Field
 
 WS = Path(os.environ.get("PAPERCAST_WS") or Path(__file__).resolve().parents[3])
@@ -281,6 +283,9 @@ class DraftBody(BaseModel):
 class PublishBody(DraftBody):
     confirmed: bool = False
     confirm_account: str = ""
+    # 只填不发：标题/正文/配图/标签全填进编辑器，**绝不点发布**。
+    # 用途是「改完怎么验」—— 真发布不可逆，验证不该靠再发一篇（2026-09-19 加）。
+    dry_run: bool = False
 
 
 def _export(body: DraftBody) -> dict[str, Any]:
@@ -320,6 +325,8 @@ async def publish(body: PublishBody) -> dict[str, Any]:
     if not body.confirmed:
         raise ChannelError(409, "NOT_CONFIRMED", "发布是不可逆动作：必须显式传 confirmed=true（人工闸门放行后）")
 
+    # 只填不发也要求 confirmed=true：它是「验证」通道，不该被当成免闸门的后门，
+    # 调用方必须显式表达「我知道这是发布接口」。
     async with _BROWSER_LOCK:
         state = await asyncio.to_thread(_login_state)
     if not state["is_logged_in"]:
@@ -332,10 +339,17 @@ async def publish(body: PublishBody) -> dict[str, Any]:
             f"确认账号 {body.confirm_account} 与当前登录账号 {state['username'] or '未知'} 不一致，拒绝发布",
         )
 
+    # 走我们自己实现的文章流程（app/article_flow.py）：
+    # 上游那份靠 click + expect_file_chooser 传图，被上传弹窗挡住会整套失败还照样点发布，
+    # 而且从不返回链接、也不上报失败。详见那个模块的模块注释。
+    shot_dir = EXPORT_ROOT / (body.run_id or "adhoc") / "shots"
     async with _BROWSER_LOCK:
         result = await asyncio.to_thread(
-            _service().publish_article,
-            body.title, body.content, body.images or None, body.tags or None, True,
+            article_flow.publish_article,
+            title=body.title, content=body.content,
+            images=body.images or None, tags=body.tags or None,
+            account_token=state.get("account_token") or "",
+            dry_run=body.dry_run, headless=True, shot_dir=shot_dir,
         )
     if not result.get("success"):
         raise ChannelError(502, "PUBLISH_FAILED", str(result.get("message") or "发布失败"))
@@ -346,11 +360,22 @@ async def publish(body: PublishBody) -> dict[str, Any]:
         "publishedAt": _now(),
         "account": state["username"],
         "transport": "playwright",
+        "dryRun": bool(body.dry_run),
+        # 降级必须可见：图文发成纯文字、标签没加上，都要跟着结论一起回到回执上
+        "warnings": result.get("warnings") or [],
+        "contentChars": result.get("contentChars", 0),
+        "markdown": result.get("markdown") or {},
+        "imagesUploaded": result.get("imagesUploaded", 0),
+        "imagesFailed": result.get("imagesFailed", 0),
+        "tagsAdded": result.get("tagsAdded", 0),
         "upstreamMessage": result.get("message") or "",
+        "screenshot": result.get("screenshot") or "",
     }
     if body.run_id:
         receipt = EXPORT_ROOT / body.run_id / "zhihu_receipt.json"
         receipt.parent.mkdir(parents=True, exist_ok=True)
-        receipt.write_text(json.dumps({"channel": "zhihu", "status": "published", **data}, ensure_ascii=False, indent=2), encoding="utf-8")
+        receipt.write_text(json.dumps(
+            {"channel": "zhihu", "status": "draft" if body.dry_run else "published", **data},
+            ensure_ascii=False, indent=2), encoding="utf-8")
         data["receipt"] = str(receipt)
     return {"success": True, "data": data}

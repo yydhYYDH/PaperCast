@@ -34,13 +34,16 @@ class FakeChannel(Channel):
     transport = "none"
 
     def __init__(self, *, state: str = "ready", account: str = "tester",
-                 suitable: bool = True, reason: str = "可以投", publish_status: str = "published") -> None:
+                 suitable: bool = True, reason: str = "可以投", publish_status: str = "published",
+                 channel_warnings: Optional[list[str]] = None) -> None:
         super().__init__(settings=None)
         self._state = state
         self._account = account
         self._suitable = suitable
         self._reason = reason
         self._publish_status = publish_status
+        # 渠道自己报告的降级（配图没上、标签没加……），用来验证它会一路进回执
+        self._channel_warnings = list(channel_warnings or [])
         self.published: list[Materials] = []
         self.probed = 0
 
@@ -63,7 +66,9 @@ class FakeChannel(Channel):
             return Delivery(channel=self.id, status=self._publish_status,  # type: ignore[arg-type]
                             error={"code": "BOOM", "message": "投递失败"})
         return Delivery(channel=self.id, status="published", url="https://example.com/p/1",
-                        remote_id="p1", account=self._account)
+                        remote_id="p1", account=self._account,
+                        raw={"warnings": list(self._channel_warnings),
+                             "upstreamMessage": "文章发布流程完成"} if self._channel_warnings else {})
 
 
 class FakeStore:
@@ -347,3 +352,35 @@ def test_artifact_registration_skipped_while_pipeline_owns_the_stage(tmp_path: P
 
     assert _publish_stage(store).artifacts == []
     assert store.saves == 0
+
+
+def test_channel_degradations_reach_receipt_and_result(tmp_path: Path) -> None:
+    """渠道报告的降级（例如「配图没进正文」）必须出现在回执和返回体里。
+
+    2026-09-19 的真实事故：知乎那条 `status=published` 的文章其实无图无标签，
+    回执里只有一句 published —— 光看回执的人以为一切正常。降级不许被「成功」吞掉。
+    """
+    _, store, run_dir = make_run(tmp_path)
+    fake = FakeChannel(channel_warnings=["配图没插进正文：p1.png", "标签这一项跳过：没入口"])
+    result = asyncio.run(direct_publish.publish_work(store, store.run.id, "fake",
+                                                     confirmed=True, channels=[fake]))
+
+    assert result["status"] == "published"
+    assert "配图没插进正文：p1.png" in result["warnings"]
+    receipt = json.loads(
+        (run_dir / "publish" / "direct" / "fake" / "receipt.json").read_text(encoding="utf-8")
+    )
+    assert receipt["degradations"] == ["配图没插进正文：p1.png", "标签这一项跳过：没入口"]
+    assert receipt["upstreamMessage"] == "文章发布流程完成"
+
+
+def test_receipt_without_degradations_stays_clean(tmp_path: Path) -> None:
+    """没有降级时不许凭空造 `degradations` 字段，否则前端会以为每次都有问题。"""
+    _, store, run_dir = make_run(tmp_path)
+    asyncio.run(direct_publish.publish_work(store, store.run.id, "fake",
+                                            confirmed=True, channels=[FakeChannel()]))
+    receipt = json.loads(
+        (run_dir / "publish" / "direct" / "fake" / "receipt.json").read_text(encoding="utf-8")
+    )
+    assert "degradations" not in receipt
+    assert "upstreamMessage" not in receipt
