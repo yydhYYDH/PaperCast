@@ -38,7 +38,7 @@ onMounted(() => {
 <template>
   <header class="top">
     <div class="row gap">
-      <strong class="brand">PaperCast</strong>
+      <strong class="brand">Easy-Reach</strong>
       <span class="sep" />
       <span class="cur">{{ TITLES[ui.view] }}</span>
       <span class="panel-sub hide-sm">把一篇论文变成大家看得懂的内容</span>

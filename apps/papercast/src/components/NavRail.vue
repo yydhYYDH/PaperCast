@@ -16,8 +16,8 @@ const items: { id: ViewId; label: string; icon: string }[] = [
 
 <template>
   <nav class="rail">
-    <div class="brand" title="PaperCast · 把论文变成大家看得懂的内容">
-      <span>P</span>
+    <div class="brand" title="Easy-Reach · 把论文变成大家看得懂的内容">
+      <span>E</span>
     </div>
     <button
       v-for="it in items"
