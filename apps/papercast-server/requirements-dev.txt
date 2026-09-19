@@ -1,0 +1,9 @@
+# 后端测试依赖（tests/ 下的纯函数与契约用例）。
+#
+# 装法（在 apps/papercast-server/ 下）：
+#   export UV_CACHE_DIR="$(cd ../.. && pwd)/var/cache/uv"
+#   uv pip install --python .venv/bin/python -r requirements-dev.txt
+#
+# 只加 pytest：测试不碰 chrome / ffmpeg / 网络，因此不需要任何运行时之外的依赖。
+# 若以后要写异步用例，再考虑 pytest-asyncio（当前用 asyncio.run()，刻意不引插件）。
+pytest>=8.0

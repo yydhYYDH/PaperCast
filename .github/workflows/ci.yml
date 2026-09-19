@@ -17,8 +17,13 @@ jobs:
           cache-dependency-path: apps/papercast-server/requirements.lock.txt
       - name: 安装依赖（精确锁版）
         run: pip install -r apps/papercast-server/requirements.lock.txt
+      - name: 安装测试依赖（pytest）
+        run: pip install -r apps/papercast-server/requirements-dev.txt
       - name: 渠道层自检
         run: python apps/papercast-server/scripts/check_channels.py
+      # 只跑纯函数 / 契约用例：不起服务、不联网、不需要 chrome / ffmpeg / GPU。
+      - name: 后端单测（pytest）
+        run: python -m pytest -q apps/papercast-server/tests
 
   frontend:
     name: 前端类型检查

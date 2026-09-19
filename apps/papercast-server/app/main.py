@@ -14,7 +14,7 @@ from typing import Any, Optional
 import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from . import ops as ops_mod
@@ -98,20 +98,28 @@ async def get_run(run_id: str) -> PaperRun:
 
 
 @app.post("/api/runs/{run_id}/cancel", status_code=204)
-async def cancel_run(run_id: str) -> JSONResponse:
+async def cancel_run(run_id: str) -> Response:
     if store.get(run_id) is None:
         raise HTTPException(status_code=404, detail="run 不存在")
     pipeline.cancel(run_id)
-    return JSONResponse(status_code=204, content=None)
+    # 204 不许有响应体：JSONResponse(content=None) 会渲染出 b"null"，
+    # 而 Content-Length: 0 → uvicorn 抛 RuntimeError: Response content longer than
+    # Content-Length（带 **空** body 的 Response 才是 204 的正确写法，见下面闸门那条）。
+    return Response(status_code=204)
 
 
 @app.post("/api/runs/{run_id}/stages/{stage_id}/gate", status_code=204)
-async def resolve_gate(run_id: str, stage_id: str, req: GateRequest) -> JSONResponse:
+async def resolve_gate(run_id: str, stage_id: str, req: GateRequest) -> Response:
+    """放行人工闸门。**只有真的把等待中的协程唤醒才算成功**（app/pipeline.py 的 resolve_gate）。
+
+    失败一律 4xx + 可读 detail（409 = 状态不允许 / 404 = run 不存在），绝不返回 204 假成功；
+    resolve_gate 在「run 没有活跃任务（服务重启后必然如此）」时也会返回错误。
+    """
     ok, msg = pipeline.resolve_gate(run_id, stage_id, req.optionId, req.note)
     if not ok:
         status = 404 if "不存在" in msg else 409
         return fail(status, "GATE_REJECTED", msg)
-    return JSONResponse(status_code=204, content=None)
+    return Response(status_code=204)
 
 
 @app.get("/api/runs/{run_id}/events")

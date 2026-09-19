@@ -1,11 +1,16 @@
 """PDF → Markdown + 图片（PyMuPDF）。
 
-设计要点（都是在真实论文 arXiv:2510.05096 上验证过的）：
+设计要点（在 arXiv:2510.05096 与 Nature 排版论文上验证过）：
   1. 正文用 pymupdf4llm 抽（它对双栏阅读顺序的处理比手写块排序稳）；
   2. 图片不用 pymupdf4llm 那套 —— 它只抽内嵌位图，学术论文里大量矢量图会整张丢掉；
      改成「图注驱动 + 连续内容带」找图区域：caption 往上（图）/ 往下（表）扩展，
-     撞到正文段落或 >16pt 空隙就停，再渲染成 PNG。命中内嵌位图时直抽原始流（无损）。
-  3. 标题净化：pymupdf4llm 会把图注、附录 prompt 标题也标成二级标题，按章节编号/白名单过滤。
+     撞到正文段落就停，再渲染成 PNG。命中内嵌位图时直抽原始流（无损）。
+  3. 图注格式与排版差异见 docs/01-module-intake.md「Nature/Springer 排版」一节：
+     * 分隔符除 `:` / `.` 外还有出版社用的 `|`（`Fig. 2 | ...`）；
+     * `Extended Data Fig. 1` / `Extended Data Table 1` 是与正文图/表并行的另一套编号；
+     * 跨栏整幅图（图注只占一栏、图占满两栏）需要把带内视觉元素的横向并集并入裁剪框；
+     * 纯矢量图（柱状图的窄柱）要算作视觉内容，否则带扩展没有锚点。
+  4. 标题净化：pymupdf4llm 会把图注、附录 prompt 标题也标成二级标题，按章节编号/白名单过滤。
 """
 
 from __future__ import annotations
@@ -19,10 +24,20 @@ from typing import Callable, Optional
 
 import pymupdf
 
-CAP_RE = re.compile(r"^\s*(Figure|Fig\.?|TABLE|Table)\s*(\d+|[IVX]+)\s*[:.]", re.I)
-# 正文里引用图的句子（"Figure 3 shows ..."）不是图注
+# 图注首行：可选的出版社前缀（Nature 的 Extended Data / Supplementary）+ 关键字 + 编号 + 分隔符。
+#   "Figure 1:" / "Fig. 2." / "TABLE 3:"  → 常规
+#   "Fig. 2 | HPO-wise cross-dataset ..." / "Extended Data Fig. 1 | Overview ..."
+#                                        → Nature/Springer 排版，分隔符是竖线且可能带前缀
+CAP_RE = re.compile(
+    r"^\s*(?P<ext>Extended\s+Data|Supplementary|Supplemental)?\s*"
+    r"(?P<kw>Figure|Fig\.?|TABLE|Table|Tab\.?)\s*(?P<num>\d+|[IVX]+)\s*[:.|]",
+    re.I,
+)
+# 正文里引用图的句子（"Figure 3 shows ..." / "Extended Data Fig. 1 presents ..."）不是图注
 REF_RE = re.compile(
-    r"^\s*(Figure|Fig\.?|Table)\s*\d+\s+(shows|reports|presents|gives|compares|lists|depicts|summarizes)",
+    r"^\s*(?:Extended\s+Data\s+|Supplementary\s+|Supplemental\s+)?"
+    r"(Figure|Fig\.?|Table|Tab\.?)\s*\d+\s+"
+    r"(shows|reports|presents|gives|compares|lists|depicts|summarizes)",
     re.I,
 )
 SECTION_WORDS = re.compile(
@@ -34,7 +49,15 @@ SECTION_WORDS = re.compile(
 NUMBERED_SECTION = re.compile(r"^\d+(\.\d+)*\s+\S")
 APPENDIX_SECTION = re.compile(r"^[A-Z](\.\d+)*\s+\S")
 MARKUP_RE = re.compile(r"[*_`]")  # * _ 反引号
-GAP_TOL = 16.0
+GAP_TOL = 16.0  # 文本块之间：图内标签与图形、图注与续行，正常就是一个行距
+# 视觉内容之间：图与图注、图内多面板之间的留白常远大于一个行距（Nature 整页图实测 20~60pt），
+# 这里给一个宽松但仍有的上限，避免"顺着大片空白跳到页眉装饰"这类意外
+GAP_TOL_VIS = 96.0
+MIN_VIS_W = 3.0
+MIN_VIS_H = 3.0
+MIN_VIS_AREA = 60.0
+MIN_X_OVERLAP = 12.0  # 文本块与图注列要有实质交叠才算"同栏"
+MIN_X_OVERLAP_VIS = 1.0  # 视觉元素只要求碰到图注列：柱状图窄柱只有 ~10pt 宽，按 12pt 判会整类漏掉
 PARA_LINE_CHARS = 55
 CAP_MAX_CHARS = 700
 SAFE = re.compile(r"[^A-Za-z0-9]+")
@@ -101,7 +124,9 @@ def _page_items(page):
             area = r.get_area()
         except Exception:
             area = r.width * r.height
-        if r.width > 12 and r.height > 4 and area > 120:
+        # 只看"有实体面积的图形"。原先还要求宽 >12pt，会把柱状图的窄柱（实测 10.7pt 宽）
+        # 整类滤掉 —— 那类图 vis 为空，图注带扩展就失去锚点，只剩一条图注细条。
+        if r.width > MIN_VIS_W and r.height > MIN_VIS_H and area > MIN_VIS_AREA:
             vis.append(r)
 
     blocks = []
@@ -129,7 +154,8 @@ def _find_captions(blocks):
     caps = []
     for b in blocks:
         for li, ln in enumerate(b["lines"]):
-            if not CAP_RE.match(ln["text"]) or REF_RE.match(ln["text"]):
+            head = CAP_RE.match(ln["text"])
+            if not head or REF_RE.match(ln["text"]):
                 continue
             lines, total = [], 0
             for x in b["lines"][li:]:
@@ -140,14 +166,17 @@ def _find_captions(blocks):
             if not lines:
                 continue
             text = " ".join(x["text"] for x in lines)
-            head = CAP_RE.match(ln["text"])
+            # kind 取自匹配到的关键字，而不是整行开头：Nature 的
+            # "Extended Data Table 1 | ..." 行首是 "Extended"，按开头判会误判成 fig。
+            kw = (head.group("kw") or "").lower()
             caps.append(
                 {
                     "rect": pymupdf.Rect(ln["rect"]),
                     "bottom": max(x["rect"].y1 for x in lines),
                     "text": text,
-                    "number": (head.group(2) or "").strip() if head else "",
-                    "kind": "table" if text.lower().lstrip().startswith("table") else "fig",
+                    "number": (head.group("num") or "").strip(),
+                    "kind": "table" if kw.startswith("tab") else "fig",
+                    "ext": bool(head.group("ext")),
                     "block": b,
                 }
             )
@@ -155,13 +184,32 @@ def _find_captions(blocks):
     return caps
 
 
-def _band(x0, x1, anchor, direction, vis, blocks, cap_block):
-    """从 anchor 沿 direction 扩展「连续内容带」，返回 (边界, 是否命中内容)。"""
-    cands = [("visual", r) for r in vis if min(r.x1, x1) - max(r.x0, x0) >= 12]
+def _band(x0, x1, anchor, direction, vis, blocks, cap_block, cap_rects=()):
+    """从 anchor 沿 direction 扩展「连续内容带」，返回 (边界, 是否命中内容)。
+
+    候选分三类，边界规则不同（都是实测出来的）：
+      * visual（位图 / 矢量图形）：图与图注之间、图内多面板之间的留白可以很大
+        （Nature 整页图实测相邻面板间 20~60pt，远超一个行距），所以视觉内容之间
+        不设固定间距上限 —— 边界交给下面两类硬边界去定；
+      * para（正文段落，行长 >= PARA_LINE_CHARS）：图与外界的硬边界，撞上就停。
+        正文段落之外不可能再是同一张图的内容，这条保证了"放宽视觉间距"不会吃进正文；
+      * cap（另一条图注）：同页叠放多张图时的硬边界；
+      * label（图内标签，短文本）：只在 GAP_TOL（行距量级）内吸收；够不着就跳过而不是
+        中断 —— 否则一个离得稍远的刻度标签就会把带切在图中间。
+    """
+    others = [r for r in cap_rects if not r.intersects(pymupdf.Rect(x0, anchor - 2, x1, anchor + 2))]
+    cands = [
+        ("visual", r) for r in vis if min(r.x1, x1) - max(r.x0, x0) >= MIN_X_OVERLAP_VIS
+    ]
     cands += [
         ("para" if b["maxline"] >= PARA_LINE_CHARS else "label", b["rect"])
         for b in blocks
-        if b is not cap_block and min(b["rect"].x1, x1) - max(b["rect"].x0, x0) >= 12
+        if b is not cap_block and min(b["rect"].x1, x1) - max(b["rect"].x0, x0) >= MIN_X_OVERLAP
+    ]
+    # 别的图注按"它自己那一行"当障碍，而不是整个文本块 ——
+    # 图注常常和表格行挤在同一个 block 里，按块判会在图注前方 1pt 就误停
+    cands += [
+        ("cap", r) for r in others if min(r.x1, x1) - max(r.x0, x0) >= MIN_X_OVERLAP_VIS
     ]
     if direction == "up":
         cands = [(k, r) for k, r in cands if r.y1 <= anchor + 1]
@@ -173,13 +221,64 @@ def _band(x0, x1, anchor, direction, vis, blocks, cap_block):
     cur, hit = anchor, False
     for kind, r in cands:
         d = (cur - r.y1) if direction == "up" else (r.y0 - cur)
-        if d > GAP_TOL:
+        if kind in ("para", "cap") and d >= -1:  # 正文段落 / 另一条图注 → 图边界就在这里
             break
-        if kind == "para" and d >= -1:  # 撞到正文段落 → 图边界就在这里
+        if kind == "visual" and d > GAP_TOL_VIS:
             break
+        if kind == "label" and d > GAP_TOL:
+            continue
         cur = min(cur, r.y0) if direction == "up" else max(cur, r.y1)
         hit = True
     return cur, hit
+
+
+def _x_extent(x0, x1, top, bottom, vis, page_rect):
+    """裁剪框的水平范围 = 图注所在栏 ∪ 纵向落在带内的视觉元素的横向并集。
+
+    跨栏整幅图（图注只写在一栏、图占满两栏，Nature 的 Extended Data 大图就是这样）
+    用图注自身的宽度去裁只会得到左半张图；而纯文本块不参与并集，
+    免得把邻栏正文的宽度也并进来。判定用「元素纵向中心落在带内」而不是「有交集」，
+    避免把只擦到带边缘的邻图元也并进来。
+    """
+    lo, hi = (top, bottom) if top <= bottom else (bottom, top)
+    for r in vis:
+        cy = (r.y0 + r.y1) / 2
+        if not (lo - 1 <= cy <= hi + 1):
+            continue
+        x0 = min(x0, r.x0)
+        x1 = max(x1, r.x1)
+    return max(x0, page_rect.x0), min(x1, page_rect.x1)
+
+
+def _figure_region(crect, cap, vis, blocks, page_rect, cap_rects=(), *, max_rounds: int = 3):
+    """图注 + 邻接内容 → (裁剪框, 是否命中内容)。
+
+    纵向带按图注自身宽度扫；扫出的带再决定横向范围（_x_extent），横向变宽后重扫，
+    这样"另一栏的图更高/更宽"也能并进来。每轮只做并集（不会把上一轮的带缩回去），
+    最多迭代 max_rounds 轮后收敛。
+    """
+    is_table = cap["kind"] == "table"
+    x0, x1 = crect.x0 - 6, crect.x1 + 6
+    top, bottom, hit = crect.y0, cap["bottom"], False
+    for _ in range(max_rounds):
+        if is_table:
+            edge, h = _band(x0, x1, cap["bottom"], "down", vis, blocks, cap["block"], cap_rects)
+            bottom = max(bottom, edge)
+        else:
+            edge, h = _band(x0, x1, crect.y0, "up", vis, blocks, cap["block"], cap_rects)
+            top = min(top, edge)
+        hit = hit or h
+        nx0, nx1 = _x_extent(x0, x1, top, bottom, vis, page_rect)
+        if abs(nx0 - x0) < 0.5 and abs(nx1 - x1) < 0.5:
+            break
+        x0, x1 = nx0, nx1
+    # 留白保持原样（图：上边 -4 / 图注底 +2；表：图注顶 -3 / 下边 +4），
+    # 免得"修一类排版"顺手改掉所有已能用的样本的裁剪框
+    if is_table:
+        clip = pymupdf.Rect(x0, crect.y0 - 3, x1, max(cap["bottom"], bottom) + 4)
+    else:
+        clip = pymupdf.Rect(x0, min(crect.y0, top) - 4, x1, max(cap["bottom"], bottom) + 2)
+    return clip, hit
 
 
 def _best_raster(page, clip):
@@ -304,16 +403,12 @@ def parse_pdf(
         vis, blocks = _page_items(page)
         if not vis and not blocks:
             continue
-        for cap in _find_captions(blocks):
+        caps = _find_captions(blocks)
+        cap_rects = [c["rect"] for c in caps]
+        for cap in caps:
             crect = cap["rect"]
             is_table = cap["kind"] == "table"
-            x0, x1 = crect.x0 - 6, crect.x1 + 6
-            if is_table:
-                bottom, hit = _band(x0, x1, cap["bottom"], "down", vis, blocks, cap["block"])
-                clip = pymupdf.Rect(x0, crect.y0 - 3, x1, bottom + 4)
-            else:
-                top, hit = _band(x0, x1, crect.y0, "up", vis, blocks, cap["block"])
-                clip = pymupdf.Rect(x0, top - 4, x1, cap["bottom"] + 2)
+            clip, hit = _figure_region(crect, cap, vis, blocks, page.rect, cap_rects)
             height = clip.height
             if not hit or height < 40 or height > page.rect.height * 0.95:
                 result.warnings.append(
@@ -324,7 +419,11 @@ def parse_pdf(
             if clip.is_empty:
                 continue
 
-            fid = f"{'table' if is_table else 'fig'}-{cap['number'] or (len(result.figures) + 1)}"
+            number = cap["number"]
+            if cap.get("ext"):
+                # "Extended Data Fig. 1" 与正文 "Fig. 1" 是两套编号，不能共用 fig-1 这个 id
+                number = f"ed{number}" if number else ""
+            fid = f"{'table' if is_table else 'fig'}-{number or (len(result.figures) + 1)}"
             fname = f"{fid}.png"
             target = images_dir / fname
             raster = _best_raster(page, clip)
@@ -385,7 +484,7 @@ def parse_pdf(
                     id=f"img-p{pno + 1}-{i + 1}",
                     kind="img",
                     number="",
-                    caption=f"（第 {pno + 1} 页内嵌图像 {i + 1}，未匹配到图注）",
+                    caption=f"（第 {pno + 1} 页内嵌图像 {i + 1}：无文字图注，按位置归类）",
                     file=f"images/{fname}",
                     page=pno + 1,
                     bbox=[round(v, 1) for v in r],
@@ -395,7 +494,11 @@ def parse_pdf(
                 )
             )
     if extra:
-        log("info", f"兜底补抽未匹配图注的内嵌图像：{extra} 张")
+        log(
+            "warn",
+            f"兜底按位置补抽 {extra} 张内嵌图像：这些页没有可识别的文字图注"
+            f"（图注本身是图片、或整页是扫描图），kind=img、无 caption，仅按页面位置归类",
+        )
 
     # ---- 3. 正文（pymupdf4llm 负责双栏阅读顺序）----
     log("info", "pymupdf4llm 抽取正文（保留公式 / 表格 / 阅读顺序）…")

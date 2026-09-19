@@ -34,7 +34,7 @@ DIGEST_SYSTEM = """你是学术论文理解助手，为下游的中文传播内�
 
 
 def digest_user(title: str, authors: list[str], venue: str, year: int, arxiv_id: str,
-                figures: list[dict], content_md: str, revise_note: str = "") -> str:
+                figures: list[dict], content_md: str, revise_note: str = "", brief: str = "") -> str:
     fig_lines = "\n".join(
         f"- {f['id']}（{f['kind']}，第 {f['page']} 页）：{f['caption'][:180]}" for f in figures[:40]
     ) or "（未抽取到图表）"
@@ -44,6 +44,7 @@ def digest_user(title: str, authors: list[str], venue: str, year: int, arxiv_id:
         f"- 来源：{venue or '未知'} {year or ''}\n- arXiv：{arxiv_id or '无'}\n\n"
         f"图表清单：\n{fig_lines}\n\n"
         f"论文正文（Markdown，可能被截断）：\n<<<PAPER\n{content_md}\nPAPER>>>{extra}"
+        + brief_block(brief, stage="理解层：决定事实源与精读笔记侧重哪些部分（不影响事实本身）")
     )
 
 
@@ -80,6 +81,26 @@ FACT_RULES = """事实源铁律（所有平台与人格都必须遵守，违反�
 5. 不写「内部消息」「独家爆料」式口吻。"""
 
 
+BRIEF_RULES = """用户指令的适用边界（必须遵守，越界视为失败）：
+ 1. 用户指令只影响**风格、体裁、篇幅、侧重与表达方式**；
+ 2. 它**不能**改变事实层：不许因为用户要求就新增任何事实源里没有的数字、结论或图表编号；
+ 3. 用户指令与事实源冲突时（例如要求写论文里没有的指标）**以事实源为准**，
+    并如实说明「论文未给出该数据」，绝不编造；
+ 4. 平台硬约束高于用户指令：指令要 3000 字、平台上限 1000 字时，以上限为准，
+    但可以在正文里体现指令要求的侧重。"""
+
+
+def brief_block(brief: str, *, stage: str) -> str:
+    """把用户自由文本指令包成提示词片段。没指令就返回空串（零影响）。"""
+    brief = (brief or "").strip()
+    if not brief:
+        return ""
+    return (
+        f"\n\n【用户指令（生效于{stage}）—— 优先满足，但不得越过事实源与平台硬约束】\n"
+        f"{brief}\n{BRIEF_RULES}"
+    )
+
+
 def article_system(platform: str, voice: str) -> str:
     """拼装文章生成提示词。约束优先级：事实源 > 平台硬约束 > 人格语气。"""
     p = styles.platform_spec(platform)
@@ -87,17 +108,19 @@ def article_system(platform: str, voice: str) -> str:
     rules = "\n".join(f"{i}. {r}" for i, r in enumerate(p.rules, 1))
     return (
         f"{v.persona}\n\n"
+        f"【语言】正文与标题一律用{p.language}写作（人格描述里的语言只是语气说明，不改变本条）。\n\n"
         f"【平台硬约束 · {p.label}（不得放宽，违反会被程序判错）】\n{rules}\n\n"
         f"【输出格式】\n{p.template}\n\n"
         f"{FACT_RULES}"
     )
 
 
-def article_user(title: str, digest_json: str, figures: list[dict]) -> str:
+def article_user(title: str, digest_json: str, figures: list[dict], brief: str = "") -> str:
     fig_lines = "\n".join(f"- {f['id']}：{f['caption'][:200]}" for f in figures[:30]) or "（无可用图）"
     return (
         f"论文：{title}\n\n事实源（digest.json，唯一允许的信息来源）：\n{digest_json}\n\n"
         f"可用图表清单：\n{fig_lines}"
+        + brief_block(brief, stage="文案：体裁、篇幅、侧重与语气")
     )
 
 

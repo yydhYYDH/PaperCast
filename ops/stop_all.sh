@@ -11,13 +11,19 @@
 # /proc/<pid>/cmdline —— 它是世界可读的，跨沙箱也能拿到。
 #
 # 用法：
-#   ./ops/stop_all.sh          # 真停
-#   DRY=1 ./ops/stop_all.sh    # 只列出会停谁，不动手
+#   ./ops/stop_all.sh                 # 停全部（backend/frontend/mcp/zhihu）
+#   ./ops/stop_all.sh backend         # 只停后端（可给多个：backend frontend）
+#   ./ops/stop_all.sh backend zhihu   # 只停这两个
+#   DRY=1 ./ops/stop_all.sh backend   # 只列出会停谁，不动手
+#
+# 注意：**默认停全部**。要只停某一个，必须显式给名字 —— 这条是 2026-09-19 补的，
+# 之前没有模式参数，`stop_all.sh backend` 会连带把前端/知乎一起杀掉（踩过）。
 set -uo pipefail
 
 WS="$(cd "$(dirname "$0")/.." && pwd)"
 PIDS="$WS/var/pids"
 DRY="${DRY:-0}"
+WANT="${*:-all}"
 
 # "名字|命令行特征" —— 特征用固定串匹配（case 里加引号即为字面量），别写正则
 PATTERNS=(
@@ -28,7 +34,36 @@ PATTERNS=(
   "mcp-browser|var/cache/xiaohongshu-mcp/browser"
 )
 
+want() {
+  [ "$WANT" = "all" ] && return 0
+  for w in $WANT; do [ "$w" = "$1" ] && return 0; done
+  return 1
+}
+
+if [ "$WANT" != "all" ]; then
+  for w in $WANT; do
+    ok=0
+    for entry in "${PATTERNS[@]}"; do [ "$w" = "${entry%%|*}" ] && ok=1; done
+    [ "$w" = "mcp-browser" ] && ok=1
+    [ "$ok" = "1" ] || { echo "⚠️ 不认识的目标：$w（可选：backend frontend mcp zhihu mcp-browser all）"; exit 2; }
+  done
+fi
+echo "== 目标：$WANT =="
+
 SEEN=""   # 同一个进程可能先被 pid 文件、再被命令行特征匹配到，去重避免重复 kill 的噪音
+
+# --- 0) Windows 侧的 MCP -----------------------------------------------------
+# MCP 默认跑在 Windows 侧，而下面两种手段（pid 文件、/proc/<pid>/cmdline）**都只能停 Linux 进程**。
+# 不单独停它就会留下一个占着 18060 的 Windows 孤儿：下次 start_all.sh 又因为 WSL 的 ss
+# 看不到 Windows 的监听而以为端口空闲，于是重复去起 —— 所以这一步不能省。
+if command -v powershell.exe >/dev/null 2>&1 && want mcp; then
+  echo "== 0) Windows 侧的 MCP =="
+  if [ "$DRY" = "1" ]; then
+    echo "  (dry) 会停 Windows 侧的 xiaohongshu-mcp 与它自己的 Chrome"
+  else
+    "$WS/ops/mcp_windows.sh" stop || echo "  ⚠️ Windows 侧停止没成功，看上面的输出"
+  fi
+fi
 
 stop_pid() {
   pid="$1"; label="$2"
@@ -50,8 +85,9 @@ echo "== 1) 按 var/pids/*.pid =="
 found_pidfile=0
 for f in "$PIDS"/*.pid; do
   [ -e "$f" ] || continue
-  found_pidfile=1
   name="$(basename "$f" .pid)"
+  want "$name" || continue
+  found_pidfile=1
   pid="$(cat "$f")"
   if kill -0 "$pid" 2>/dev/null; then
     stop_pid "$pid" "$name"
@@ -61,7 +97,7 @@ for f in "$PIDS"/*.pid; do
   fi
   [ "$DRY" = "1" ] || rm -f "$f"
 done
-[ "$found_pidfile" = "1" ] || echo "  （var/pids 下没有 pid 文件）"
+[ "$found_pidfile" = "1" ] || echo "  （没有匹配的 pid 文件）"
 
 echo "== 2) 按命令行特征兜底 =="
 me="$$"
@@ -77,9 +113,11 @@ for d in /proc/[0-9]*; do
   esac
   for entry in "${PATTERNS[@]}"; do
     pat="${entry#*|}"
+    label="${entry%%|*}"
+    want "$label" || continue
     case "$cmd" in
       *"$pat"*)
-        stop_pid "$pid" "${entry%%|*}"
+        stop_pid "$pid" "$label"
         hit=1
         break
         ;;

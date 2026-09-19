@@ -38,6 +38,8 @@ class PlatformSpec:
     title_chars_max: int | None    # 其余平台的标题字数上限
     rules: tuple[str, ...]         # 进提示词的硬约束（祈使句）
     template: str                  # 进提示词的输出格式模板
+    unit: str = "cjk"              # 长度口径：cjk=中文字数，words=英文词数（纯英文用 cjk_len 会算成 0 字）
+    language: str = "中文"          # 正文语言；会覆盖人格描述里的语言倾向（英文平台必须显式声明）
 
 
 PLATFORMS: dict[str, PlatformSpec] = {
@@ -131,6 +133,41 @@ PLATFORMS: dict[str, PlatformSpec] = {
             "# 标题\n\n## 一句话简介\n<≤120 字>\n\n"
             "## 分镜脚本\n| 时间 | 画面 | 口播要点 |\n| --- | --- | --- |\n| 0:00 | … | … |\n\n"
             "## 口播稿\n<1200-2500 字，分段>\n\n## 标签\n标签1 标签2 标签3\n"
+        ),
+    ),
+    # 英文传播（总纲里的「英文传播 Agent」，R1 原计划留给 R2 —— 2026-09-19 补齐）
+    "en": PlatformSpec(
+        id="en",
+        label="英文传播（X / LinkedIn）",
+        output="markdown",
+        file="en-thread.md",
+        unit="words",
+        language="英文",
+        body_min=320,
+        body_max=850,
+        tags_min=3,
+        tags_max=6,
+        allow_formula=False,
+        cards=False,
+        title_weight_max=None,
+        title_chars_max=90,
+        rules=(
+            "写成英文 thread（X 与 LinkedIn 通用），不是文章：6-10 条编号帖，每条自成一个帖子。",
+            "第一条是钩子：一句话讲清这篇论文做成了什么、为什么值得看（≤50 词，不用问句凑互动）。",
+            "每条 45-70 词；且**单条不超过 280 字符**（X 的单帖上限），超了就拆成两条，别硬塞。",
+            "第 2 条起按「问题 → 方法 → 证据 → 局限」推进；每条只讲一个点，单独读也能读懂。",
+            "全文用英文写（包括标题）；人格描述里的中文只是语气说明，不改变本条。",
+            "数字必须能在事实源里找到，单位与数值跟事实源一致，英文里不要换算成别的量纲。",
+            "不写 LaTeX/公式；用英文口语解释它在优化什么。",
+            "把「论文声称」与「我的判断」分开写（the paper claims… / my read is…）。",
+            "最后一条给局限与适用边界，并留一个链接占位符 [link]。",
+            "文末单起一节「Tags」，每行一个 - #Tag，3-6 个英文标签。",
+        ),
+        template=(
+            "输出 Markdown（正文英文）：\n"
+            "# <English hook title, ≤90 chars>\n\n"
+            "1/8 <hook post, ≤50 words>\n\n2/8 <one point>\n\n…\n\n8/8 <limitations + [link]>\n\n"
+            "## Tags\n- #MachineLearning\n- #LLM\n"
         ),
     ),
 }
@@ -312,15 +349,28 @@ def cjk_len(s: str) -> int:
     return len(CJK.findall(s or ""))
 
 
+WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9'\u2019\-]*")
+
+
+def text_len(s: str, unit: str = "cjk") -> int:
+    """长度口径。中文平台按 CJK 字数，英文平台按英文词数 —— 否则纯英文内容会被算成 0 字，
+    长度校验直接误判（这是加英文平台时踩到的坑）。"""
+    return len(WORD.findall(s or "")) if unit == "words" else cjk_len(s)
+
+
 def _md_title(md: str) -> str:
     m = re.search(r"^#\s+(.+)$", md or "", re.M)
     return m.group(1).strip() if m else ""
 
 
 def _md_tags(md: str) -> list[str]:
-    """从 Markdown 里取标签：优先「标签」小节，其次全文 #xxx。"""
+    """从 Markdown 里取标签：优先「标签/Tags」小节，其次该小节里的空格分隔列表。
+
+    小节名要中英都认 —— 英文平台（en，X/LinkedIn thread）写的是 `## Tags`，
+    只认中文「标签」会让英文变体的标签数永远判 0。
+    """
     out: list[str] = []
-    m = re.search(r"^#{2,3}\s*(?:话题)?标签\s*$([\s\S]*?)(?=^#{1,3}\s|\Z)", md or "", re.M)
+    m = re.search(r"^#{2,3}\s*(?:话题)?(?:标签|Tags?|Hashtags?)\s*$([\s\S]*?)(?=^#{1,3}\s|\Z)", md or "", re.M | re.I)
     block = m.group(1) if m else ""
     for t in re.findall(r"#([\w\u4e00-\u9fff][\w\u4e00-\u9fff\-]*)", block) or re.split(r"[\s,，、]+", block.strip()):
         t = t.strip().lstrip("#").strip()
@@ -333,17 +383,20 @@ def validate_markdown(spec: PlatformSpec, md: str) -> list[tuple[str, str, str]]
     """Markdown 平台的机器校验，返回 [(label, state, detail)]。"""
     checks: list[tuple[str, str, str]] = []
     title = _md_title(md)
+    # 标题一律按字符数量（英文标题的字数上限说的也是字符），正文才分口径
+    title_len = len(title) if spec.unit == "words" else cjk_len(title)
     if spec.title_chars_max:
         checks.append((
             "标题",
-            "pass" if title and cjk_len(title) <= spec.title_chars_max else "fail",
-            f"「{title[:30]}」= {cjk_len(title)} 字（上限 {spec.title_chars_max}）" if title else "缺少一级标题",
+            "pass" if title and title_len <= spec.title_chars_max else "fail",
+            f"「{title[:30]}」= {title_len} {'字符' if spec.unit == 'words' else '字'}（上限 {spec.title_chars_max}）" if title else "缺少一级标题",
         ))
-    n = cjk_len(md)
+    n = text_len(md, spec.unit)
+    unit_cn = "词" if spec.unit == "words" else "字"
     checks.append((
         "正文长度",
         "pass" if spec.body_min <= n <= spec.body_max else "fail",
-        f"{n} 字（要求 {spec.body_min}-{spec.body_max}）",
+        f"{n} {unit_cn}（要求 {spec.body_min}-{spec.body_max}）",
     ))
     if not spec.allow_formula:
         hit = FORMULA.search(md)

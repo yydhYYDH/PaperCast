@@ -23,6 +23,26 @@ uv pip install --python .venv/bin/python -r requirements.txt
 ./scripts/smoke_test.sh /path/to/paper.pdf
 ```
 
+## 测试
+
+```bash
+cd apps/papercast-server
+export UV_CACHE_DIR="$(cd ../.. && pwd)/var/cache/uv"
+uv pip install --python .venv/bin/python -r requirements-dev.txt   # 只有 pytest
+.venv/bin/python -m pytest -q                                     # 秒级，全绿才算过
+```
+
+覆盖的是**不需要外部依赖**的那一层：`app/styles.py` 的平台 × 人格身份层（variant 解析、MAX_VARIANTS、
+长度口径「中文按 CJK 字数 / 英文平台按词数」、标签小节中英都认），`generate.brief_checks`（含
+「指令上限与平台 body_min 冲突时报 run 而不是 fail」），`poster_stage` 的 spec 收敛（引用不存在的图要丢、
+数字回溯不了的条目要丢、清空的块要移除）与减块优先级，`community` 的人读版拼装与数据复盘口径，
+`video` 的念稿清洗 / 数字回溯 / 工具链路径推导，`store.resolve_artifact` 的目录穿越防护，
+以及 `models` 的阶段清单（6 段全实现、SKIPPED 为空）与平台枚举契约。
+
+原则：**不联网、不起服务、不调真 LLM**（LLM 一律 `unittest.mock.AsyncMock`）、不写真实 `var/runs`
+（全部走 pytest 的 tmp_path），所以 CI 里不需要 chrome / ffmpeg。CI 见 `.github/workflows/ci.yml`
+的 backend job（`python -m pytest apps/papercast-server/tests`）。
+
 ## 文档
 
 | 文档 | 内容 |
@@ -35,6 +55,10 @@ uv pip install --python .venv/bin/python -r requirements.txt
 | [`docs/05-deployment.md`](docs/05-deployment.md) | 服务器部署：systemd / nginx / 排障 |
 | [`docs/06-verification.md`](docs/06-verification.md) | 真实论文端到端跑通记录 |
 | [`docs/07-poster-and-cards.md`](docs/07-poster-and-cards.md) | poster 阶段（HTML→PNG 海报）与卡片产物渲染 |
+| [`docs/08-channels.md`](docs/08-channels.md) | 发布渠道控制面：渠道声明、登录态、素材适配 |
+| [`docs/09-voice-styles.md`](docs/09-voice-styles.md) | 平台 × 人格的文案身份层（variant 解析与校验） |
+| [`docs/10-module-video.md`](docs/10-module-video.md) | video 阶段：分镜 → edge-tts 配音 → ffmpeg 合成真 mp4 |
+| [`docs/11-verification-6-stages.md`](docs/11-verification-6-stages.md) | 六阶段端到端真实验证记录（已知失败项 / 未修 bug 清单 / 未验证清单） |
 
 ## 目录
 
@@ -52,7 +76,12 @@ app/
   intake/pdf_parser.py     PyMuPDF：正文/标题/图/表 → md + images
   intake/latex_parser.py   LaTeX 源 → md + images
   intake/arxiv.py          arXiv 元数据 + PDF + 源码包
-  modules/poster.py       海报渲染（HTML→PNG；**渲染器已实现，编排尚未接线，见 docs/07**）
+  modules/poster.py       海报渲染（HTML→PNG 版式与几何自检）
+  modules/poster_stage.py poster 阶段编排（digest → LLM 写 spec → 多画布；装不下自动减块重试）
+  modules/video.py        video 阶段：分镜 → edge-tts 配音 → ffmpeg 合成横/竖版 mp4 + 封面 + 字幕
+  modules/community.py    社区运营：选社区 + 每社区一版成稿文案 + 投递数据复盘（挂在 publish 尾部）
+  styles.py               平台 × 人格身份层（xhs / zhihu / bilibili / en）
+  ops.py                  运营：服务起停、日志、已发内容的真实数据（只读渠道接口）
   platforms.py            渠道控制面：4 个渠道声明，R1 仅小红书可用（登录态 / 扫码 / 发布）
   cards/render.py         小红书卡片图（PIL，1080×1440）
 scripts/make_cards.py     卡片与海报的命令行入口

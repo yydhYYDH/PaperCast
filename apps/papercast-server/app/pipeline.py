@@ -116,7 +116,12 @@ class StageContext:
     # ---- 闸门 ----
 
     async def gate(
-        self, gate_id: str, label: str, detail: str, options: list[tuple[str, str, Optional[str]]]
+        self,
+        gate_id: str,
+        label: str,
+        detail: str,
+        options: list[tuple[str, str, Optional[str]]],
+        default: Optional[str] = None,
     ) -> str:
         gate = StageGate(
             id=gate_id,
@@ -139,8 +144,11 @@ class StageContext:
         self.run.status = "running"
         self.stage.status = "running"
         self.store.save(self.run)
+        if not chosen:
+            chosen = pick_gate_choice(options, default)
+            self.log("warn", f"闸门没拿到人工选择，按默认值放行：{label} → {chosen}（有副作用的闸门必须声明安全默认值）")
         self.log("ok", f"闸门放行：{label} → {chosen}")
-        return chosen or (options[0][0] if options else "continue")
+        return chosen
 
     @property
     def cancelled(self) -> bool:
@@ -148,6 +156,23 @@ class StageContext:
 
     def gate_note(self) -> str:
         return (self.stage.gate.note if self.stage.gate and self.stage.gate.note else "") or ""
+
+
+def pick_gate_choice(
+    options: list[tuple[str, str, Optional[str]]], default: Optional[str] = None
+) -> str:
+    """人工没给出选择时的取值 —— 这里必须 **fail-closed**。
+
+    原来直接退到 options[0][0]，而发布闸门的 options[0] 正是「确认发布」，
+    等于把「闸门异常 / 没等到选择」变成「默认真投递」，方向是反的（2026-09-19 修）。
+    现在：调用方声明的安全默认值 > 第一个选项；一个选项都没有时退到 skip
+    （"不做那件事"），而不是 continue。真正有副作用的那一步还必须在调用方
+    再走一道白名单校验，见 app/modules/publish.py 的 _is_confirmed。
+    """
+    if default:
+        return default
+    ids = [o[0] for o in options]
+    return ids[0] if ids else "skip"
 
 
 class _Cancelled(Exception):
@@ -162,16 +187,52 @@ class Pipeline:
         self.bus = EventBus()
         self._tasks: dict[str, asyncio.Task] = {}
         self._gate_events: dict[str, asyncio.Event] = {}
+        # 真的有协程挂在 wait_gate 上的闸门（key = "<run_id>:<stage_id>"）。
+        # 只看 _gate_events 不够：cancel() 会顺手 setdefault 造一个事件出来，那是「解开」不是「有人在等」。
+        self._gate_waiters: set[str] = set()
         self._cancelled: set[str] = set()
 
     # ---------- 闸门 ----------
 
     async def wait_gate(self, run_id: str, stage_id: str) -> None:
-        ev = self._gate_events.setdefault(f"{run_id}:{stage_id}", asyncio.Event())
-        await ev.wait()
-        self._gate_events.pop(f"{run_id}:{stage_id}", None)
+        """挂住当前协程等闸门放行。**进了这里才算「真有人在等」** —— resolve_gate 靠它判断闸门是不是活的。
+
+        finally 里清理：被 cancel 时（进程结束 / 人工取消）不能留下一个「看着在等、其实没人」的假状态。
+        """
+        key = f"{run_id}:{stage_id}"
+        ev = self._gate_events.setdefault(key, asyncio.Event())
+        self._gate_waiters.add(key)
+        try:
+            await ev.wait()
+        finally:
+            self._gate_waiters.discard(key)
+            self._gate_events.pop(key, None)
+
+    def has_live_task(self, run_id: str) -> bool:
+        """本进程里这个 run 还有活跃的执行协程吗？（服务重启后必然没有：task 只在内存里）"""
+        task = self._tasks.get(run_id)
+        return task is not None and not task.done()
+
+    def is_gate_alive(self, run_id: str, stage_id: str) -> bool:
+        """有协程正挂在这个闸门上等放行吗？"""
+        return f"{run_id}:{stage_id}" in self._gate_waiters
+
+    #: 闸门没有活跃协程时的答复（前端直接展示，必须说清「该怎么办」）
+    GATE_INTERRUPTED_MSG = (
+        "本次运行已随服务重启中断，请重新发起："
+        "服务重启会丢掉内存里的执行任务，没有任何协程还会继续推进这个 run"
+        "（已落盘的产物保留在该 run 目录，不会被删除）"
+    )
+    GATE_NO_WAITER_MSG = "该闸门当前没有等待中的执行协程（阶段可能已推进），拒绝放行以免造成假成功"
 
     def resolve_gate(self, run_id: str, stage_id: str, option_id: str, note: Optional[str] = None) -> tuple[bool, str]:
+        """放行闸门。**只有真的把等待中的协程唤醒，才算成功。**
+
+        B1 修复（2026-09-19）：原来这里只改 run.json 里的 gate.resolved，不检查是否有人等 ——
+        后端重启后，停在闸门上的 run 会显示「等待人工确认」，但内存里的执行任务早就没了；
+        此时放行会返回 204「成功」，而 run 永久卡在 waiting（实测 run_9105dc770228 就是这样死的，
+        产物停在「素材包已落盘、无回执」）。现在检查不到等待中的协程就明确报错。
+        """
         run = self.store.get(run_id)
         if run is None:
             return False, "run 不存在"
@@ -183,6 +244,13 @@ class Pipeline:
         valid = {o.id for o in stage.gate.options}
         if option_id not in valid:
             return False, f"非法选项 {option_id}，可选 {sorted(valid)}"
+
+        # ---- 闸门必须是「活的」：没有协程在等 → 拒绝，绝不给 204 假成功 ----
+        if not self.is_gate_alive(run_id, stage_id):
+            if not self.has_live_task(run_id):
+                return False, self.GATE_INTERRUPTED_MSG
+            return False, f"{self.GATE_NO_WAITER_MSG}（run.status={run.status}，{stage.id}.status={stage.status}）"
+
         stage.gate.resolved = option_id
         stage.gate.note = note
         self.store.save(run)
@@ -236,7 +304,9 @@ class Pipeline:
         try:
             from .modules.generate import run_article, run_understand
             from .modules.intake import run_intake
+            from .modules.poster_stage import run_poster
             from .modules.publish import run_publish
+            from .modules.video import run_video
         except Exception as e:
             run.status = "failed"
             run.error = {"code": "MODULE_IMPORT_FAILED", "message": f"{type(e).__name__}: {e}"}
@@ -252,6 +322,8 @@ class Pipeline:
             ("intake", run_intake),
             ("understand", run_understand),
             ("article", run_article),
+            ("poster", run_poster),
+            ("video", run_video),
             ("publish", run_publish),
         ]
         run.status = "running"

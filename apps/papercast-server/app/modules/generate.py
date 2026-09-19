@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from ..cards import render as card_render
 from ..models import ArticleVariant, PaperDigest
@@ -27,6 +28,98 @@ class GenerateError(RuntimeError):
 CJK = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
 NUM = re.compile(r"\d+(?:[.,]\d+)*\s*%?")
 FORMULA = re.compile(r"\$[^$]{1,200}\$|\\frac|\\begin\{|\\sum|\\alpha|_\{|\^\{")
+
+# --------------------------------------------------------------------------- #
+# 用户指令（brief）的机检遵从度
+# --------------------------------------------------------------------------- #
+# 用户指令是自由文本，不可能全部机检。这里只抽三类**能落到可判定事实**的约束：
+# 字数上限、禁用表达、必须体现的侧重。抽不到的部分不假装检查过，如实记成待人工复核。
+BRIEF_WORD_LIMIT = re.compile(
+    r"(?:不超过|不要超过|不超过|不多于|不得超过|最多|控制在|上限|限制在|压缩到)\s*(\d{2,4})\s*字"
+    r"|(\d{2,4})\s*字(?:以内|内|以下|左右)"
+)
+BRIEF_FORBID = re.compile(
+    r"(?:不要|别|避免|不得|禁止|切忌)(?:用|写|出现|有|说|加|带)?[「『“]?([^，。；、,;：:\n「」『』“”]{1,10})"
+)
+BRIEF_MUST = re.compile(
+    r"(?:重点(?:讲|写|说|介绍|放在|落在)|必须(?:提到|包含|写|有)|一定要(?:提到|写|有)|着重)([^，。；、,;：:\n]{1,12})"
+)
+
+
+def _brief_of(ctx) -> str:
+    """读取本次运行的用户指令（没有就返回空串，全链路零影响）。"""
+    cfg = getattr(ctx.run, "config", None)
+    return (getattr(cfg, "brief", "") or "").strip()
+
+
+def brief_checks(ctx, brief: str, label: str, text: str, spec: Any = None) -> None:
+    """把用户指令里「能判定的部分」变成 check 行；判定不了的如实标 run，不装作检查过。
+
+    spec 给了 PlatformSpec 时，会先判「指令与平台硬约束是否冲突」——按
+    prompts.BRIEF_RULES 第 4 条，平台硬约束高于用户指令，冲突时以平台为准，
+    这时**不能报 fail**（那不是执行失败，是预期中的优先级裁决），要报 run 并说清冲突。
+    """
+    if not brief:
+        return
+    checked = 0
+    m = BRIEF_WORD_LIMIT.search(brief)
+    if m:
+        limit = int(m.group(1) or m.group(2))
+        n = len(text)
+        checked += 1
+        lo = int(getattr(spec, "body_min", 0) or 0)
+        hi = int(getattr(spec, "body_max", 0) or 0)
+        if lo and limit < lo:
+            ctx.check(
+                f"{label} · 指令遵从度 · 字数上限 {limit}",
+                "run",
+                f"指令要 ≤{limit} 字，但该平台正文下限是 {lo} 字 —— 按「平台硬约束 > 用户指令」以平台为准"
+                f"（实际 {n} 字）；想真正压到 {limit} 字请换短体裁平台",
+            )
+        elif hi and limit > hi:
+            ctx.check(
+                f"{label} · 指令遵从度 · 字数上限 {limit}",
+                "run",
+                f"指令上限 {limit} 字比平台上限 {hi} 字还宽，以平台 {hi} 字为准（实际 {n} 字）",
+            )
+        else:
+            ctx.check(
+                f"{label} · 指令遵从度 · 字数上限 {limit}",
+                "pass" if n <= limit else "fail",
+                f"实际 {n} 字" + ("" if n <= limit else f"，超出 {n - limit} 字"),
+            )
+    forbids: list[str] = []
+    musts: list[str] = []
+    # 「不要超过 800 字」这类讲的是**字数上限**，不是要避免的措辞：先按字数上限的匹配位置把它
+    # 从文本里摘掉，否则「超过 800 字」会被 BRIEF_FORBID 抓成禁用表达，报一条「未见 超过 800 字」
+    # 的 pass —— 看着检查过了，其实什么都没查（2026-09-19 修，来自测试指出的假阳性）。
+    brief_for_forbid = BRIEF_WORD_LIMIT.sub("　", brief)
+    for raw in BRIEF_FORBID.findall(brief_for_forbid):
+        w = raw.strip(" 的了和与及")
+        if len(w) >= 2 and w not in forbids:
+            forbids.append(w)
+    for raw in BRIEF_MUST.findall(brief):
+        w = raw.strip(" 的了和与及").strip()
+        if len(w) >= 2 and w not in musts:
+            musts.append(w)
+    hit = [w for w in forbids if w in text]
+    if forbids:
+        checked += 1
+        ctx.check(
+            f"{label} · 指令遵从度 · 禁用表达",
+            "pass" if not hit else "fail",
+            "未见 " + "、".join(forbids[:3]) if not hit else "出现了指令要求避免的表达：" + "、".join(hit),
+        )
+    if musts:
+        miss = [w for w in musts if w not in text]
+        checked += 1
+        ctx.check(
+            f"{label} · 指令遵从度 · 侧重",
+            "pass" if not miss else "run",
+            "已体现：" + "、".join(musts[:3]) if not miss else "指令要求侧重 " + "、".join(miss) + "，正文里未出现该词（可能换了说法，需人工看一眼）",
+        )
+    if not checked:
+        ctx.check(f"{label} · 指令遵从度", "run", f"指令没有可直接机检的约束（{brief[:40]}…），需人工复核")
 
 
 def title_weight(s: str) -> int:
@@ -187,6 +280,7 @@ async def run_understand(ctx: StageContext) -> None:
                     figures,
                     content,
                     revise_note,
+                    _brief_of(ctx),
                 ),
                 max_tokens=16000,
             )
@@ -369,6 +463,28 @@ async def run_article(ctx: StageContext) -> None:
         for e in card_errors:
             ctx.log("warn", f"卡片：{e}")
 
+    # ---- 出口兜底 ----
+    # publish 读的是 article/export/title.txt，而它历史上**只由小红书（JSON）分支写**。
+    # 于是「只选知乎/英文/B站」的 run 会被 publish 判 TITLE_MISSING 直接失败（2026-09-19 踩到）。
+    # 这里补一层：没有 xhs 变体时，从第一个 markdown 变体里取一级标题当出口。
+    export_dir = ctx.work / "export"
+    if ctx.run.articles and not (export_dir / "title.txt").is_file():
+        for art in ctx.run.articles:
+            for cand in sorted(ctx.work.glob(f"{art.id.split('-')[0]}*.md")):
+                m = re.search(r"^#\s+(.+)$", cand.read_text(encoding="utf-8"), re.M)
+                if not m:
+                    continue
+                export_dir.mkdir(parents=True, exist_ok=True)
+                (export_dir / "title.txt").write_text(m.group(1).strip() + "\n", encoding="utf-8")
+                (export_dir / "content.txt").write_text(cand.read_text(encoding="utf-8"), encoding="utf-8")
+                ctx.artifact("text", "标题（待发布）", "export/title.txt", preview=True)
+                ctx.artifact("text", "正文（待发布）", "export/content.txt", preview=True)
+                ctx.log("info", f"本 run 没有小红书变体，已从「{art.label}」取出口标题与正文（publish 需要）")
+                break
+            else:
+                continue
+            break
+
     ctx.progress(1.0)
     summary = " / ".join(f"{a.label} {a.words} 字" for a in ctx.run.articles)
     ctx.log("ok", f"M2 完成：{len(ctx.run.articles)} 个变体（{summary}），卡片 {len(made_cards)} 张")
@@ -385,7 +501,8 @@ async def _gen_xhs_variant(
     ctx.log("info", f"调用 LLM 生成「{label}」文案（JSON 结构）…")
     try:
         raw = await ctx.llm.chat_json(
-            prompts.article_system("xhs", voice), prompts.article_user(digest.title, digest_json, figures),
+            prompts.article_system("xhs", voice),
+            prompts.article_user(digest.title, digest_json, figures, _brief_of(ctx)),
             max_tokens=16000,
         )
     except Exception as e:
@@ -497,6 +614,7 @@ async def _gen_xhs_variant(
     ctx.check(f"{label} · 标签数量",
               "pass" if spec.tags_min <= len(tags) <= spec.tags_max else "fail",
               f"{len(tags)} 个（{spec.tags_min}-{spec.tags_max}）")
+    brief_checks(ctx, _brief_of(ctx), label, f"{recommended}\n{body}", spec)
 
     made_cards: list[str] = []
     if render_cards and ctx.settings.cards_enabled:
@@ -541,7 +659,8 @@ async def _gen_markdown_variant(
     ctx.log("info", f"调用 LLM 生成「{label}」（max_tokens={budget}）…")
     try:
         text = await ctx.llm.chat(
-            prompts.article_system(spec.id, voice), prompts.article_user(digest.title, digest_json, figures),
+            prompts.article_system(spec.id, voice),
+            prompts.article_user(digest.title, digest_json, figures, _brief_of(ctx)),
             max_tokens=budget,
         )
     except Exception as e:
@@ -555,6 +674,7 @@ async def _gen_markdown_variant(
 
     for check_label, state, detail in styles.validate_markdown(spec, text):
         ctx.check(f"{label} · {check_label}", state, detail)
+    brief_checks(ctx, _brief_of(ctx), label, text, spec)
 
     # 数字可回溯：软检查（长文里的格式差异会误报，如实标记为待人工复核）
     haystack = re.sub(r"[\s,，]", "", digest_json + ctx.shared["intake"]["markdown"])
@@ -567,13 +687,17 @@ async def _gen_markdown_variant(
     else:
         ctx.check(f"{label} · 数字可回溯", "pass", f"{len(nums)} 个数字全部可在事实源中回溯")
 
+    # 字数登记按 spec.unit 取口径（B6）：英文变体（en，unit="words"）用 cjk_len 恒为 0，
+    # 前端因此一直显示「英文传播 0 字」。口径函数早就有（styles.text_len），这里只是没接上。
+    n = styles.text_len(text, spec.unit)
+    unit_cn = "词" if spec.unit == "words" else "字"
     ctx.run.articles.append(
         ArticleVariant(
             id=styles.variant_id(spec.id, voice), platform=spec.id, voice=voice, label=label,
-            url=f"/artifacts/{ctx.run.id}/article/{stem}.md", words=styles.cjk_len(text),
+            url=f"/artifacts/{ctx.run.id}/article/{stem}.md", words=n,
         )
     )
-    ctx.log("ok", f"{label} 完成：{styles.cjk_len(text)} 字")
+    ctx.log("ok", f"{label} 完成：{n} {unit_cn}")
 
 
 def _strip_fence(text: str) -> str:

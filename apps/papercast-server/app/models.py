@@ -17,9 +17,9 @@ ArtifactKind = Literal["markdown", "html", "image", "video", "json", "pptx", "te
 
 STAGE_ORDER: list[StageId] = ["intake", "understand", "article", "poster", "video", "publish"]
 
-# 三模块覆盖的阶段；poster / video 暂未实现（返回 skipped），契约里保留位置
-IMPLEMENTED_STAGES: set[str] = {"intake", "understand", "article", "publish"}
-SKIPPED_STAGES: set[str] = {"poster", "video"}
+# 后端已接线的阶段：6 个阶段全部有真实实现（2026-09-19 收口，poster/video 不再 skipped）
+IMPLEMENTED_STAGES: set[str] = {"intake", "understand", "article", "poster", "video", "publish"}
+SKIPPED_STAGES: set[str] = set()
 
 STAGE_META: dict[str, dict[str, str]] = {
     "intake": {
@@ -39,13 +39,13 @@ STAGE_META: dict[str, dict[str, str]] = {
     },
     "poster": {
         "label": "Poster 生成",
-        "engine": "paper2poster · Paper2Poster",
-        "hint": "尚未接入本后端",
+        "engine": "确定性排版 · poster.py（chrome-headless-shell 渲染）",
+        "hint": "digest → 版面 spec → 按渠道渲染海报/竖长图/封面，几何溢出即判失败",
     },
     "video": {
         "label": "视频合成",
-        "engine": "paper-share-skills · Paper2Video",
-        "hint": "尚未接入本后端",
+        "engine": "分镜 LLM + edge-tts 配音 + ffmpeg（CPU）",
+        "hint": "digest → 分镜/旁白 → 逐页配音合成横版与竖版成片；TTS 失败如实标 fail",
     },
     "publish": {
         "label": "发布与运营",
@@ -146,7 +146,9 @@ class ArticleVariant(BaseModel):
     """一个平台 × 人格的产出版本。id = "{platform}-{voice}"（见 app/styles.py）。"""
 
     id: str
-    platform: Literal["xhs", "zhihu", "bilibili"]
+    # 与 app/styles.py 的 PLATFORMS 保持一致；加平台时要一起加（漏了会导致该变体记不进去，
+    # 2026-09-19 加英文平台时踩到）。前端 types.ts 的同名联合类型也要一起补，否则前端渲染不出这个变体。
+    platform: Literal["xhs", "zhihu", "bilibili", "en"]
     voice: str
     label: str
     url: str
@@ -179,6 +181,9 @@ class PublishConfig(BaseModel):
 
 
 class RunConfig(BaseModel):
+    # 用户自由文本指令（「这篇论文我想出成什么格式」）。只影响风格/体裁/篇幅/侧重，
+    # 不允许改变事实层；边界见 prompts.BRIEF_RULES，遵从度由 generate.py 的 brief_checks 机检。
+    brief: str = Field(default="", max_length=2000)
     article: ArticleConfig = Field(default_factory=ArticleConfig)
     poster: PosterConfig = Field(default_factory=PosterConfig)
     video: VideoConfig = Field(default_factory=VideoConfig)
