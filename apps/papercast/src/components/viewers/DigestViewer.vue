@@ -95,8 +95,19 @@ onMounted(async () => {
 
 <style scoped>
 .digest { display: flex; flex-direction: column; gap: 16px; padding: 14px; overflow-y: auto; }
-.banner { background: linear-gradient(180deg, #151d2c, #10151f); border: 1px solid var(--line-soft); border-radius: 11px; padding: 13px; display: flex; flex-direction: column; gap: 8px; }
-.d-title { font-size: 15px; line-height: 1.45; }
+/* 论文理解的抬头：**暖白底**，不是深色块。
+   原来是 linear-gradient(#151d2c → #10151f) 的深蓝黑（旧控制台主题留下的），
+   在暖色纸面上像贴了一块黑板 —— 2026-09-19 改成和正文同一档的浅底 + 细边。 */
+.banner {
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-bottom-color: #e7e6e1;
+  border-radius: 11px;
+  padding: 13px 15px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.banner .label { color: var(--ink-3); }
+.d-title { font-family: var(--serif); font-size: 16px; line-height: 1.45; color: var(--ink); }
 .gap { gap: 6px; }
 .abs { font-size: 13px; color: var(--text-2); line-height: 1.75; }
 .sec { display: flex; flex-direction: column; gap: 7px; }
