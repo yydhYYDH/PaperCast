@@ -1,0 +1,102 @@
+---
+name: papercast-frontend
+description: PaperCast 前端的界面规范与验证配方（暖调单色编辑风格、对话优先入口、只给结论、不许看板化）。改 apps/papercast 任何界面、文案或查看器之前读它；含真实踩过的坑与 ops/shot 核验脚本清单。
+---
+
+# PaperCast 前端：编辑风格 + 对话优先 + 只留结论
+
+## 0. 什么时候用
+
+只要动 `apps/papercast/` 里的**界面、文案、样式、查看器、交互**，先读这一篇再动手。
+后端/流水线/发布逻辑不在本技能范围（看 `apps/papercast-server/docs/` 与 `docs/`）。
+
+三条不可协商的底线：
+
+1. **受众是评审专家、学生、顺路点进来的人** —— 不装专家、不摆控制台、不用行话；
+2. **一个入口**：工作台就是一个大对话框，右侧一条「谁在干活」名单，其余功能安静地待在左边导航里；
+3. **能不选就不选**：默认即最优，选项藏到「设置」；页面上只留结论，细节默认折叠。
+
+## 1. 视觉基调（暖调单色，纸面感）
+
+- 画布 `#f7f6f3`、白卡、**1px 极浅描边**（`#eaeaea`）；**几乎不用阴影**（仅弹层允许一点）；
+- 标题走**衬线**（`--serif`），正文 15px / 1.7，颜色只用近黑与三档灰；
+- **颜色只用来表达状态**（绿=通过 / 琥珀=等你 / 红=失败 / 蓝=进行中），且必须是柔和的粉彩底 + 深字，不要饱和色块；
+- 禁止：渐变、emoji、图标字体、进度条墙、统计卡墙、等宽大数字、彩色徽章堆叠、"深色控制台面板"；
+- 所有设计变量集中在**唯一**的全局样式 `src/style.css`（`:root` 里），组件里写 scoped 样式但**不新增色值**——要新颜色先加 token。
+
+细节与配方见 [references/design-system.md](references/design-system.md)。
+
+## 2. 文案声音
+
+- 中文、短句、动词开头；一句人话能说清就别用名词堆；
+- **不许把后端术语端给用户**：不出现 `stage`/`artifact`/`run_id`/`mock`/`API`/`MCP` 这类词（导航和页面标题用「取论文 / 读懂 / 写作 / 视觉 / 视频 / 运营」）；
+- **读不到就说读不到**，并给出下一步（例：「小红书 MCP 报告未登录：先去『平台账号』扫码，再回来刷数据」）；**永远不要用 0、空白或编造的示例数据顶替**；
+- 失败也要有回执（toast 或对话里的一条消息），不要「点了没反应」。
+
+## 3. 代码地图（改前先看这三处）
+
+| 你要改什么 | 去哪里 |
+| --- | --- |
+| 颜色 / 字号 / 圆角 / 通用组件类 | `src/style.css`（唯一全局样式，`:root` token + `.page-head`、`.sheet`、`.toast`、`.logbox`…） |
+| 任何 HTTP 调用 | `src/api/http.ts`（**唯一出口**）＋ `src/api/types.ts`（形状）＋ `src/api/mock.ts`（离线同形状实现） |
+| 后端产物地址 | `assetUrl()`（`src/api/index.ts`）—— 后端给的是 `/artifacts/...` 相对路径，直接 fetch/src 会 404 |
+| 工作台（对话入口） | `src/views/WorkbenchView.vue` + `src/components/chat/{ChatThread,ChatMessage,Composer,AgentRail}.vue` + `src/stores/chat.ts` |
+| 状态 | `src/stores/*`（Pinia）。**对话消息由 runs store 里的运行推导**，不要另造一份状态 |
+| 产物查看器 | `src/components/viewers/*.vue`，props 是 `{ run }`，优先读**这次运行**的真产物 |
+
+跨组件约定：确认框走 `ui.askConfirm()`（不要 `window.confirm`），提示走 `ui.toast()`；
+端口/地址不许写死，来自 `VITE_API_BASE` 与后端返回。
+
+## 4. 硬规则（写代码时逐条对）
+
+**必须**
+
+- 人工闸门（发布、退出登录、停服务）→ `ui.askConfirm()`，默认动作排第一，按钮文案是动词；
+- 真实数据优先：先读运行产物，示例只在读不到时兜底，并且**兜底要看得出来**；
+- 空状态、加载中、失败三种态都要有文案（不是转圈了事）；
+- 移动/窄屏：右栏 ≤1180px 收起，对话列自适应。
+
+**禁止**
+
+- 新增 UI 组件库、图标库、CSS 框架（就手写 + token）；
+- `window.confirm/alert/prompt`、以及任何"浏览器原生冒泡对话框"；
+- 统计卡（`.stat-card`/`.stat-grid`）与服务卡片墙（`.svc-grid`/`.svc`）—— **2026-09-19 已整套删除**，
+  并在 `style.css` 原处留了注释；要展示数字就用「一句结论 + 最多三个数字」；
+- 在仓库里写死 `/home/...` 绝对路径或端口；
+- 把 `var/`、`cookies.json`、`.env` 之类提交进 git。
+
+## 5. 改完必须验证（少一步都别提交）
+
+```bash
+cd apps/papercast && npx vue-tsc --noEmit          # 类型必须干净
+cd /path/to/repo && node ops/shot/<脚本>            # 见下，控制台必须 0 错误
+```
+
+| 脚本 | 断言什么 |
+| --- | --- |
+| `ops/shot/ui_check.mjs` | 六个页面渲染、退出登录确认框、运营页回执、截图入 `docs/evidence/` |
+| `ops/shot/ops_conclusion_check.mjs` | 六页 **0 个看板元件**、运营页服务默认 `display:none`、展开后 8 行 + 200 行日志 |
+| `ops/shot/chat_check.mjs` | 对话入口：输入框 / 名单 / 展开产物 / 窄屏收起右栏 |
+| `ops/shot/chat_viewers.mjs` | 查看器读的是**真产物**（不是内置示例） |
+| `ops/shot/digest_banner_check.mjs` | 论文理解抬头是暖白底（计算样式 luminance > 0.9、无渐变） |
+| `ops/shot/chat_drop.mjs` | 拖 PDF 的遮罩出现/消失（不真的上传） |
+
+接口对账（前端调了后端没有的路由 = 上线即 404）：
+
+```bash
+apps/papercast-server/.venv/bin/python ops/check_api_contract.py
+```
+
+提交按仓库习惯：`feat(papercast): …` / `fix(papercast): …`，**只提交前端轨道与它需要的最小后端改动**，
+不要 `git add -A`（工作区常有别的轨道在半写），commit 后 `git push origin main`。
+细节与真实踩坑见 [references/verification.md](references/verification.md)。
+
+## 6. 反模式（都是本项目真踩过的）
+
+- `v-for` 与 `v-if` 写在**同一层** → `ch` 不在作用域，编译期就报错；要 `<template v-for>` 包一层；
+- 展开区用 `v-show` 而模板里读 `items[0].stats` → 空数组时渲染崩溃，**组件挂不上，连页面数据都加载不出来**；
+  要 `v-if`（不渲染就别求值）；
+- 查看器直接 `fetch(a.url)` → 打到 dev server 上 404；必须 `assetUrl()`；
+- 查看器默认读 `public/samples/*` → 界面显示的是**示例论文**，用户会当成真结果；
+- 旧主题的深色块（例如深蓝黑渐变抬头）会残留 → 视觉审查时专门搜 `linear-gradient` 与 `#1xxxxx`；
+- 用 `ops/check_api_contract.py` 漏查新增端点 → 前端调 404 接口，页面上什么都不显示（先看控制台）。

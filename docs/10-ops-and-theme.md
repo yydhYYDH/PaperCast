@@ -147,3 +147,26 @@ node ops/shot/ops_theme_check.mjs       # 换肤 + 运营页的真实核验（�
 核验：`ops/shot/ops_conclusion_check.mjs` —— 六个页面都断言「0 个看板元件」、运营页断言
 服务默认 `display:none`、展开后有 8 行 + 200 行日志、控制台 0 错误；
 `ops/shot/ui_check.mjs` 与 `ops/shot/chat_check.mjs` 同步更新以匹配新结构。
+## 11. 仓库级技能：`papercast-frontend`（2026-09-19）
+
+前端这一套规矩（暖调单色、对话优先入口、只留结论、不许看板化、验证脚本清单、真实踩过的坑）
+现在是一条**可被 dsh 会话直接加载的技能**，放在：
+
+```
+.dsh/skills/papercast-frontend/
+├── SKILL.md                      # 什么时候用 / 视觉基调 / 文案声音 / 代码地图 / 硬规则 / 验证 / 反模式
+└── references/
+    ├── design-system.md          # token 表、排印、间距、组件配方、文案模板
+    └── verification.md           # 命令清单、判定标准、7 个真实踩坑、提交与协作
+```
+
+- **为什么放仓库里**：DSH 的技能发现根优先级是 `<repo>/.dsh/skills` > `<repo>/.agents/skills` > `~/.dsh/skills` > `~/.agents/skills`。
+  放仓库里 = 跟着代码走、能进 git、换机器/换会话都在，也不会污染用户目录；
+- **和 `ops/install_skills.sh` 的分工**：那个脚本装的是 4 个**第三方**设计技能（`reference/upstream/` → `~/.agents/skills`）；
+  本仓库自己的规范走 `.dsh/skills/`；
+- `AGENTS.md` §1 已把 `.dsh/` 写成根目录唯一允许的目录（只放技能包，别的仍必须进五层）；
+- 新增技能：建 `.dsh/skills/<name>/SKILL.md`，frontmatter 写 `name`（`^[a-z0-9]+(-[a-z0-9]+)*$`）+ `description`，
+  目录名与 `name` 保持一致；写得越具体越有用 —— 命令、路径、断言、以及"我们踩过什么坑"。
+
+核验：写完当场在会话里 `skill(name: "papercast-frontend")` 加载成功（provider `filesystem`，资源目录即仓库内路径），
+技能目录会随会话技能清单自动刷新，不需要重启 dsh。

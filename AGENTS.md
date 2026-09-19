@@ -12,8 +12,14 @@
 | 跑出来的数据、缓存、日志、venv、conda env、工具链 | `var/` |
 | 文档 | 全局的进 `docs/`，跟代码走的留在组件内（`apps/<组件>/docs/` 或 `README.md`） |
 
-根目录只允许 `README.md`、`AGENTS.md`、`.gitignore`、`LICENSE` 四个文件（`LICENSE` 是 2026-09-19 可发布化时加的标准元文件）。
-**2026-09-19 收口完成：不再有任何例外目录** —— 根目录只允许那四个文件，其余一律进五层（历史见 `docs/conventions.md` §9）。
+根目录只允许 `README.md`、`AGENTS.md`、`.gitignore`、`LICENSE` 四个文件（`LICENSE` 是 2026-09-19 可发布化时加的标准元文件），
+以及 **`.dsh/` 这一个目录**（2026-09-19 起）：它是 DSH 的技能发现根，里面只放 `skills/<名字>/SKILL.md` 技能包。
+**2026-09-19 收口完成：除此之外根目录不允许任何新目录或文件**，其余一律进五层（历史见 `docs/conventions.md` §9）。
+
+> 技能放哪：DSH 按 `<repo>/.dsh/skills` > `<repo>/.agents/skills` > `~/.dsh/skills` > `~/.agents/skills` 的优先级发现，
+> 目录名无所谓，技能名取 `SKILL.md` frontmatter 的 `name`（须匹配 `^[a-z0-9]+(-[a-z0-9]+)*$`）。
+> **本仓库自己的技能放 `<repo>/.dsh/skills/`**（跟着代码走、能提交、新会话立刻可见）；
+> 第三方设计技能仍用 `./ops/install_skills.sh` 装到 `~/.agents/skills`。现有仓库技能：`papercast-frontend`。
 
 ## 2. 路径：一律不写死 /home/yydh/hack
 

@@ -213,7 +213,9 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 
 迁移期为了不打断并发中的知乎/B站轨道，根目录曾留 8 个例外目录；**现在归零**，根目录只剩
 `README.md` / `AGENTS.md` / `.gitignore` / `LICENSE` 四个文件（`LICENSE` 是 09-19 可发布化时新增的
-标准元文件，不是目录例外）。全量对照：
+标准元文件，不是目录例外），加上 `.dsh/` 这**一个长期目录**（DSH 技能发现根，见下表末行）。
+
+全量对照：
 
 | 原路径 | 现在 | 备注 |
 | --- | --- | --- |
@@ -225,6 +227,7 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 | `.venv-zhihu/`、`.home-zhihu/` | `var/toolchains/zhihu-cli-venv/`、`var/home/zhihu-home/` | venv 的 shebang 是绝对路径，**只能重建不能 mv** |
 | `.conda-pkgs/`、`.tectonic-cache/` | `var/cache/{conda-pkgs,tectonic}/` | 包缓存 |
 | `biliup` 相关 | `var/toolchains/bili-venv/`、`var/home/.bilibili/` | B站轨道新增：biliup venv + 凭证（HOME 重定向） |
+| —（09-19 新增，**保留在根目录**） | `.dsh/skills/<name>/SKILL.md` | DSH 的技能发现根（优先级最高）。只放技能包，不放代码/数据；**要跟代码一起提交，不许加进 `.gitignore`**；这不是临时例外，是长期约定。仓库自己的前端规范就是 `papercast-frontend`，第三方设计技能仍由 `ops/install_skills.sh` 装到 `~/.agents/skills` |
 
 **下次往根目录放东西前**：先想清楚它属于哪一层；真要开例外，必须在 §9 加一行 + 在 `.gitignore` 加一条，
 并在标题里写明**打算什么时候收口**。
@@ -237,7 +240,7 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 
 ```bash
 cd <工作区根>                            # 例：cd ~/hack
-ls -la                                  # 根目录只有 4 个元文件（README.md/AGENTS.md/.gitignore/LICENSE）+ 5 个目录
+ls -la                                  # 根目录只有 4 个元文件（README.md/AGENTS.md/.gitignore/LICENSE）+ 5 个目录 + .dsh/（技能根，已提交）
 grep -rn 'hack/\.tools\|hack/\.cache\|hack/repos' apps ops docs   # 应为空：旧路径已改完
 grep -rniE 'secret|token=cookie' docs                              # 应无明文凭据
 du -sh var/* | sort -h                  # 运行态体积
