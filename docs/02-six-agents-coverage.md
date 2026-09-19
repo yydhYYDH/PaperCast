@@ -1,7 +1,7 @@
 # 02 · 6 个 Agent 的覆盖、证据与边界
 
 > 回答一个问题：立项时说的「**6 个 Agent 让一篇论文实现多形态传播**」，现在是不是**每个都在真干活**？
-> 版本：R1.5 · 2026-09-19 · 状态：**6 个 Agent 现在都有真实产物与 check 证据**，但它们**不是同一条 run 里跑齐的**：英文传播只在 `run_720e83bdae91`（那条 run 的社区计划失败），社区运营的 run 级成功只在 `run_c5451b582400`。验证的层级定义见 §1.2
+> 版本：R1.5 · 2026-09-19 · 状态：**6 个 Agent 已被一条 run 全面覆盖** —— `run_ec0f0e056f47` 六段全 done（630s），**51 件产物登记在同一条 run.json 里**（其中 42 件带前端 url，逐条 HTTP 200），check 53 pass / 1 fail / 3 run。此前那两条"拼起来才凑齐 6 个"的 run（`run_720e83bdae91` + `run_c5451b582400`）**依然有效**，仍列在 §4.3。验证的层级定义见 §1.2
 > 相关文档：[总纲与分层架构](00-goal-and-architecture.md)（§1 的原始意图、§2.2 的 R1 非目标）、[实现方案](01-implementation-plan.md)、
 > 组件内 [`apps/papercast-server/docs/07-poster-and-cards.md`](../apps/papercast-server/docs/07-poster-and-cards.md)、[`10-module-video.md`](../apps/papercast-server/docs/10-module-video.md)、[`08-channels.md`](../apps/papercast-server/docs/08-channels.md)
 
@@ -9,16 +9,17 @@
 
 ## 1. 一句话结论
 
-**总纲 §1 的 6 个 Agent，现在每一个都有落在磁盘上、可复核的真实产物，而且都是 run 级证据**：其中 5 个（论文解读 / 可视化 / 中文传播 / 英文传播 / 视频化）来自完整流水线 run `run_720e83bdae91`；社区运营这一格**此前只有模块级证据，现已由 `run_c5451b582400` 补齐为 run 级**（真实流水线跑出来的，产物已登记、前端可见）。
+**总纲 §1 的 6 个 Agent，现在已被**一条 run** 全面覆盖：`run_ec0f0e056f47`。** 它六段全 done（630s），**51 件产物登记在同一条 run.json 里**（42 件带前端 url 且我逐条取回 42/42 HTTP 200），check 53 pass / 1 fail / 3 run —— 6 个 Agent 的产物都在这一条里，逐条实物见 §6.9。
 
-唯一的限定是：这 6 个证据**分散在两条 run 上，没有任何一条 run 单跑齐 6 个**（原因纯属变体配置不同，见 §6.9）。
+这条跑出来之前，6 个 Agent 的证据要靠**两条 run 拼起来**才凑齐；那两条**依然有效**，本文档各处仍在引用它们（来历见 §4.3）：
 
-| run | 6 段状态 | 登记产物 | 它证明了哪几个 Agent | 它缺哪个 |
-| --- | --- | --- | --- | --- |
-| `run_720e83bdae91`（§4.1 主证据） | 全 done | 37 | 论文解读 / 可视化 / 中文传播 / **英文传播** / 视频化 | **社区运营**（这一条跑的是修复前代码，计划生成失败） |
-| `run_c5451b582400`（§3.6） | 全 done | 42 | 论文解读 / 可视化 / 中文传播 / 视频化 / **社区运营** | **英文传播**（这条没配 `en` 变体） |
+| run | 6 段状态 | 登记产物 | 它证明了哪几个 Agent |
+| --- | --- | --- | --- |
+| `run_ec0f0e056f47`（**单条覆盖 6 个**，§6.9） | 全 done | **51**（42 带 url） | **6 个全有**：论文解读 / 可视化 / 中文传播 / 英文传播 / 视频化 / 社区运营 |
+| `run_720e83bdae91`（§4.1 主证据） | 全 done | 37 | 论文解读 / 可视化 / 中文传播 / **英文传播** / 视频化（**社区运营失败**：跑的是修复前代码） |
+| `run_c5451b582400`（§3.6） | 全 done | 42 | 论文解读 / 可视化 / 中文传播 / 视频化 / **社区运营**（没配 `en` 变体） |
 
-所以准确的说法是：**6 个 Agent 都有证据，但散在两条 run 上**。想用一条 run 把 6 个都覆盖掉，只差一条**同时配 `en-analyst` + `zhihu-analyst` 的完整跑**（现在的配方已经齐全，见 §6.9）。
+所以现在的准确说法是：**6 个 Agent 都有证据，且已由 `run_ec0f0e056f47` 一条 run 覆盖齐全**；"两条 run 拼合"在 §1.2 的层级口径下仍然成立，只是不再是**唯一**路径。这条 run 的配置就是把变体写成 `["xhs-author","zhihu-analyst","en-analyst"]`（照抄方式见 §6.9 与 §7.2）。
 
 这里容易混的是**两条轴**，本文先把它们分开讲，再给映射：
 
@@ -56,6 +57,8 @@
 | **模块级** | 不起服务、不建 run：写个小脚本**直接调用**某个模块的函数，输入复用某条现成 run 的产物 | 可能落盘（如果模块自己写文件），但**通常不会进 run.json** —— 取决于那个脚本的 ctx 有没有真的把 check/artifact 写回去 | 较弱：证明"模块函数本身能出正确结果"，**不证明**它在流水线里能跑 |
 
 本文档里：论文解读 / 可视化 / 中文传播 / 英文传播 / 视频化 都是 **run 级**（`run_720e83bdae91`）；社区运营则**同时有** run 级（`run_c5451b582400`，产物已登记）与模块级（`var/scratch/verify_community.py`，产物未登记）两级证据，细节见 §3.6。
+
+层级高低的排序要记清：**"单条 run 覆盖 6 个 Agent"（`run_ec0f0e056f47`，§6.9）比"两条 run 拼合"更强** —— 前者一条 run 里 6 个 Agent 全部落盘、全部登记，是本文档的**首选引用**；后者（720e + c545）仍然有效，但只作为**补充与对照**（它们各自的失败与配置差异本身是有信息量的）。
 
 ---
 
@@ -199,12 +202,14 @@ var/runs/run_720e83bdae91/poster/poster.spec.zhihu.trim3.json
 **验收（run_720e83bdae91 的知乎变体）**：
 
 ```bash
-dump_stage article | grep -E '正文长度|标签数量|数字可回溯|侧重'
+dump_stage article | grep '知乎 × 技术解读'
+#    pass 知乎 × 技术解读 · 标题 :: 「DeepRare：三层多智能体系统做罕见病诊断，HPO 任务」= 19 字（上限 40）
 #    pass 知乎 × 技术解读 · 正文长度 :: 2298 字（要求 2000-4000）
+#    pass 知乎 × 技术解读 · 公式策略 :: 该平台允许 KaTeX 公式
 #    pass 知乎 × 技术解读 · 标签数量 :: 5 个（要求 3-6）
+#    pass 知乎 × 技术解读 · 指令遵从度 · 禁用表达 :: 未见 营销腔
 #    pass 知乎 × 技术解读 · 指令遵从度 · 侧重 :: 已体现：方法
 #    pass 知乎 × 技术解读 · 数字可回溯 :: 83 个数字全部可在事实源中回溯
-# （该变体的完整 check 共 7 条，另有 标题 / 公式策略 / 禁用表达 三条 pass）
 ```
 
 小红书那一路的完整证据在另一条 run：`run_abb2805074e4`（`article/xhs.md` 3,438 B + **4 张卡片** `article/cards/p1..p4.png`，check「卡片渲染 pass 4 张 3:4 卡片」）与 `run_d76ca9da493e`（同样 4 张卡片 / 817 字）。
@@ -327,7 +332,7 @@ python var/scratch/verify_community.py var/runs/run_720e83bdae91
 # 注意：① 它只 print check、不写 run.json；② 它固定传 published=["zhihu"]；③ 它复用现成 run 的 run.json，所以失败原因（如 401 余额）不会体现在这里
 ```
 
-**现状**：✅ **这一格的验收依据是 `run_c5451b582400`**（真实流水线 run 级：产物落盘 + 登记 + 带前端 URL + 4 条 check pass、1 条如实 `run`）。模块级那次直调（第 3 行）作为**补充证据**保留，用来证明"模块本身能独立跑"，但它**不是**验收依据。剩下的差距见 §6.7（只有计划层、没有真正的社区账号接入）、§6.9（没有哪条 run 单跑齐 6 个 Agent）与 §6.10（产出依赖 LLM 配额）。
+**现状**：✅ **这一格的验收依据是 `run_c5451b582400`**（真实流水线 run 级：产物落盘 + 登记 + 带前端 URL + 4 条 check pass、1 条如实 `run`）。模块级那次直调（第 3 行）作为**补充证据**保留，用来证明"模块本身能独立跑"，但它**不是**验收依据。剩下的差距见 §6.7（只有计划层、没有真正的社区账号接入）与 §6.10（产出依赖 LLM 配额）。**单条 run 覆盖 6 个 Agent 的完整证据在 §6.9**（`run_ec0f0e056f47`，社区运营同样在这一条里成功落盘）。
 
 ---
 
@@ -362,7 +367,7 @@ python var/scratch/verify_community.py var/runs/run_720e83bdae91
 
 结论要念准两点：① **"有视频成片之后 B 站素材适配才通过"**——同一个 run 的 `video` 段出了 `video-vertical.mp4`，B 站这条才从"缺视频"变成"可投"（对照 `run_abb2805074e4`：那条没跑视频，B 站是"缺视频"✗）；② 小红书因为**未登录**整条 `fail`。最终闸门选的是 **draft**，所以**什么都没真发出去**，三个渠道的 `export/` 素材包都已就绪（`publish/<渠道>/export/`）。
 
-**这条 run 的社区那一格是失败的**（跑的是修复前代码）。把这一格补上的是**另一条 run**：`run_c5451b582400`（6 段全 done / 42 个登记产物 / 社区计划 4 pass + 1 run），但它**没配英文变体**。两条 run 合起来才覆盖 6 个 Agent——详见 §1.2 与 §6.9。
+**这条 run 的社区那一格是失败的**（跑的是修复前代码）。把这一格补上的是**另一条 run**：`run_c5451b582400`（6 段全 done / 42 个登记产物 / 社区计划 4 pass + 1 run），但它**没配英文变体**。这两条合起来才覆盖 6 个 Agent —— 而**单条 run 覆盖 6 个**的证据后来也跑出来了（`run_ec0f0e056f47`，见 §6.9）。本节的这两条 run 不因此作废：一条留着"英文传播 + 修复前失败"的对照，一条留着"社区运营 run 级成功"的对照。
 
 ### 4.2 第二证据：`run_abb2805074e4`（两个中文变体 + 4 张卡片 + brief 机检）
 
@@ -395,17 +400,21 @@ python var/scratch/verify_community.py var/runs/run_720e83bdae91
 
 | run id | 它是什么 / 什么时候跑的 | 素材（上传 id） | 变体 | 6 段状态 | 登记产物 | 本文用它证明什么 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `run_720e83bdae91` | **§4.1 主证据**：deeprare 的完整跑，01:49 → 02:00 | deeprare.pdf（`up_e2f9c3422f6d`，23 页，9,891,107 B） | en-analyst + zhihu-analyst | 全 done | 37 | 6 个 Agent 里 **5 个**的 run 级证据；**英文传播只有这一条**；社区那一格此条失败 |
+| `run_ec0f0e056f47` | **§6.9 单条 run 覆盖 6 个 Agent 的验收依据**：deeprare 的完整跑，02:45:27 → 02:55:57（630s） | deeprare.pdf（`up_96c58bfae000`，23 页，9,891,107 B） | **xhs-author + zhihu-analyst + en-analyst** | 全 done | **51**（42 带 url） | **6 个 Agent 全在一条 run 里**；51 件登记 / 42 件 HTTP 200 / check 53 pass·1 fail·3 run |
+| `run_720e83bdae91` | **§4.1 主证据**：deeprare 的完整跑，01:49 → 02:00 | deeprare.pdf（`up_e2f9c3422f6d`，23 页，9,891,107 B） | en-analyst + zhihu-analyst | 全 done | 37 | 6 个 Agent 里 **5 个**的 run 级证据；**英文传播那一格的首个证据**；社区那一格此条失败 |
 | `run_c5451b582400` | **§3.6 社区运营的 run 级证据**：deeprare 的完整跑，02:09 → 02:18 | deeprare.pdf（`up_6d9dc259c0a8`，23 页） | zhihu-analyst | 全 done | 42 | **社区运营的 run 级成功**（`community.md` 已登记、带前端 URL，6 社区 / 8,183 字） |
+| `run_a4cd493515f8` | **§6.9 的失败尝试 1**：02:33:35 起跑，**死在 `understand`** | deeprare.pdf | （§6.9 的同一配方） | intake done / understand **failed** | 14 | 外部重启把在途 run 判成 `failed` / `INTERRUPTED` 的现场 |
+| `run_87ff2439468a` | **§6.9 的失败尝试 2**：02:36:36 起跑，**死在 `poster`** | deeprare.pdf | （同上） | intake/understand/article done / poster **failed** | 28 | 同上（第二次重启）；也证明前 3 段能跑完 |
 | `run_abb2805074e4` | **§4.2 brief 冲突证据**：01:38 → 01:42 | deeprare.pdf（`up_a0e4c04dbec8`，23 页） | zhihu-analyst + xhs-author | video skipped | 34 | brief 机检遵从度（两条 `fail`）；小红书 **4 张卡片** |
 | `run_d76ca9da493e` | 第二条"6 段全 done"的对照：01:36 → 02:05 | deeprare.pdf（`up_be91014e18e9`，23 页） | xhs-author + zhihu-analyst | 全 done | 42 | 视频 **291.4s** 那一例；社区计划栽在**渠道余额（401）**——与 720e 的"截断"是两个不同的失败原因 |
 | `run_d5cd057bab48` | **video 模块 CLI 独立实测的输入**（模块单跑，非流水线） | deeprare.pdf（`up_e16f64575006`，23 页） | xhs-author | poster/video skipped | 29 | `10-module-video.md` 那组 ffprobe 数字（238.18s / 76 个数字）；video 产物在磁盘但**未登记** |
 | `run_224e72b5a672` | **接线前**的历史快照（2026-09-18 23:14，M1/M2 时代） | paper2video.pdf（`up_d03bcdadb190`，19 页，5,251,910 B） | xhs | poster/video skipped | 29 | `06-verification.md` 里那次 **12 张图**的 smoke 跑；对照"当时 poster/video 还是 skipped" |
 | `run_3b0e657e0f50` | 同上，更早一次（2026-09-18 23:14，M1 时代） | paper2video.pdf（`up_b6f8c22c1253`，19 页） | xhs | poster/video skipped | 22 | 同上，产物更少的早期版本 |
 
-三点必须说清，免得读者把它们当成同一批：
+三件必须说清，免得读者把它们当成同一批：
 
-- **前两条**（720e / c545）是本轮 2026-09-19 凌晨的 deeprare 完整跑，**变体配置不同**（一个带英文、一个带社区成功），所以证据互补；
+- **第 1 条（ec0f）是本轮最终的验收证据**，它一条 run 覆盖 6 个 Agent；**第 2、3 条**（720e / c545）是它之前的"拼合证据"，变体配置不同（一个带英文、一个带社区成功），仍然有效、作为对照；
+- **第 4、5 条（a4cd / 87ff）是同一个配方的失败尝试**，都被外部重启杀死（`INTERRUPTED`）——它们**只作 B1 现场证据**，不代表能力，也不代表配置错误；
 - **中间两条**（abb / d76）是**同一篇论文的另外两次运行**，用途分别是 brief 冲突与时长/余额对照；
 - **最后两条**（224e / 3b0e）是 **2026-09-18 的 M1/M2 时代产物**，那时 poster/video 还是 `skipped`——只作历史对照，**不代表当前能力**；
 - 素材上：三条以 deeprare 为素材的 run 用的是**同一份 PDF（9,891,107 B）的不同上传副本**（`up_` 开头的 id 各不相同），不是同一次上传。
@@ -450,7 +459,7 @@ python var/scratch/verify_community.py var/runs/run_720e83bdae91
 ### 6.4 时长会漂移，而且闸门比"±30%"更宽
 
 - 实现（`video.py:1274-1275`）：`pass if abs(total - target_sec) <= max(45, 0.35 * target_sec) else "run"` → **容差是 ±35%（且下限 45 秒）**，不是 ±30%；超出也只记 `run`（人工看），不是 `fail`。
-- 实测三例：`run_720e83bdae91` 目标 180s → 成片 **269.10s**；`run_d76ca9da493e` 目标 180s → **291.4s**；`10-module-video.md` 的独立实测是 238.2s（+32%，在 ±35% 容差内）。前两例都已超出容差（180×1.35 = 243s），所以 check 是 `run` 并如实写出"成片 269.1s / 目标 180s"。**时长是"接近"而不是"命中"**：总时长 = 各页配音时长之和，靠"旁白字数 ≈ 4.6 字/秒 × 目标"逼近。
+- 实测四例：`run_720e83bdae91` 目标 180s → 成片 **269.10s**；`run_d76ca9da493e` 目标 180s → **291.4s**；`run_ec0f0e056f47` 目标 180s → **234.26s**（|234.26−180| = 54.26 ≤ max(45, 63) = 63，落在容差内 → check 是 **`pass`**）；`10-module-video.md` 的独立实测是 238.2s（+32%，也在容差内）。前两例已超出容差（180×1.35 = 243s），所以 check 是 `run` 并如实写出"成片 269.1s / 目标 180s"。**同一个目标时长能落到 pass 也能落到 run**，取决于 LLM 那轮分镜的篇幅。**时长是"接近"而不是"命中"**：总时长 = 各页配音时长之和，靠"旁白字数 ≈ 4.6 字/秒 × 目标"逼近。
 
 ### 6.5 时长与配图命中率依赖 LLM 波动（不可复现）
 
@@ -493,24 +502,82 @@ dump_stage intake
 | 平台菜单 API | `platform_menu()` / `voice_menu()` 无生产调用方（§6.1） |
 | `/api/chat` | 后端另有 `app/chat_api.py` 端点（另一条轨道加的），**与本文档的 6 Agent 覆盖无关**，不要混在一起读 |
 
-### 6.9 没有哪一条 run 单跑齐 6 个 Agent
+### 6.9 单条 run 覆盖 6 个 Agent —— **已验证**（`run_ec0f0e056f47`）
 
-这是本文档标题那句话（"6 个 Agent 都在干活"）**最需要限定**的地方：
+> 本节此前写的是"没有哪一条 run 单跑齐 6 个 Agent（未验证，合并跑我没跑）"。**那一格现在已补上、原声明作废**：`run_ec0f0e056f47` 一条 run 就把 6 个 Agent 全覆盖了。
 
-| run | 覆盖到 | 缺 |
-| --- | --- | --- |
-| `run_720e83bdae91` | 论文解读 / 可视化 / 中文传播（知乎）/ **英文传播**（`en-analyst`）/ 视频化 | 社区运营（该条跑的是修复前代码，计划失败） |
-| `run_c5451b582400` | 论文解读 / 可视化 / 中文传播（知乎）/ 视频化 / **社区运营** | **英文传播**（`config.article.variants` 里没有 `en` 变体） |
+| 项 | 值（下面每一条我都自己复核过，复核命令见本节末） |
+| --- | --- |
+| run | `run_ec0f0e056f47`，2026-09-19 02:45:27 → 02:55:57（**630s**），`run.status=done`、`error=null` |
+| 配置 | brief「做成知乎长文，重点讲方法，不要营销腔」+ `article.variants=["xhs-author","zhihu-analyst","en-analyst"]`（3 个，未超 `MAX_VARIANTS=4`）；素材 `var/samples/deeprare.pdf` |
+| 六段 | intake / understand / article / poster / video / publish **全部 done** |
+| 闸门 | understand = `continue`、publish = **`draft`**（**零真实投递**） |
+| 产物 | **51 件登记在同一条 run.json 里**；其中 **42 件带前端 `url`** —— 我逐条本地取回：**42/42 HTTP 200** |
+| 登记 vs 磁盘 | 51/51 件按登记 `path` 都在磁盘上，**bytes 与登记值逐一相等** |
+| check | **53 pass / 1 fail / 3 run**（唯一 `fail` 是「渠道状态：小红书」未登录；3 条 `run` 是英文变体的指令侧重、投递数据复盘、发布结果，都带 detail，不是假装通过） |
 
-原因是**配置差异**，不是能力缺口：两条 run 的 `variants` 列表不同而已。想把 6 个压进同一条 run，只要在建 run 时把变体写成 `["en-analyst", "zhihu-analyst"]`（要卡片再加 `xhs-author`，上限 `styles.MAX_VARIANTS = 4`）、渠道保持 `["xiaohongshu","zhihu","bilibili"]`、闸门按 §7.3 点 `draft` 即可。
+**6 个 Agent 在这条 run 里的实物**（逐条对应 §3 的分节）：
 
-**本文档只证明"6 个 Agent 各自都有真实产物与 check 证据"，不证明"某一条 run 同时跑齐 6 个"** —— 那条合并跑我没跑（本轮只改文档）。要写进对外材料的话，这一条属于**未验证**。
+| # | Agent | 落点 | 实物 |
+| --- | --- | --- | --- |
+| 1 | 论文解读 | `understand` | `digest.json` 11,047 B：6 条贡献 / **12 条数值全部可回溯** / 选定 6 张图表；精读笔记 26,106 B |
+| 2 | 可视化 | `poster` + `article` 卡片 | 4 张画布 **2304×1728 / 1080×2400 / 1600×1200 / 1920×1080**，**`overflow=[]` 4/4**、`broken_images=[]`；另 6 张 1080×1440 卡片 |
+| 3 | 中文传播 | `article` | `xhs.md`（正文 **830 字** + 6 张卡片）+ `zhihu-analyst.md`（正文 **2,378 字**，96 个数字全回溯） |
+| 4 | 英文传播 | `article` | `en-analyst.md` **428 词**（口径是 `styles.text_len(text,"words")`，不是 `split()`）；`1/10 … 10/10` 十条编号帖 + `## Tags`，真英文不是中文套壳 |
+| 5 | 视频化 | `video` | `video.mp4` **234.263203s / 1920×1080 / h264+aac / 6,695,879 B**（ffprobe 我自己跑的）+ 竖版 234.280s；10 页分镜 / 24 条字幕 / **时长 check 这次是 pass** |
+| 6 | 社区运营 | `publish` | `community.md` 19,042 B + `community.plan.json` 18,905 B：**6 个社区**（知乎 / 小红书 / B站 + Reddit r/MachineLearning / Hacker News / X，zh×3 + en×3），成稿 **8,510 字符**，社区 4 条 check 全 pass |
+
+**这条 run 怎么配出来的（可以照抄）**：建 run 时 `variants=["xhs-author","zhihu-analyst","en-analyst"]`（`xhs` 出中文图文 + 卡片、`zhihu` 出中文长文、`en` 出英文 thread —— **三个变体是"一条 run 覆盖 6 个"的关键**，缺 `en` 就没有英文传播）、渠道保持 `["xiaohongshu","zhihu","bilibili"]`、闸门 understand 放 `continue`、publish 放 **`draft`**（§7.2 的示例 body 已按这个更新，§7.3 的警告照旧适用）。
+
+**复核命令**（我跑过，输出与下面一致）：
+
+```bash
+R=var/runs/run_ec0f0e056f47
+python3 -c "
+import json
+d = json.load(open('$R/run.json'))
+a = [x for s in d['stages'] for x in s['artifacts']]
+c = [x for s in d['stages'] for x in (s.get('checks') or [])]
+print('run', d['status'], '| 6 段', [(s['id'], s['status']) for s in d['stages']])
+print('登记产物', len(a), '| 带 url', sum(1 for x in a if x.get('url')))
+print('check', sum(1 for x in c if x['state']=='pass'), 'pass /',
+      sum(1 for x in c if x['state']=='fail'), 'fail /', sum(1 for x in c if x['state']=='run'), 'run')
+"
+#   run done | 6 段 [('intake','done'),('understand','done'),('article','done'),('poster','done'),('video','done'),('publish','done')]
+#   登记产物 51 | 带 url 42
+#   check 53 pass / 1 fail / 3 run
+
+# 42 条 url 逐条取回（本机有 http_proxy 时务必 --noproxy）
+python3 -c "
+import json, subprocess
+d = json.load(open('$R/run.json'))
+urls = [x['url'] for s in d['stages'] for x in s['artifacts'] if x.get('url')]
+bad = [u for u in urls if subprocess.run(['curl','-s','--noproxy','*','-o','/dev/null','-w','%{http_code}','-m','10','http://127.0.0.1:8000'+u],capture_output=True,text=True).stdout.strip() != '200']
+print('带 url 产物', len(urls), '| 非 200:', bad or '无')
+"
+#   带 url 产物 42 | 非 200: 无
+```
+
+**但别把这次成功读成"从此稳定"** —— 三条限制必须一起说：
+
+1. **不是一遍就过**：这条 run 是**第三次尝试**。前两次 `run_a4cd493515f8`（死在 `understand`）与 `run_87ff2439468a`（死在 `poster`）都被**外部重启**判成 `failed`，`error.code=INTERRUPTED`「后端进程重启，该运行已中止，产物保留在 run 目录」（我读了两条 run.json 确认原文）。新代码比旧行为诚实（不再留"永久 waiting + 假 204"的僵尸），但**在途 run 该废还是废** —— 没有恢复机制。
+2. **社区运营是概率性成功，不是稳定性已解决**：同一段 `community.py` 在 `run_d76ca9da493e`（LLM 401 余额）与 `run_720e83bdae91`（输出截断成非法 JSON）都没出计划，在 `run_c5451b582400` 与这条出了。所以结论只能是"**可达**"，不是"必然"——与 §6.10 的判断一致。
+3. **真实投递仍未验证**：闸门走的是 `draft`，`published=[]`；小红书渠道仍 `fail`（未登录、没扫码）。**这条 run 不能当"真投出去了"的证据用。**
+
+**三个容易读错的数字**：
+
+- **51 件登记 ≠ 51 件可点开**：带前端 `url` 的是 **42 件**；另外 **9 件登记了但没 url**（`digest.raw.json` / `xhs.raw.json` / `poster.spec.json` / `poster.spec.cover.json` / `video.report.json` / 3 个渠道的 `README.txt` / `community.plan.json`）—— 前端作品库里点不到。所以"dashboard 可见"的准确说法是 **42 件可点开**，不是 51 件。
+- **磁盘 ≠ 登记**：该 run 目录磁盘上有 **143 个文件**，其中 **92 个未登记**（`intake/sections.json`、`intake/images/table-ed1.png`、`poster/*.html`、`*.render.json`、`video/{audio,clips,frames}/*`、各渠道 `export/*` 等）。登记的是产物的**子集**，这个子集可信（bytes 全等），但别把它读成"磁盘上有的前端都有"。
+- **同一份知乎长文有三个字数**（口径不一致未修）：publish 闸门写「**3803 字**」= 全文**字符数**（我核过 `len(text)==3803`）、article check 写「**2378 字**」= **正文 CJK 字数**、`receipts.json` 的 `contentChars` 也是 3803。三个都对，混着读会以为是三个值；引用时必须写明口径。
+
+> 本节数字的完整出处与逐条 HTTP 结果见 [`12-single-run-six-agents.md`](../apps/papercast-server/docs/12-single-run-six-agents.md) （§3 逐 Agent 证据、§6.2 51 件逐条可见性、§7 未验证清单）。**要复核这条 run，请以那篇 + `var/runs/run_ec0f0e056f47/run.json` 为准**；本文档只引用结论与关键数字。
 
 ### 6.10 社区运营能否产出取决于 LLM 配额（而它失败时不拖垮发布）
 
 - **两类失败要分开归因**。`run_d76ca9da493e` 的社区计划失败是**环境原因、不是代码原因**：`LLMError: 401 {"type":"error","error":{"type":"CreditsError","message":"Insufficient balance"}}` —— 上游 LLM 通道**余额不足**，换任何提示词都救不回来；而 `run_720e83bdae91` 那次是**代码原因**（输出被截断成非法 JSON，跑的是修复前版本）。写结论时别把"余额不足"读成"这个模块不可靠"。
 - **这一格对配额比其它模块更敏感**。它一次调用要产出 4–6 个社区各自的成稿文案 + 规矩 + 风险 + 互动口径 + 指标，输出体量在所有产物里最大：run 级那条的 `community.plan.json` 是 **21,481 B**，比同 run 的 `digest.json`（10,288 B）、`zhihu-analyst.md`（7,453 B）、`poster.spec.json`（5,392 B）都大。所以它既是**第一个撞上输出长度上限**的（截断 → 非法 JSON），也是**第一个把余额耗到 401** 的。这是"配额够不够"的问题，不是"设计对不对"的问题。
 - **兜底是有效的**（两条失败 run 都能证明这一点）：社区失败时 `publish.py:395-404` 只把它记成**一条 check**，不抛给流水线。`run_720e83bdae91` 与 `run_d76ca9da493e` 两条 run 的 `run.status` 与 `publish.status` **至今都是 `done`**，10 个回执类产物照常落盘，其余渠道 check 照常逐条给出（小红书 `fail` / 知乎 `pass` / B站 `pass`）。也就是说：**社区运营挂了不会让"发布"这件事跟着挂** —— 这正是把它挂在 `publish` 尾部并做异常兜底的价值。
+- **成功的样本现在有两个**：`run_c5451b582400` 与 `run_ec0f0e056f47`（§6.9）。四个样本连起来才是这条边界的完整图像：**2 成 2 败**，失败原因一个在环境（401）、一个在代码（截断）。所以"社区运营能不能出活"目前的答案仍是"**取决于配额，且带概率**"，不是"已稳定"；要提升稳定性，得从**缩小单次输出体量**或**更强的截断兜底**入手（本文档不修代码，只记现象）。
 
 ---
 
@@ -544,7 +611,7 @@ curl -sS -X POST http://127.0.0.1:8000/api/runs -H 'Content-Type: application/js
 
 （字段定义见 `apps/papercast-server/app/models.py:145-190`；变体 id 规则是 `{platform}-{voice}`，`styles.MAX_VARIANTS = 4`。想看等价的最小例子：`apps/papercast-server/scripts/smoke_test.sh`。）
 
-> 上面这个配置就是 §6.9 说的"**合并跑**"：`en-analyst` 覆盖英文传播、`zhihu-analyst` 覆盖中文传播，跑完 `publish` 还会带出社区运营 —— **理论上一条 run 就能覆盖 6 个 Agent**。但本文档没有执行过这条合并跑（本轮只改文档、不跑新 run），所以"单条 run 覆盖 6 个"在本文档里仍属**未验证**；已核实的是"6 个 Agent 各自都有 run 级或模块级证据，散在两条 run 上"。
+> 上面这个配置就是 §6.9 说的"**单条 run 覆盖 6 个 Agent**"，而且**已经执行并成功过**：`run_ec0f0e056f47` 用的就是 `variants=["xhs-author","zhihu-analyst","en-analyst"]`（比本节示例多一个 `xhs-author`，用于出中文图文与卡片），六段全 done、51 件产物登记、42 件前端可点。**照本节这个 body 跑，等价配方也能一条覆盖 6 个**（少了 `xhs` 就没有小红书图文与卡片，其余 6 个 Agent 不受影响）——完整证据与限制见 §6.9。
 
 **方式 B · 前端**：`http://127.0.0.1:5178` → 工作台 → 上传 PDF / 选平台与人格 → 建 run，之后看 6 段进度条。
 
@@ -601,12 +668,17 @@ ls -l $R/video/*.mp4 $R/poster/*.png $R/article/*.md
 | 社区计划是"输出体量最大的产物" | `ls -lS` 对比同 run 产物：`community.plan.json` 21,481 B > `digest.json` 10,288 B > `zhihu-analyst.md` 7,453 B > `poster.spec.json` 5,392 B |
 | M1 图注失效 | `run_720e83bdae91` 的 intake check「4 张（fig 0 / table 0 / 未匹配 4）」+ `06-verification.md` §2 的 12 张对照 |
 
-**明确标为「未验证」的四处**：
+**曾经标为「未验证」、现在已验证并移出的一处**：
 
-1. **没有哪一条 run 单跑齐 6 个 Agent**（§6.9）——6 个都有证据，但散在 `run_720e83bdae91` 与 `run_c5451b582400` 两条 run 上，合并跑我没执行；
-2. brief 冲突判成 `run` 的**新**行为（`generate.py:69-77`，改动后未复跑）；
-3. `pdf_parser.py` 未提交改动对图注匹配的实际效果（根因三条结论属**看板转引**，我未独立复核）；
-4. 模块级直调那次的 check 状态**没有被持久化记录**——脚本只 print，所以"全 pass"这种说法无法从 run.json 复核；我按 `community.py` 的口径自行复算，得到的是 **社区覆盖 fail（3 < 4）+ 其余 3 条 pass**（与"全 pass"的转述不一致，以代码口径为准）。
+- ~~没有哪一条 run 单跑齐 6 个 Agent~~ → **已验证**：`run_ec0f0e056f47` 一条 run 覆盖 6 个 Agent（§6.9）。我自己复核过：51 件登记 / 42 件带 url 且 **42/42 HTTP 200** / 51 件磁盘 bytes 与登记值逐一相等 / check **53 pass · 1 fail · 3 run**。
+
+**仍标为「未验证」的三处**：
+
+1. brief 冲突判成 `run` 的**新**行为（`generate.py:69-77`，改动后未复跑）；
+2. `pdf_parser.py` 未提交改动对图注匹配的实际效果（根因三条结论属**看板转引**，我未独立复核）；
+3. 模块级直调那次的 check 状态**没有被持久化记录**——脚本只 print，所以"全 pass"这种说法无法从 run.json 复核；我按 `community.py` 的口径自行复算，得到的是 **社区覆盖 fail（3 < 4）+ 其余 3 条 pass**（与"全 pass"的转述不一致，以代码口径为准）。
+
+另有两处**范围限制**（不是"未验证"，是"已验证但只能这么说"）：① **真实投递**在 `run_ec0f0e056f47` 上仍未验证（闸门走 `draft`、`published=[]`，小红书未登录），"6 个 Agent 覆盖"不等于"投出去了"；② 该 run 的**前端页面渲染**只验到"42 条 artifact url HTTP 200 + dashboard 页面 200"，6 张产物在 Vue 组件里长什么样没验。
 
 另有一处**转引**：video 模块 CLI 的 ffprobe 原始输出（238.183203s 等）来自 `10-module-video.md` §5，不是我本人执行的。
 
@@ -623,4 +695,6 @@ ls -l $R/video/*.mp4 $R/poster/*.png $R/article/*.md
 | 视频化 | `video` | ✅ | 横 269.10s + 竖 269.12s + 封面 + 25 条字幕；独立实测 238.18s / 76 个数字全回溯 |
 | 社区运营 | `publish` 尾部 | ✅ **run 级已跑通（验收依据）** | `run_c5451b582400`：`publish` 段 12 个产物，`community.md` **已登记且带前端 URL**；6 社区 / 8,183 字；check 4 pass + 1 run。补充证据：模块级直调（3 社区 / 841 字，未登记）；边界见 §6.7 / §6.10 |
 
-> ⚠️ **一句话读法**：6 个 Agent 都有证据，但**分散在两条 run 上**——英文传播只在 `run_720e83bdae91`（该条社区计划失败），社区运营的 run 级成功只在 `run_c5451b582400`（该条没配英文变体）。**没有任何一条 run 同时覆盖 6 个**，细节与绕开办法见 §6.9。
+> ✅ **一句话读法**：上表 6 行**已经由单条 run 同时满足** —— `run_ec0f0e056f47` 一条 run 里 6 个 Agent 的产物全部登记、全部落盘、**42 件前端可点开**（§6.9）。此前"两条 run 拼起来"的证据（`run_720e83bdae91` + `run_c5451b582400`）仍有效，作为对照列在 §4.3。
+>
+> ⚠️ 但两件事仍然成立：**社区运营是概率性成功**（同代码曾因 401 余额 / 输出截断失败过两次，§6.10），**真实投递仍未验证**（闸门走 `draft`，小红书未登录）。
