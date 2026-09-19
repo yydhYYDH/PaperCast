@@ -146,9 +146,77 @@ Go 的 usage 较长，`head` 提前退出会让左侧进程吃到 SIGPIPE，配�
 ## 7. 还没验证的
 
 - **Chrome 的 profile 目录（user-data-dir）落在哪没验证**。只验证了 Chrome **程序本体**在 E:。go-rod 可能把 profile 放到系统临时目录；若确实落 C:，可用同样手法重定向 `TEMP`/`TMP`。
-- **有头模式的实际表现没测**。任何会开浏览器的调用都会导航到 `xiaohongshu.com`，那就是在碰账号，所以留到人工登录时验证。
+- **有头模式的实际表现没完全验证**。已验证「Windows 侧 Chrome 确实能被拉起并访问小红书」（第一次 `login/status` 18.9 秒，之后命中缓存 0 秒），但**登录态没迁移过来**：Windows 实例报告 `login_required`，需要在 Windows 侧重新扫码（`login.cmd`）。
 
-## 8. 相关
+## 8. 默认已切到 Windows：怎么起的、踩了什么
+
+**默认平台现在是 Windows**（`ops/start_all.sh` 里的 `XHS_MCP_PLATFORM`，默认 `windows`）。
+由 `ops/mcp_windows.sh` 起停；服务器上没有 Windows 会自动回退到 Linux 侧二进制并打印警告，
+本机也可以 `XHS_MCP_PLATFORM=wsl` 强制走 Linux。
+
+```bash
+./ops/start_all.sh mcp                 # 起（走 Windows）
+./ops/mcp_windows.sh status            # 活着吗 / 跑的是不是最新版
+./ops/mcp_windows.sh log 60            # 读 Windows 侧日志
+./ops/mcp_windows.sh stop              # 停（只停 18060 这个实例）
+./ops/stop_all.sh                      # 全停（已包含 Windows 侧）
+```
+
+切过去之后踩到的四个坑，都已修，**改这个脚本前先读**：
+
+### 8.1 用 WMI 创建进程，不要用 `Start-Process`
+
+从 WSL 调 PowerShell 时，`Start-Process` 拉起的子进程会继承控制台句柄，于是
+`./ops/start_all.sh mcp | ...` 会**永久挂住**（实测 300 秒超时被 SIGTERM），
+而**服务其实已经正常起好了**——极具误导性。改用
+`Invoke-CimMethod -ClassName Win32_Process -MethodName Create`，创建的进程完全脱离、不继承句柄。
+代价是输出重定向得自己写进 `cmd /c` 那一行里。
+
+### 8.2 `stop` 必须按端口筛进程
+
+按进程名 `xiaohongshu-mcp` 全杀会误伤别的端口上的实例。已经改成按
+`CommandLine -like '*:<port>*'` 匹配。
+
+### 8.3 浏览器要按「后代进程」收，不能按 exe 路径全杀
+
+按 `ExecutablePath -like '*xhs-test*'` 全杀会把**别的端口实例正在用的浏览器**一起收掉。
+踩过：只停 18076 这个测试实例，却把 18060 正主正在用的 Chrome 窗口关了，用户看到窗口莫名消失。
+现在按「父进程链上是不是目标 MCP」判定（向下走 5 层，rod 拉起的 chrome 可能不止一层深）。
+
+### 8.4 日志必须按端口分文件
+
+两个实例共用同一个日志文件时，第二个实例的 `cmd` **打不开重定向目标**，
+于是**静默地什么都没起**（WMI 还老老实实返回成功），排查成本极高。
+现在默认端口写 `logs\mcp.log`，其他端口写 `logs\mcp-<port>.log`。
+
+### 8.5 超时链路已核对过：不用改（别再「顺手放宽」）
+
+一度以为「后端探测超时 8 秒、Windows 冷启浏览器 13–19 秒」会超时，**核对代码后确认是误判**：
+
+```python
+# apps/papercast-server/app/platforms.py 的 _xhs_probe()
+timeout=8.0    # 只用于 /health —— 实测 82µs，8 秒足够
+timeout=45.0   # 用于 /api/v1/login/status —— 本来就是 45 秒
+```
+
+`login/status` 那条**早就是 45 秒**。把 8.0 一起改大会让「MCP 挂了」要等 45 秒才报出来，是退步。
+
+前端也没有 fetch 超时（没有 AbortController），会一直等，所以冷路径慢一点不影响界面。
+
+实测参考值（2026-09-19，Windows 实例）：
+
+| 场景 | 耗时 |
+| --- | --- |
+| `login/status` 冷启浏览器（Windows） | 8.2 / 13.7 / 18.9 秒（首次最慢，看 OS 文件缓存） |
+| `login/status` 命中 MCP 缓存 | 0.0006 秒 |
+| `GET /api/platforms` 冷路径 | 8.16 秒 |
+| `GET /api/platforms` 热路径 | 0.01 秒 |
+
+链路最紧的一环是 MCP 的 300 秒 TTL 缓存，不是超时。
+**真要动，动的是缓存策略，不是超时。**
+
+## 9. 相关
 
 - 端口约定见 [`conventions.md`](conventions.md)
-- 风控与轮询问题见 [`../docs/TODO.md`](TODO.md)
+- 风控、轮询与账号恢复期约定见 [`xhs-account-safety.md`](xhs-account-safety.md)
+

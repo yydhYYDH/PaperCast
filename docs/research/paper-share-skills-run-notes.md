@@ -124,6 +124,25 @@ python ops/make_portrait_video.py \
 - 字体经 `fc-match` 解析（不写死路径）；ffmpeg/ffprobe 先查 PATH，再回落 `var/toolchains/p2b/bin`。
 - 版式：顶部序号胶囊 + 标题（≤2 行），中部 16:10 白色圆角卡片，字幕区在 y≈1440–1560，底部页脚 + 进度条。
 
+## 2.7 主题去品牌化（2026-09-19）
+
+问题：`paper-to-beamer` 生成的 deck 直接用上游 SUSTech 主题，**标题页带南方科技大学校徽**，
+页脚/出处行还有模板作者署名（`哔哩哔哩 · 白拾的物理AI组会 · github.com/yhbcode000/sustech-slides-template`）。
+拿去公开发布等于冒用学校身份，必须去掉。
+
+做法：**fork 一份去品牌化主题**，不动 `reference/upstream/`：
+
+- 生成脚本 `ops/debrand_beamer_theme.py`，产物 `ops/beamer-theme-papercast/`：
+  `beamerthemesustech*.sty` → `beamerthemepapercast*.sty`（包名/宏名/颜色名 `sustech` → `papercast`），
+  默认 `\setlogo{}`（不显示校徽）、`\setcreditline{}`（出处行置空）。
+- 上游是 **Apache-2.0（Copyright (c) 2026 杨昊波）**：**可见的署名行去掉，源码里的版权/许可声明必须保留**
+  （fork 文件头注明来源与改动，`LICENSE-upstream` 放在主题目录里），这是许可要求。
+- deck 侧改动：`\usetheme{sustech}` → `\usetheme{papercast}`，`sustechgrey` → `papercastgrey`；
+  删掉 deck 目录里的 `sustech-theme/`、三个旧 `.sty` 副本、未使用的 `figures/logo_.png`。
+- 校验别看肉眼：pymupdf 搜 PDF 文本层 —— `南方科技/SUSTech/sustech/白拾/yhbcode` **全部 0 命中**，
+  只剩我们自己的 `PaperCast 论文分享`；再看第 1 页内嵌图片，**1372×1344 的校徽消失**（只剩 9px 级装饰线）。
+- 换主题后**必须整条链路重跑**：deck 重编译 → 横版视频 → 竖版/短版（页码结构不变，34 条旁白仍对得上）。
+
 ## 3. 契约与产物
 
 - 旁白 gate：`main_with_narration.tex` 里 `% NARRATION:` 注释条数必须**等于物理页数**（含 `\section` 自动生成的章节分隔页），脚本按源码顺序对页，多一条少一条都 fail-closed。
