@@ -5,7 +5,10 @@ import { useChatStore } from '../../stores/chat'
 import { useRunsStore } from '../../stores/runs'
 import type { StageId } from '../../types'
 
-const emit = defineEmits<{ gate: [stage: StageId, option: string] }>()
+const emit = defineEmits<{
+  gate: [stage: StageId, option: string]
+  action: [id: string, go: boolean]
+}>()
 const chat = useChatStore()
 const runs = useRunsStore()
 const box = ref<HTMLElement | null>(null)
@@ -39,7 +42,12 @@ defineExpose({ focusStage })
   <div ref="box" class="thread">
     <div class="inner">
       <div v-for="m in messages" :id="'m-' + (m.stageId ?? m.id)" :key="m.id">
-        <ChatMessage :msg="m" :run="run" @gate="(o: string) => m.stageId && emit('gate', m.stageId, o)" />
+        <ChatMessage
+          :msg="m"
+          :run="run"
+          @gate="(o: string) => m.stageId && emit('gate', m.stageId, o)"
+          @action="(id: string, go: boolean) => emit('action', id, go)"
+        />
       </div>
       <p v-if="chat.asking" class="thinking">助手正在读这次运行的记录…</p>
       <div class="tail" />

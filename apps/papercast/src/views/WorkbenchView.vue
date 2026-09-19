@@ -33,7 +33,11 @@ function onDrop(e: DragEvent) {
     @drop.prevent="onDrop"
   >
     <section class="chat-main">
-      <ChatThread ref="thread" @gate="(s: StageId, o: string) => runs.confirm(s, o)" />
+      <ChatThread
+        ref="thread"
+        @gate="(s: StageId, o: string) => runs.confirm(s, o)"
+        @action="(id: string, go: boolean) => (go ? chat.runAction(id) : chat.dismissAction(id))"
+      />
       <Composer :busy="runs.busy || chat.asking" :uploading="chat.uploading" @send="chat.send($event.text, $event.file)" />
       <div v-if="dragging" class="drop">
         <div class="drop-inner">松手就把这份 PDF 交给它</div>

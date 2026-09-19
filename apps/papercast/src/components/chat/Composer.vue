@@ -49,6 +49,16 @@ function useExample() {
   text.value = EXAMPLE_PAPER.url
   nextTick(() => send())
 }
+
+/**
+ * 「可以这样说」：点一下就当成用户自己说的一句话发出去。
+ * 这三句各自能派一个活（重跑 / 取数据 / 问论文），但它们**都不会直接产生对外动作** ——
+ * 重跑与发布这类会先出一张确认卡，见 stores/chat.ts 的 runAction。
+ */
+function say(t: string) {
+  if (props.busy) return
+  emit('send', { text: t })
+}
 </script>
 
 <template>
@@ -75,6 +85,14 @@ function useExample() {
         </button>
       </div>
     </div>
+    <p class="hint">
+      可以这样说：
+      <button class="say" @click="say('重新跑一遍')">重新跑一遍</button>
+      <span class="sep">·</span>
+      <button class="say" @click="say('看下现在的数据')">看下现在的数据</button>
+      <span class="sep">·</span>
+      <button class="say" @click="say('这篇论文的局限是什么')">这篇论文的局限是什么</button>
+    </p>
     <p class="hint">默认：一篇中文长文 + 一张海报 + 一段讲解视频 · 三个平台先排稿、发布要你点头 · 想改去「设置」</p>
   </div>
 </template>
@@ -105,4 +123,11 @@ textarea::placeholder { color: var(--muted-2); }
   margin: 8px auto 0;
   font-size: 12px; color: var(--muted-2); text-align: center;
 }
+.say {
+  border: none; background: none; padding: 0 1px; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--ink-3);
+  border-bottom: 1px dotted var(--line);
+}
+.say:hover { color: var(--ink); border-bottom-color: var(--ink-3); }
+.sep { margin: 0 3px; color: var(--muted-2); }
 </style>

@@ -170,3 +170,87 @@ node ops/shot/ops_theme_check.mjs       # 换肤 + 运营页的真实核验（�
 
 核验：写完当场在会话里 `skill(name: "papercast-frontend")` 加载成功（provider `filesystem`，资源目录即仓库内路径），
 技能目录会随会话技能清单自动刷新，不需要重启 dsh。
+
+## 12. 用对话发任务：一句话 → 一张动作卡（2026-09-19）
+
+> 用户原话：「运营管理这边是不是还需要一个 agent 可以帮忙做一些互动？」「你要不合并到主 agent」
+> 「**现在主 agent 真的好像不能对话**」「希望是那种可用对话的形式来发布任务」。
+
+**先说诊断**（实测，不是猜）：主 agent 不是坏了 —— `POST /api/chat` 一直能答（curl 一句
+「你好，你能做什么」模型答得很正常）。它的问题是**什么都做不了**：那个端点只把 run.json /
+digest.json 喂给模型换一段话，没有任何动作；前端 `stores/chat.ts` 还会抢先改道（话里带 arXiv
+号 → 直接开跑，别的链接 → 一句「拿不到正文」）。所以「发任务」这条路是缺的，不是坏的。
+
+**结论（用户拍板）**：**不新增第 7 个 agent、也不新增 stage** —— 六个 stage 的前端契约一个字不动，
+把能力挂到主 agent 身上（与 `02-six-agents-coverage.md` §2.4「社区运营不新增 stage」一脉相承）。
+互动（读评论 / 起草回复）是主 agent 的一项技能，不是第七个人。
+
+### 12.1 契约：返回体多一个 `action`
+
+`POST /api/chat` 的响应除了 `reply`，可以有 `action`（说不出动作时为 `null`）：
+
+```jsonc
+{ "kind": "gate|metrics|service|run",
+  "title": "要重启后端吗？",          // 卡片的标题，用人话
+  "detail": "服务名 backend，动作 restart…",
+  "params": { "name": "backend", "action": "restart" },
+  "needsConfirm": true,               // false = 只读动作，前端直接执行（少一次点击）
+  "confirmLabel": "重启",             // 那个动词按钮的文案
+  "risk": "readonly|local|public" }   // public = 真发到平台上，界面按危险动作渲染
+```
+
+前端把它渲染成对话里的一张卡（`ChatMessage.vue` 的 `.act`）：一句话 + 一个动词按钮 + 「先不做」，
+点了才执行；执行完卡片收起、补一条回执；失败卡片标红并说明原因。
+
+### 12.2 四条设计取舍
+
+1. **规则优先、模型兜底**。认得出来的意图由代码直接给卡（不花模型的钱、不受模型当时状态影响）
+   —— 没配模型时「重跑一遍 / 放行 / 看数据 / 重启服务」照样发得出去；认不出来才落到自由问答。
+   代码里的规则表：起停服务（5 个白名单服务名）、人工闸门（只在**真有**等待放行的阶段时给卡）、
+   重跑一遍（带上这次的 source）、运营数据、互动（本轮只如实说「还没接上」）。
+2. **服务端零副作用**。`_propose()` 只产出「打算做什么 + 参数」，执行全在前端、由用户点卡片触发 ——
+   这个端点永远不会因为一句话就投递、就停进程，人工闸门不在这里被绕过。
+3. **闸门只认内存里那份状态**（`_live_run()` 走 `store.get()`，不读 run.json）。原因是被实测教过一次：
+   盘上写着 `failed`、界面还停在「等待放行」（漂移），照着盘提卡会递出一个早已不成立的
+   stageId/optionId。**没有等待放行的阶段时，「放行」这类话不许给卡**，这条有单测锁着。
+4. **只读才自动执行**。`risk=readonly`（看数据）直接跑；动本机服务的动作除了卡片还要过一遍应用内确认框
+   （停/重启会中断在跑的运行）；`public` 的动作（真发出去）按钮按危险动作渲染并在卡上写明「撤不回来」。
+
+### 12.3 顺手修掉的落单问题①
+
+`stores/runs.ts` 的 `confirm()` / `cancel()` 原来没有 try/catch，而后端在「重启后没有活跃任务」时返
+**409 GATE_REJECTED** —— 四个调用点（阶段卡 / 对话里的闸门提问 / 发布页三个按钮）全会变成无人接的
+promise rejection：用户点了放行，界面永远停在「等待放行」且一句解释都没有。现在失败 → 气泡说原因 +
+拉一次真实状态 + 返回 `false`（**不抛**，免得又造一个无人接的 rejection）。演示模式的自动放行也补了
+`.catch()` 复位标记（否则 409 之后永不重试且无提示）。
+
+### 12.4 小红书账号安全（这是「互动」为什么分三步走）
+
+本机的 `xiaohongshu-mcp` **本来就有**读评论（`get_feed_detail`）、回复评论（`reply_comment_in_feed`）、
+通知（`list_notifications` / `reply_notification` / `like_notification`）这些工具，是后端当年
+**故意没暴露**（`docs/03-module-publish.md`：避免被当成自动化运营工具滥用）。现在要接，按风险分三步：
+
+| 步骤 | 做什么 | 状态 |
+| --- | --- | --- |
+| P1 | **只读**评论/通知 + 由主 agent 起草回复（草稿只落盘，不发送） | 本轮之后做 |
+| P2 | 逐条人工确认后才发送（走 MCP 访问预算，默认关） | 等账号恢复 + 用户明确授权 |
+| — | 全自动回复 | **不做**：账号真实吃过风控且每次调用都真开浏览器 |
+
+同一个道理，本轮把「看数据」的动作**走 60s 缓存**（`force=false`）而不是强制刷新 —— 每 force 一次
+就是每个平台真探测一次（小红书那条要真开浏览器）。
+
+### 12.5 核验
+
+```bash
+cd apps/papercast && npx vue-tsc --noEmit                        # 类型
+cd apps/papercast-server && .venv/bin/python -m pytest -q         # 含 tests/test_chat_actions.py（9 条，锁上面三条性质）
+curl -s -X POST http://127.0.0.1:8000/api/chat -H 'content-type: application/json' \
+     -d '{"message":"重新跑一遍","runId":"<runId>","history":[]}' | python3 -m json.tool   # 看 action
+node ops/shot/chat_action_check.mjs                               # 真界面：只读自动执行 / 卡片出现 / 「先不做」收起 / 普通提问不产生卡片 / 控制台 0 错误
+```
+
+`chat_action_check.mjs` 断言的四件事（对照真后端跑）：① 「看下现在的数据」**不摆卡片**、随后补一条
+一句话结论（读不到就说读不到）；② 「重新跑一遍」只出卡片（按钮是「重跑一遍」+「先不做」），点「先不做」
+卡片收起且**没有副作用**；③ 普通提问（这篇论文的局限是什么）不产生带按钮的卡片；④ 控制台 0 错误。
+这个脚本**不点任何会真发出去的动作**，跑之前会先预热一次 60s 缓存，免得核验本身去撞浏览器预算。
+证据截图：`docs/evidence/chat-action-{metrics,card,dismissed}.png`。

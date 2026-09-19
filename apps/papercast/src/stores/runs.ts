@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api } from '../api'
+import { useUiStore } from './ui'
 import type { PaperRun, RunConfig, SourceInput, StageId } from '../types'
 
 const POLL_MS = 400
@@ -75,18 +76,40 @@ export const useRunsStore = defineStore('runs', {
       this.activeId = id
     },
 
-    async confirm(stageId: StageId, optionId: string) {
+    /**
+     * 人工闸门：确认或打回。返回是否真的成功。
+     *
+     * 这里**必须自己接住失败**（落单待认领·①）：后端在「重启后没有活跃任务」时返 409，
+     * 而调用点（阶段卡 / 对话里的闸门提问 / 发布页三个按钮）全都没有 try/catch ——
+     * 失败会变成无人接的 promise rejection：用户点了放行，界面永远停在「等待放行」且一句解释都没有。
+     * 所以：失败 → toast 出原因 + 拉一次真实状态 + 返回 false（**不抛**，免得又造出无人接的 rejection）。
+     */
+    async confirm(stageId: StageId, optionId: string): Promise<boolean> {
       const run = this.active
-      if (!run) return
-      await api.resolveGate(run.id, stageId, optionId)
+      if (!run) return false
+      try {
+        await api.resolveGate(run.id, stageId, optionId)
+      } catch (e) {
+        useUiStore().toast('这一步没放行成功：' + (e as Error).message + '（多半是服务重启后这次运行已不在等它了，重新发起一次即可）', 'err')
+        await this.refresh(true)
+        return false
+      }
       await this.refresh(true)
+      return true
     },
 
-    async cancel() {
+    async cancel(): Promise<boolean> {
       const run = this.active
-      if (!run) return
-      await api.cancelRun(run.id)
+      if (!run) return false
+      try {
+        await api.cancelRun(run.id)
+      } catch (e) {
+        useUiStore().toast('没停掉：' + (e as Error).message, 'err')
+        await this.refresh(true)
+        return false
+      }
       await this.refresh(true)
+      return true
     },
 
     async refresh(force = false) {
@@ -108,7 +131,13 @@ export const useRunsStore = defineStore('runs', {
             if (!this._autoDone[key]) {
               this._autoDone[key] = true
               window.setTimeout(() => {
-                void api.resolveGate(fresh.id, s.id, s.gate!.options[0]!.id).then(() => this.refresh(true))
+                // 409（重启后没人等）要复位标记，否则演示模式会永远不再重试且毫无提示
+                void api
+                  .resolveGate(fresh.id, s.id, s.gate!.options[0]!.id)
+                  .then(() => this.refresh(true))
+                  .catch(() => {
+                    this._autoDone[key] = false
+                  })
               }, 900)
             }
           }

@@ -27,7 +27,12 @@ import type {
   PlatformPublishResult,
   PlatformQrcode,
   PlatformState,
+  DraftMedia,
   RunConfig,
+  RunDraft,
+  RunDrafts,
+  RunPublishRequest,
+  RunPublishResult,
   Stage,
   StageId,
   StageStatus,
@@ -204,6 +209,13 @@ function makeStage(id: StageId, status: StageStatus = 'pending'): Stage {
     gate: GATES[id] ? { ...GATES[id]!, options: GATES[id]!.options.map((o) => ({ ...o })) } : undefined,
     checks: CHECKS[id] ? CHECKS[id]!.map((c) => ({ ...c })) : undefined,
   }
+}
+
+/** 模拟器里「发出去」的成品地址：只用于演示回执长什么样，不是真实稿件。 */
+const DEMO_PUBLISH_URL: Record<string, string> = {
+  xhs: 'https://www.xiaohongshu.com/explore/demo-note',
+  zhihu: 'https://zhuanlan.zhihu.com/p/2084432742410993947',
+  bilibili: 'https://www.bilibili.com/video/BV1demoDemo',
 }
 
 /** 演示用二维码：故意画成一眼可辨的占位图，避免被误当成真实登录码。 */
@@ -506,6 +518,80 @@ export class MockPipelineApi implements PipelineApi {
     return { channelId, message: '模拟器：已把小红书标记为未登录', state: 'login_required' }
   }
 
+  /* ---------- 作品库直投（离线演示：形状与真后端一致，值都是示例） ---------- */
+
+  /**
+   * 演示用的逐渠道草稿：按渠道取该渠道该投的那份文案（与后端 CHANNEL_PLATFORMS 同口径），
+   * 素材直接来自本模拟器的产物，**状态如实标成演示值**，别让人以为真探测过。
+   */
+  async listRunDrafts(runId: string): Promise<RunDrafts> {
+    const run = this.runs.find((r) => r.id === runId) ?? this.runs[0]
+    const arts = run.stages.flatMap((s) => s.artifacts)
+    const article = arts.find((a) => a.stageId === 'article' && a.kind === 'markdown')
+    const poster = arts.find((a) => a.stageId === 'poster' && a.kind === 'image')
+    const video = arts.find((a) => a.stageId === 'video' && a.kind === 'video')
+    const image = poster?.url ? [{ path: poster.path, name: 'p1.png', url: poster.url }] : []
+    const title = run.title.slice(0, 18)
+    const body = '（演示正文）这一份是模拟器按渠道拣好的文案，接上真后端后这里读的是真实产物。'
+
+    const drafts: RunDraft[] = DEMO_CHANNELS.map((ch) => {
+      const base = {
+        channelId: ch.id, name: ch.name, capabilities: ch.capabilities, transport: ch.kind,
+        state: ch.state, account: ch.account, detail: ch.detail, hint: '', ready: false,
+        hasDraft: true, suitable: true, reason: '', title, body,
+        tags: ['论文', '科普'], images: image, video: null as DraftMedia | null,
+        cover: image[0] ?? null as DraftMedia | null,
+        variant: ch.id === 'zhihu' ? 'xhs' : ch.id,
+        variantPlatform: ch.id === 'zhihu' ? 'xhs' : ch.id,
+        source: 'https://arxiv.org/abs/2510.05096',
+      }
+      if (ch.id === 'bilibili') {
+        return { ...base, video: video?.url ? { path: video.path, name: 'paper2video.mp4', url: video.url } : null,
+          variant: 'xhs', suitable: Boolean(video), reason: video ? '视频投稿（演示值）' : '缺视频：B 站是视频投稿' } as RunDraft
+      }
+      return base as RunDraft
+    })
+
+    return {
+      runId: run.id,
+      previous: null,
+      warnings: ['这里是内置演示数据，不是真实探测结果：接上后端（VITE_API_BASE）后才会读真产物与真登录态'],
+      channels: drafts,
+    }
+  }
+
+  async publishRunWork(runId: string, body: RunPublishRequest): Promise<RunPublishResult> {
+    const draft = await this.listRunDrafts(runId)
+    // 渠道别名（xiaohongshu ↔ xhs）在前端唯一的事实源是 stores/platforms 的 normalizeChannelId；
+    // api 层不许反向 import store（会形成 store → api → store 的循环），这里只做同一张表的最小子集。
+    const key = (body.channelId ?? '').trim().toLowerCase()
+    const cid = key === 'xiaohongshu' || key === 'redbook' ? 'xhs' : key === 'bili' ? 'bilibili' : key
+    const target = draft.channels.find((c) => c.channelId === cid)
+    if (!target) throw new Error(`未知渠道：${body.channelId}`)
+    const title = body.title?.trim() || target.title || ''
+    const base = {
+      channelId: target.channelId,
+      channelName: target.name,
+      files: ['title.txt', 'content.txt', 'tags.txt', 'publish_request.json'],
+      exportDir: `var/runs/${runId}/publish/direct/${target.channelId}/export`,
+      warnings: draft.warnings,
+    }
+    if (!target.ready) {
+      return { ...base, status: 'blocked', error: { code: target.state.toUpperCase(), message: `演示：${target.name} ${target.detail}` } }
+    }
+    if (!body.confirmed) {
+      await new Promise((r) => window.setTimeout(r, 400))
+      return { ...base, status: 'draft',
+        receipt: { channel: target.channelId, status: 'draft', title, via: 'work-library' },
+        receiptUrl: `/artifacts/${runId}/publish/direct/${target.channelId}/receipt.json` }
+    }
+    await new Promise((r) => window.setTimeout(r, 1200))
+    const receipt = { channel: target.channelId, channelName: target.name, status: 'published', title,
+      url: DEMO_PUBLISH_URL[target.channelId] ?? '', via: 'work-library', at: Math.floor(Date.now() / 1000) }
+    return { ...base, status: 'published', url: String(receipt.url), account: target.account,
+      receipt, receiptUrl: `/artifacts/${runId}/publish/direct/${target.channelId}/receipt.json` }
+  }
+
   /**
    * 模拟器不连后端，给一份与后端 SPEC 同形状的假配置：字段名、分组、kind 都对齐，
    * 这样「设置 → 模型与 API」在 mock 模式下也能完整渲染（值仅供示意，写入会抛错）。
@@ -548,11 +634,68 @@ export class MockPipelineApi implements PipelineApi {
 
   async chat(body: ChatRequest): Promise<ChatReply> {
     await new Promise((r) => setTimeout(r, 300))
+    const t = body.message
+    const ctx = { runId: body.runId ?? null, hasDigest: false, artifacts: 0 }
+    // 意图规则与真后端对齐（app/chat_api.py）：认得出就给动作卡，认不出才给占位回答。
+    // 模拟器只覆盖「重跑 / 取数据 / 起停服务」三个能自圆其说的意图，闸门那类要真状态，这里不假装。
+    if (/重跑|重新跑|再跑|重来|再来一遍/.test(t)) {
+      const src = this.runs.find((r) => r.id === body.runId)?.source ?? exampleSource()
+      return {
+        reply: `把《${src.title}》原样再跑一遍。前一次有产物的话我不动它，新的一遍会另开一条记录。`,
+        model: 'mock',
+        context: ctx,
+        action: {
+          kind: 'run',
+          title: `重跑《${src.title}》吗？`,
+          detail: '六段会从头再走一遍（十几分钟），中间仍然会在该你确认的地方停下来。',
+          params: { kind: src.kind, value: src.value, title: src.title },
+          needsConfirm: true,
+          confirmLabel: '重跑一遍',
+          risk: 'local',
+        },
+      }
+    }
+    if (/数据|效果|多少|几个|播放|点赞|收藏|浏览/.test(t)) {
+      return {
+        reply: '我去各平台取一遍真实数字；取不到的我照实说，不会拿 0 顶替。',
+        model: 'mock',
+        context: ctx,
+        action: {
+          kind: 'metrics',
+          title: '取一次运营数据',
+          detail: '只读各平台，不改任何东西。',
+          params: { force: true },
+          needsConfirm: false,
+          confirmLabel: '取一次',
+          risk: 'readonly',
+        },
+      }
+    }
+    if (/重启|停掉|启动|拉起/.test(t)) {
+      const name = /前端|网页/.test(t) ? 'frontend' : /小红书|mcp/i.test(t) ? 'mcp' : /知乎/.test(t) ? 'zhihu' : /b站|B 站|哔哩/.test(t) ? 'bilibili' : 'backend'
+      const action = /重启|重新启动/.test(t) ? 'restart' : /停|关/.test(t) ? 'stop' : 'start'
+      const verb = { restart: '重启', stop: '停掉', start: '启动' }[action as 'restart' | 'stop' | 'start']
+      return {
+        reply: `${verb}会走 ops/ 里的启停脚本真做一次。`,
+        model: 'mock',
+        context: ctx,
+        action: {
+          kind: 'service',
+          title: `要${verb}吗？`,
+          detail: `服务名 ${name}，动作 ${action}。`,
+          params: { name, action },
+          needsConfirm: true,
+          confirmLabel: verb,
+          risk: 'local',
+        },
+      }
+    }
     return {
       reply:
         '（模拟器）这是占位回答。真实回答由本机后端调用你配置的模型产生，而且只依据这次运行已经落盘的事实源（run.json 与 understand/digest.json）。接上真后端后，同一个问题会得到真正的模型回答。',
       model: 'mock',
-      context: { runId: body.runId ?? null, hasDigest: false, artifacts: 0 },
+      context: ctx,
+      action: null,
     }
   }
 

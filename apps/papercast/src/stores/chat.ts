@@ -3,7 +3,8 @@ import { api } from '../api'
 import { exampleRunConfig } from '../data/example'
 import { useRunsStore } from './runs'
 import { useUiStore } from './ui'
-import type { Artifact, PaperRun, Stage, StageGate, StageId, StageStatus } from '../types'
+import type { ChatAction } from '../api/types'
+import type { Artifact, PaperRun, SourceInput, Stage, StageGate, StageId, StageStatus } from '../types'
 
 /**
  * 对话式入口：把一次运行「翻译成一段聊天」。
@@ -11,12 +12,17 @@ import type { Artifact, PaperRun, Stage, StageGate, StageId, StageStatus } from 
  * 设计取舍：
  * 1. **不新造一份状态** —— 消息由 runs store 里那条运行推导出来（源数据只有一个，
  *    不会出现「界面说完成、状态说还在跑」这种漂移）；
- * 2. 只有真正的用户/助手对话（自由提问、模型回答）才落到 `turns` 里；
+ * 2. 只有真正的用户/助手对话（自由提问、模型回答、动作回执）才落到 `turns` 里；
+ * 2.5 **用对话发任务**（2026-09-19）：后端认出意图就回一张动作卡（`action`），这里负责执行它 ——
+ *     只读动作直接执行，其余一律等用户点那个按钮；对外动作永远不绕过人工闸门（见 runAction）；
  * 3. 每句话都只引用真实数据（阶段状态、产物清单、自检结果、最后一条日志），
  *    推不出来的数字就不写。
  */
 
 export type ViewerId = 'digest' | 'article' | 'poster' | 'video' | 'publish'
+
+/** 动作卡的状态：idle 可点 · running 正在做 · done 办完了 · failed 没办成（带原因） */
+export type ActionState = 'idle' | 'running' | 'done' | 'failed'
 
 export interface ChatMessage {
   id: string
@@ -30,6 +36,11 @@ export interface ChatMessage {
   artifacts?: Artifact[]
   viewer?: ViewerId
   gate?: StageGate
+  /** 一句话能做的事：后端给的动作卡（发布任务就走这里，见 runAction） */
+  action?: ChatAction
+  act?: ActionState
+  /** 没办成时的一句话原因 */
+  actNote?: string
   /** 正在干活（右侧名单里也会亮） */
   pending?: boolean
 }
@@ -240,7 +251,14 @@ export const useChatStore = defineStore('chat', {
       try {
         const history = this.turns.slice(-8, -1).map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }))
         const res = await api.chat({ message: t, runId: runs.activeId, history })
-        this.turns.push({ id: `a${++this.turnSeq}`, role: 'agent', who: '助手', text: res.reply })
+        const msg: ChatMessage = { id: `a${++this.turnSeq}`, role: 'agent', who: '助手', text: res.reply }
+        if (res.action) {
+          msg.action = res.action
+          msg.act = 'idle'
+        }
+        this.turns.push(msg)
+        // 只读动作（看数据这类）不需要用户再点一次；要有副作用的，卡片留在那儿等他点
+        if (msg.action && !msg.action.needsConfirm) await this.runAction(msg.id)
       } catch (e) {
         this.error = (e as Error).message
         // 除了气泡，也在这里留一句：否则对话看上去像断了
@@ -262,6 +280,99 @@ export const useChatStore = defineStore('chat', {
     /** 本地回一句（不花模型的钱，用于「我看不懂你这句话」这类即时反馈） */
     note(text: string) {
       this.turns.push({ id: `n${++this.turnSeq}`, role: 'agent', who: '助手', text })
+    },
+
+    /**
+     * 执行一张动作卡 —— **「用对话发任务」真正落地的地方**。
+     *
+     * 三条硬规矩：
+     * 1. 只读动作（risk=readonly）才允许自动执行；其余一律等用户点按钮（needsConfirm）；
+     * 2. 动本机服务的动作，点完还要过一遍应用内确认框（ui.askConfirm）—— 停/重启会中断在跑的运行；
+     * 3. 失败要有回执（卡片标灰 + toast 说原因），不许「点了没反应」。
+     */
+    async runAction(id: string) {
+      const m = this.turns.find((t) => t.id === id)
+      if (!m?.action || m.act === 'running' || m.act === 'done') return
+      const a = m.action
+      const p = (k: string) => (typeof a.params[k] === 'string' ? String(a.params[k]) : '')
+      const ui = useUiStore()
+      m.act = 'running'
+      m.actNote = ''
+      try {
+        if (a.kind === 'gate') {
+          const ok = await useRunsStore().confirm(p('stageId') as StageId, p('optionId'))
+          if (!ok) throw new Error('这一步没能放行，原因见右下角提示')
+          this.note(`已经按「${a.confirmLabel}」办了。`)
+        } else if (a.kind === 'run') {
+          const runs = useRunsStore()
+          const run = await runs.submit(
+            { kind: p('kind') as SourceInput['kind'], value: p('value'), title: p('title') },
+            exampleRunConfig(),
+          )
+          if (!run) throw new Error(runs.error || '没能开起新的一遍')
+          this.note('新的一遍开起来了，下面就从取论文开始走。')
+        } else if (a.kind === 'metrics') {
+          this.note(await this.metricsLine())
+        } else if (a.kind === 'service') {
+          const action = p('action') as 'start' | 'stop' | 'restart'
+          const ok = await ui.askConfirm({
+            title: `${a.confirmLabel}？`,
+            text: a.detail || '这会真的动这台机器上的服务。',
+            okLabel: a.confirmLabel,
+            cancelLabel: '先不动',
+            tone: action === 'start' ? 'info' : 'warn',
+          })
+          if (!ok) {
+            m.act = 'idle'
+            return
+          }
+          await api.opsServiceAction(p('name'), action)
+          ui.toast(`${a.confirmLabel}完成`, 'info')
+          this.note(`${a.confirmLabel}完成，需要看细节去「设置 → 运营维护」。`)
+        }
+        m.act = 'done'
+      } catch (e) {
+        m.act = 'failed'
+        m.actNote = (e as Error).message
+        ui.toast('这个动作没做成：' + m.actNote, 'err')
+      }
+    },
+
+    /** 用户点了「先不做」：卡片收起来，别一直悬在那儿 */
+    dismissAction(id: string) {
+      const m = this.turns.find((t) => t.id === id)
+      if (!m?.action || m.act === 'running') return
+      m.act = 'done'
+      m.actNote = '你选了先不做，这件事就先放下。'
+    },
+
+    /**
+     * 把运营数据压成**一句话结论**（口径与运营维护页一致：只留结论、读不到就说读不到）。
+     * 只统计真的读到内容的渠道；报错的渠道不进合计 —— 绝不能把「没抓到」算成 0。
+     */
+    async metricsLine(): Promise<string> {
+      const m = await api.opsMetrics(false)
+      const readable = m.channels.filter((c) => (c.items?.length ?? 0) > 0 && (c.errors?.length ?? 0) === 0)
+      const sum = (k: string) => readable.reduce((n, c) => n + (typeof c.totals?.[k] === 'number' ? c.totals[k] : 0), 0)
+      const total = readable.reduce((n, c) => n + c.items.length, 0)
+      if (!total) {
+        const why =
+          m.channels.map((c) => c.errors?.[0] || c.gap).filter(Boolean)[0] || '平台上还没有已发出的内容'
+        return '现在还读不到任何数字 —— ' + why
+      }
+      const bits = [
+        typeof sum('view') === 'number' && sum('view') > 0 ? `${sum('view')} 个播放` : '',
+        sum('like') > 0 ? `${sum('like')} 个点赞` : '',
+        sum('reply') > 0 ? `${sum('reply')} 条评论` : '',
+      ].filter(Boolean)
+      const miss = m.channels
+        .filter((c) => !readable.includes(c))
+        .map((c) => `${c.name}（${c.errors?.[0] || c.gap || '这次没读到'}）`)
+      return (
+        `已发出 ${total} 条内容` +
+        (bits.length ? `，合计 ${bits.join('、')}。` : '，但互动数字还没读到。') +
+        (miss.length ? ` 还有 ${miss.length} 个平台没读到：${miss.join('；')}` : '')
+      )
     },
 
     /**

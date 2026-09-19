@@ -10,6 +10,9 @@ import type {
   PlatformPublishResult,
   PlatformQrcode,
   RunConfig,
+  RunDrafts,
+  RunPublishRequest,
+  RunPublishResult,
   SourceInput,
   StageId,
 } from '../types'
@@ -58,10 +61,32 @@ export interface ChatRequest {
   history?: { role: string; content: string }[]
 }
 
+/**
+ * 一句话能变成一张**动作卡**（后端 app/chat_api.py 的「意图 → 动作提案」）：
+ * 对话里渲染成「一句话 + 一个动词按钮」，点了才真的执行 —— 服务端不会因为一句话就投递或起停进程。
+ */
+export type ChatActionKind = 'gate' | 'metrics' | 'service' | 'run'
+export type ChatActionRisk = 'readonly' | 'local' | 'public'
+
+export interface ChatAction {
+  kind: ChatActionKind
+  title: string
+  detail?: string
+  /** 执行参数，按 kind 不同；全部由后端给出，前端不猜 */
+  params: Record<string, unknown>
+  /** false = 只读动作，前端直接执行（少一次点击）；true = 必须用户点那个按钮 */
+  needsConfirm: boolean
+  confirmLabel: string
+  /** public = 真的发到平台上、撤不回来；界面上按危险动作渲染 */
+  risk: ChatActionRisk
+}
+
 export interface ChatReply {
   reply: string
   model: string
   context: { runId: string | null; hasDigest: boolean; artifacts: number }
+  /** 认不出意图时为 null（那就是一次普通的问答） */
+  action?: ChatAction | null
 }
 
 export interface PlatformLogoutResult {
@@ -119,6 +144,12 @@ export interface PipelineApi {
   platformPublish(channelId: string, body: PlatformPublishRequest): Promise<PlatformPublishResult>
   /** 退出登录（删除本机凭证，不可逆）。返回后端如实写的执行结果，用于向用户回执。 */
   platformLogout(channelId: string): Promise<PlatformLogoutResult>
+
+  /* ---------- 作品库直投：不走流水线闸门的那条发布路径 ---------- */
+  /** 这次运行的逐渠道待发草稿：真产物 + 真登录态 + 「为什么投不了」 */
+  listRunDrafts(runId: string): Promise<RunDrafts>
+  /** 把作品投到一个渠道：confirmed=false 只落 export/（无副作用），true 才真投递 */
+  publishRunWork(runId: string, body: RunPublishRequest): Promise<RunPublishResult>
 
   /* ---------- 对话 ---------- */
   /** 一问一答：回答只依据该运行已落盘的事实源（见后端 app/chat_api.py） */

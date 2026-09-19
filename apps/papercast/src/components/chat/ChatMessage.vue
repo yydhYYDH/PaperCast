@@ -4,7 +4,8 @@ import type { ChatMessage } from '../../stores/chat'
 import type { Artifact, PaperRun } from '../../types'
 
 const props = defineProps<{ msg: ChatMessage; run?: PaperRun }>()
-const emit = defineEmits<{ gate: [string] }>()
+/** action 的第二个参数：true = 照这张卡办，false = 先不做 */
+const emit = defineEmits<{ gate: [string]; action: [id: string, go: boolean] }>()
 
 const VIEWERS = {
   digest: defineAsyncComponent(() => import('../viewers/DigestViewer.vue')),
@@ -67,6 +68,34 @@ function name(a: Artifact) {
       <div v-if="open && viewer && run" class="stage-view">
         <component :is="viewer" :run="run" />
       </div>
+
+      <!-- 一句话就能派活：后端给的动作卡。点了才真的执行 —— 对话不会绕过人工闸门 -->
+      <div
+        v-if="msg.action && msg.action.needsConfirm"
+        class="act"
+        :class="{ done: msg.act === 'done', failed: msg.act === 'failed' }"
+      >
+        <p class="act-t">{{ msg.action.title }}</p>
+        <p v-if="msg.action.detail" class="act-d">{{ msg.action.detail }}</p>
+        <p v-if="msg.action.risk === 'public'" class="act-risk">这一步会真的发到平台上，发出去撤不回来。</p>
+        <div v-if="msg.act === 'idle' || msg.act === 'running'" class="row wrap">
+          <button
+            class="btn sm"
+            :class="msg.action.risk === 'public' ? 'danger' : 'primary'"
+            :disabled="msg.act === 'running'"
+            @click="emit('action', msg.id, true)"
+          >
+            {{ msg.act === 'running' ? '正在做…' : msg.action.confirmLabel }}
+          </button>
+          <button class="btn sm ghost" :disabled="msg.act === 'running'" @click="emit('action', msg.id, false)">
+            先不做
+          </button>
+        </div>
+        <p v-else-if="msg.act === 'done'" class="act-note">{{ msg.actNote || '已经照这个办了。' }}</p>
+        <p v-else class="act-err">没做成：{{ msg.actNote }}</p>
+      </div>
+      <!-- 只读动作（看数据这类）不等用户点，给一行「正在取」就够，结果由回执那条消息说 -->
+      <p v-if="msg.action && !msg.action.needsConfirm && msg.act === 'running'" class="act-wait">正在照做…</p>
 
       <!-- 等你点头：只在真需要人决定的地方出现，默认动作排第一 -->
       <div v-if="msg.gate" class="gate">
@@ -132,6 +161,23 @@ function name(a: Artifact) {
 .art em { font-style: normal; color: var(--muted-2); font-size: 11.5px; }
 .toggle { margin-left: 2px; }
 .stage-view { margin-top: 14px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+
+.act { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--surface); }
+.act.done { background: var(--surface-2); border-color: transparent; }
+.act.failed { border-color: var(--tone-red-bg); }
+.act-t { font-family: var(--serif); font-size: 15px; color: var(--text); }
+.act-d {
+  font-size: 13px; line-height: 1.7; color: var(--muted);
+  margin: 4px 0 10px; white-space: pre-wrap;
+  max-height: 168px; overflow: auto;
+}
+.act-risk {
+  display: inline-block; margin: 0 0 10px; padding: 5px 9px; border-radius: 8px;
+  background: var(--tone-amber-bg); color: var(--tone-amber-fg); font-size: 12.5px;
+}
+.act-note { font-size: 12.5px; color: var(--muted); }
+.act-err { font-size: 12.5px; color: var(--tone-red-fg); }
+.act-wait { font-size: 12.5px; color: var(--muted-2); margin-top: 8px; }
 
 .gate { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--surface-2); }
 .gate-q { font-family: var(--serif); font-size: 15px; color: var(--text); }

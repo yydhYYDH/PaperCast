@@ -41,6 +41,7 @@ description: PaperCast 前端的界面规范与验证配方（暖调单色编辑
 | 任何 HTTP 调用 | `src/api/http.ts`（**唯一出口**）＋ `src/api/types.ts`（形状）＋ `src/api/mock.ts`（离线同形状实现） |
 | 后端产物地址 | `assetUrl()`（`src/api/index.ts`）—— 后端给的是 `/artifacts/...` 相对路径，直接 fetch/src 会 404 |
 | 工作台（对话入口） | `src/views/WorkbenchView.vue` + `src/components/chat/{ChatThread,ChatMessage,Composer,AgentRail}.vue` + `src/stores/chat.ts` |
+| 对话里能派活（动作卡） | 卡片长在 `ChatMessage.vue`（`.act`），执行在 `stores/chat.ts` 的 `runAction()`；后端给卡在 `app/chat_api.py` 的「意图 → 动作提案」，形状是 `api/types.ts` 的 `ChatAction` |
 | 状态 | `src/stores/*`（Pinia）。**对话消息由 runs store 里的运行推导**，不要另造一份状态 |
 | 产物查看器 | `src/components/viewers/*.vue`，props 是 `{ run }`，优先读**这次运行**的真产物 |
 
@@ -52,6 +53,9 @@ description: PaperCast 前端的界面规范与验证配方（暖调单色编辑
 **必须**
 
 - 人工闸门（发布、退出登录、停服务）→ `ui.askConfirm()`，默认动作排第一，按钮文案是动词；
+- **对话里派活也得过闸门**：动作卡只有 `risk=readonly`（只读）允许自动执行，其余一律等用户点那个动词按钮；
+  服务端只产出「做什么 + 参数」、**不产生副作用**；`risk=public`（真发到平台上）按危险动作渲染并写明撤不回来；
+  失败要有回执（卡片标红 + 气泡说原因），不许「点了没反应」；
 - 真实数据优先：先读运行产物，示例只在读不到时兜底，并且**兜底要看得出来**；
 - 空状态、加载中、失败三种态都要有文案（不是转圈了事）；
 - 移动/窄屏：右栏 ≤1180px 收起，对话列自适应。
@@ -80,6 +84,7 @@ cd /path/to/repo && node ops/shot/<脚本>            # 见下，控制台必须
 | `ops/shot/chat_viewers.mjs` | 查看器读的是**真产物**（不是内置示例） |
 | `ops/shot/digest_banner_check.mjs` | 论文理解抬头是暖白底（计算样式 luminance > 0.9、无渐变） |
 | `ops/shot/chat_drop.mjs` | 拖 PDF 的遮罩出现/消失（不真的上传） |
+| `ops/shot/chat_action_check.mjs` | 对话派活：只读动作自动执行 + 一句话结论、有副作用的只出卡片且「先不做」无副作用、普通提问 0 新卡、控制台 0 错误（**不点任何会真发出去的动作**；跑前会预热运营数据缓存，别去撞浏览器预算） |
 
 接口对账（前端调了后端没有的路由 = 上线即 404）：
 
