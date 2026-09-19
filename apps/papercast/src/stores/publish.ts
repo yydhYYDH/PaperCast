@@ -70,6 +70,10 @@ export const usePublishStore = defineStore('publish', {
     error: '',
     /** '' | 'draft' | 'publish' —— 正在做什么，用来禁按钮 */
     busy: '' as '' | 'draft' | 'publish' | 'video',
+    /** 投递是从头等到尾的一次请求（渠道那边在开浏览器、填稿、逐张传图），这里如实数秒给人看 */
+    elapsed: 0,
+    _since: 0,
+    _tick: undefined as number | undefined,
     /** 最近一次调用的回执（真投递、落草稿都记） */
     result: null as RunPublishResult | null,
     /** 界面改过的文案，按渠道存：切来切去不会把编辑丢掉 */
@@ -232,6 +236,10 @@ export const usePublishStore = defineStore('publish', {
 
       this.busy = wantVideo ? 'video' : 'publish'
       this.error = ''
+      this._since = Date.now()
+      this.elapsed = 0
+      if (this._tick !== undefined) window.clearInterval(this._tick)
+      this._tick = window.setInterval(() => { this.elapsed = Math.round((Date.now() - this._since) / 1000) }, 1000)
       try {
         const req = {
           channelId: d.channelId,
@@ -250,6 +258,8 @@ export const usePublishStore = defineStore('publish', {
         this.error = (e as Error).message
         ui.toast(`没发出去：${this.error}`, 'err')
       } finally {
+        if (this._tick !== undefined) { window.clearInterval(this._tick); this._tick = undefined }
+        this.elapsed = 0
         this.busy = ''
       }
     },

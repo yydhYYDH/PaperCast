@@ -124,7 +124,12 @@ watch(() => [pub.open, pub.channelId], () => {
 
         <div class="pub-body">
           <!-- 读不到就说读不到，并给出下一步 -->
-          <div v-if="pub.loading" class="pub-note">正在看这次运行产出了什么、各平台现在能不能收…</div>
+          <!-- 这一步要真去问渠道能不能收（后端顺手探一次登录态）：知乎那边会新起一个浏览器，实测 6~9 秒，
+               渠道状态本身有 20 秒缓存；说清在等什么，别让人以为界面卡死了 -->
+          <div v-if="pub.loading" class="pub-note">
+            正在看这次运行产出了什么、各平台现在能不能收…（要真去问一次渠道状态：知乎那边得新起一个浏览器，
+            实测 6~9 秒；这状态缓存 20 秒，紧接着再点会快很多）
+          </div>
 
           <div v-else-if="pub.error" class="pub-note err">
             <p>读不到待发内容：{{ pub.error }}</p>
@@ -238,6 +243,21 @@ watch(() => [pub.open, pub.channelId], () => {
                     <button class="btn ghost" :disabled="pub.busy !== '' || !Object.keys(pub.edits[draft.channelId] ?? {}).length" @click="pub.resetEdit">
                       撤销改动
                     </button>
+                  </div>
+
+                  <!-- 投递要等一阵子（渠道那边在开浏览器、填稿、逐张传图），这里如实报「已经等了多久」，
+                       并说清在等什么、别重复点 —— 只数秒，不编造进度条（进度条会骗人）。 -->
+                  <div v-if="pub.busy === 'publish' || pub.busy === 'video'" class="waiting">
+                    <p class="wait-line">
+                      <span class="wait-dot" aria-hidden="true" />
+                      正在{{ pub.busy === 'video' ? '投递成片' : '投递' }}…已等
+                      <b class="mono">{{ pub.elapsed }}</b> 秒
+                    </p>
+                    <p class="wait-hint">
+                      那边现在在做：打开浏览器 → 填标题正文 → 逐张传图 → 点发布 → 回来核验这一篇是不是真的发出去了。
+                      图文一般要一分钟上下（本机实测知乎一篇：光填稿+传 8 张图就 61 秒）。别重复点 ——
+                      关掉这个窗口不会取消，只是你看不到结果。
+                    </p>
                   </div>
                 </template>
                 <template v-else>
@@ -358,6 +378,21 @@ watch(() => [pub.open, pub.channelId], () => {
 .gate.ok { border-color: #dfe3dc; background: var(--tone-green-bg); }
 .gate.blocked { border-color: #efe2c4; background: var(--tone-amber-bg); }
 .gate-line { font-size: 13px; line-height: 1.75; color: var(--ink-2); }
+
+/* 投递等待：只报「已等多久」与在做哪几步，不做进度条（进度条只能靠猜） */
+.waiting {
+  margin-top: 2px; padding-top: 10px; border-top: 1px dashed var(--hairline);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.wait-line { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink); }
+.wait-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--tone-green-ink, #346538);
+  animation: wait-pulse 1.4s ease-in-out infinite;
+}
+@keyframes wait-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
+.wait-hint { font-size: 12.5px; line-height: 1.7; color: var(--small-ink, #6b6963); }
+@media (prefers-reduced-motion: reduce) { .wait-dot { animation: none; } }
+@media (max-width: 720px) { .waiting { gap: 6px; } .wait-hint { font-size: 13px; } }
 
 .receipt {
   margin-top: 12px; padding: 13px 15px;

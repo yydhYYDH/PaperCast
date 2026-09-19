@@ -1,6 +1,7 @@
 /** 平台渠道与登录态：跨视图共享（平台账号页、发布页、顶部状态条）。 */
 
 import { defineStore } from 'pinia'
+import { usePublishStore } from './publish'
 import { api } from '../api'
 import type { PlatformChannel, PlatformQrcode } from '../types'
 
@@ -96,6 +97,11 @@ export const usePlatformsStore = defineStore('platforms', {
   actions: {
     /** force=true 绕过后端 5s 探测缓存（用户点刷新 / 扫码轮询时用） */
     async refresh(force = true) {
+      // 投递期间不探渠道状态：渠道那边发一条要开浏览器、填稿、传图，而且**所有动作都在同一把锁上排队**
+      // （apps/zhihu-publisher 的 _BROWSER_LOCK）。这时候探一次状态要新起一个 Chromium（实测 6~9 秒），
+      // 会把正在跑的投递挤到后面，用户看到的就是「点了发布更卡」——所以投递期间只读现有状态。
+      const pub = usePublishStore()
+      if (pub.busy !== '') return
       this.loading = true
       this.error = ''
       try {
