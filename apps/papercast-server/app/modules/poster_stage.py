@@ -324,6 +324,38 @@ async def _render_with_budget(
 DECK_KIND_CN = {"cover": "封面", "panel": "要点", "figure": "证据", "closing": "判断"}
 
 
+def deck_artifact_rel(frame: dict[str, Any], out_dir: Path) -> str:
+    """组图 PNG 相对 poster/ 的登记路径。
+
+    2026-09-19 修的真 bug：这里原来硬写 `f"cards/{id}.png"`，而渲染器（`ops/shot/render_social_deck.mjs`）
+    落的是 `cards/output/*.png` —— 于是 7 张组图在阶段里全部登记成「缺失」（真跑 run_77d2410986e6 实测：
+    渲染 JSON 说 ok、7 张文件都在磁盘上，阶段产物却一个都点不开）。
+
+    优先用渲染器自己报的绝对路径反推（它是唯一事实源），取不到才退到技能约定的 output/ 子目录。
+    """
+    path = str(frame.get("path") or "").strip()
+    if path:
+        try:
+            return Path(path).resolve().relative_to(Path(out_dir).resolve()).as_posix()
+        except (ValueError, OSError):
+            pass
+    return f"cards/output/{frame.get('id', '')}.png"
+
+
+def deck_deliverable_rel(rel: str, out_dir: Path) -> str:
+    """组图登记/投递用哪一份：有 JPEG 侧车就用 JPEG。
+
+    PNG 是按 1080×1440 渲染出来的母版（可编辑、体积大），JPEG 侧车（q88、不抽色）才是
+    真正要上传的那份 —— 同一张图 PNG ~900KB vs JPEG ~300KB，平台还会再压一遍。
+    """
+    p = Path(str(rel))
+    if p.suffix.lower() == ".png":
+        cand = p.with_suffix(".jpg")
+        if (Path(out_dir) / cand).is_file():
+            return cand.as_posix()
+    return p.as_posix()
+
+
 async def _run_deck(ctx, spec: dict[str, Any], cover: Optional[dict[str, Any]], digest: dict[str, Any],
                     figs_arg: str, out_dir: Path) -> None:
     """小红书组图：把同一份（已核过数字的）spec 用 guizang 技能重排成 3:4 组图。
@@ -352,7 +384,7 @@ async def _run_deck(ctx, spec: dict[str, Any], cover: Optional[dict[str, Any]], 
                 cards_deck.build, spec, cover, digest, figures_dir, deck_dir,
                 max_items=max_items, keep_pages=keep, note=note,
             )
-            rep = await asyncio.to_thread(cards_deck.render, deck_dir, scale=2)
+            rep = await asyncio.to_thread(cards_deck.render, deck_dir, scale=1)
             chk = await asyncio.to_thread(cards_deck.validate, deck_dir)
         except Exception as e:
             ctx.log("warn", f"小红书组图失败：{type(e).__name__}: {str(e)[:160]}")
@@ -373,11 +405,17 @@ async def _run_deck(ctx, spec: dict[str, Any], cover: Optional[dict[str, Any]], 
 
     frames = rep.get("frames") or []
     plan = built.get("plan") or []
+    missing: list[str] = []
     for i, fr in enumerate(frames):
         kind = (plan[i] or {}).get("kind") if i < len(plan) else ""
         label = f"小红书组图 {i + 1}/{len(frames)}" + (f" · {DECK_KIND_CN.get(kind, '')}" if kind else "")
-        ctx.artifact("image", label, f"cards/{fr['id']}.png", preview=True,
-                     meta={"width": int(fr.get("w", 0) * 2), "height": int(fr.get("h", 0) * 2),
+        rel = deck_deliverable_rel(deck_artifact_rel(fr, out_dir), out_dir)
+        if not (out_dir / rel).is_file():
+            missing.append(rel)
+        # 尺寸取渲染器报的实际像素（scale=1 时就是 1080×1440，别再手写 ×2）
+        ctx.artifact("image", label, rel, preview=True,
+                     meta={"width": int(fr.get("w", 0)), "height": int(fr.get("h", 0)),
+                           "bytes": int(fr.get("jpegBytes") or fr.get("bytes") or 0),
                            "preset": "guizang-deck", "platform": "xhs", "theme": built.get("theme")})
     ctx.artifact("html", "组图预览（技能模板渲染的 index.html）", "cards/index.html", preview=True)
 
@@ -387,7 +425,10 @@ async def _run_deck(ctx, spec: dict[str, Any], cover: Optional[dict[str, Any]], 
         first = (chk.get("details") or [{}])[0]
         detail += f" · 首条：{first.get('rule', '')} {first.get('text', '')[:80]}"
     detail += f" · 主题 {built.get('theme')}"
-    ctx.check("小红书组图（guizang 技能）", "pass" if (fails == 0 and rep.get("ok") and frames) else "fail",
+    if missing:
+        # 渲染器说 ok、登记的路径却找不到文件 —— 这条以前会被判 pass（真跑踩到过），现在如实报 fail
+        detail += f" · {len(missing)} 张登记后找不到文件：{missing[:2]}"
+    ctx.check("小红书组图（guizang 技能）", "pass" if (fails == 0 and rep.get("ok") and frames and not missing) else "fail",
               detail if frames else "没有渲染出任何组图")
 
 

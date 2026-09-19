@@ -27,7 +27,8 @@ class GenerateError(RuntimeError):
 
 CJK = re.compile(r"[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]")
 NUM = re.compile(r"\d+(?:[.,]\d+)*\s*%?")
-FORMULA = re.compile(r"\$[^$]{1,200}\$|\\frac|\\begin\{|\\sum|\\alpha|_\{|\^\{")
+# 公式痕迹判定统一在 styles 里（含 `$0.001` 这类金额的护栏）；这里不再自己维护一份正则
+FORMULA = styles.FORMULA
 
 # --------------------------------------------------------------------------- #
 # 用户指令（brief）的机检遵从度
@@ -132,19 +133,27 @@ def numbers_in(text: str) -> list[str]:
 
 
 def strip_formulas(text: str) -> tuple[str, list[str]]:
-    """去掉公式痕迹，返回 (处理后的文本, 命中记录)。"""
+    """去掉公式痕迹，返回 (处理后的文本, 命中记录)。
+
+    判定统一走 `styles.is_inline_math`：`$0.001` 这类金额不是公式，原样保留
+    （朴素正则会把它当行内公式删掉，成本数字就没了）。
+    """
     hits: list[str] = []
 
     def _inline(m: re.Match) -> str:
+        if not styles.is_inline_math(m.group(0)):
+            return m.group(0)
         hits.append(m.group(0))
         inner = m.group(0).strip("$")
         inner = re.sub(r"\\(?:mathrm|text|frac|sum|cdot|times|leq|geq|approx)", "", inner)
         return re.sub(r"[{}\\^_$]", "", inner).strip()
 
-    out = re.sub(r"\$[^$]{1,200}\$", _inline, text)
-    if FORMULA.search(out):
-        hits.append(FORMULA.search(out).group(0))  # type: ignore[union-attr]
+    out = re.sub(r"\$([^$\n]{1,200})\$", _inline, text)
+    hit = styles.find_formula(out)
+    if hit:
+        hits.append(hit)
         out = FORMULA.sub("", out)
+        out = styles.DOLLAR_PAIR.sub(lambda m: "" if styles.is_inline_math(m.group(0)) else m.group(0), out)
     return out, hits
 
 
@@ -607,8 +616,8 @@ async def _gen_xhs_variant(
     # ---- 校验（平台硬约束，人格不参与） ----
     ctx.check(f"{label} · 标题计重", "pass" if title_weight(recommended) <= spec.title_weight_max else "fail",
               f"「{recommended}」= {title_weight(recommended)}（上限 {spec.title_weight_max}）")
-    ctx.check(f"{label} · 无公式", "pass" if not FORMULA.search(body) else "fail",
-              "正文不含 LaTeX/公式表达" if not FORMULA.search(body) else "正文仍有公式痕迹")
+    ctx.check(f"{label} · 无公式", "fail" if styles.find_formula(body) else "pass",
+              f"命中 {styles.find_formula(body)[:20]}" if styles.find_formula(body) else "正文不含 LaTeX/公式表达")
     ctx.check(f"{label} · 正文长度", "pass" if 0 < len(body) <= spec.body_max else "fail",
               f"{len(body)} 字（上限 {spec.body_max}）")
     ctx.check(f"{label} · 标签数量",

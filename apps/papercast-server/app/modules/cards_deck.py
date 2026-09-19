@@ -503,7 +503,40 @@ def _json_tail(stdout: str) -> dict[str, Any]:
     return {}
 
 
-def render(out_dir: Path | str, *, scale: int = 2, node: str = "node", timeout: int = 300) -> dict[str, Any]:
+def _to_jpeg(frames: list[dict[str, Any]], *, quality: int = 88) -> int:
+    """给每张组图 PNG 落一份 JPEG 侧车（q88、**不抽色**），返回成功的张数。
+
+    为什么要有 JPEG：小红书原生口径就是 1080×1440，上传后平台还会再压一遍；动辄 20MB 的
+    2x PNG 换不到可见的清晰度，反而让上传更容易超时。subsampling=0（4:4:4）是关键——
+    关掉色度抽样，中文/英文细笔画才不会发毛，文本页也能用 JPEG。
+    PNG 仍然保留，当可编辑母版；投递取 JPEG（见 publish._deck_images / poster_stage）。
+    """
+    from PIL import Image  # 只在真要转的时候才 import（组图关闭时不该被 Pillow 拖住）
+
+    n = 0
+    for fr in frames:
+        src = Path(str(fr.get("path") or ""))
+        if not src.is_file():
+            continue
+        dst = src.with_suffix(".jpg")
+        try:
+            Image.open(src).convert("RGB").save(
+                dst, "JPEG", quality=quality, optimize=True, subsampling=0)
+        except OSError:
+            continue
+        fr["jpeg"] = str(dst)
+        fr["jpegBytes"] = dst.stat().st_size
+        n += 1
+    return n
+
+
+def render(out_dir: Path | str, *, scale: int = 1, jpeg: bool = True, quality: int = 88,
+           node: str = "node", timeout: int = 300) -> dict[str, Any]:
+    """渲染组图。scale=1 就是小红书原生口径 1080×1440（2026-09-19 从 2 改回 1）。
+
+    画布字号本来就是按 1080 宽排的，2x 只是像素翻倍、体积翻 3 倍、且多出 20MB 的上传负担；
+    JPEG 侧车（jpeg=True）才是给渠道用的那份。
+    """
     script = renderer_script()
     if not script.is_file():
         raise FileNotFoundError(f"组图渲染入口不存在：{script}")
@@ -515,6 +548,9 @@ def render(out_dir: Path | str, *, scale: int = 2, node: str = "node", timeout: 
     if not info:
         raise RuntimeError(f"渲染器无 JSON 输出（exit={proc.returncode}）：{(proc.stderr or '')[-300:]}")
     info["exit"] = proc.returncode
+    info["scale"] = scale
+    if jpeg and info.get("ok"):
+        info["jpegs"] = _to_jpeg(info.get("frames") or [], quality=quality)
     return info
 
 

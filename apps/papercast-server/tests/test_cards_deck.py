@@ -294,5 +294,29 @@ def test_render_and_validate_roundtrip(tmp_path, figures, spec, cover, digest):
     cd.build(spec, cover, digest, figures, out, note="测试")
     rep = cd.render(out, scale=1)
     assert rep["ok"] and rep["count"] == 4
+    assert rep.get("scale") == 1 and rep.get("jpegs") == 4   # 默认 1x + JPEG 侧车
+    assert (out / "output" / "xhs-01.jpg").is_file()
     chk = cd.validate(out)
     assert chk["sections"] == 4 and chk["fails"] == 0 and chk["exit"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# JPEG 侧车（不用 chromium：纯 Pillow）
+# --------------------------------------------------------------------------- #
+
+def test_to_jpeg_writes_sidecar_and_annotates_frames(tmp_path):
+    """PNG 母版旁边落一份 JPEG 侧车，并把 jpeg 路径/体积写回 frame（登记与投递都靠它）。"""
+    from PIL import Image
+
+    src = tmp_path / "xhs-01.png"
+    Image.new("RGB", (1080, 1440), (24, 24, 32)).save(src)
+    frames: list[dict] = [{"id": "xhs-01", "path": str(src)}]
+    assert cd._to_jpeg(frames) == 1
+    sidecar = tmp_path / "xhs-01.jpg"
+    assert sidecar.is_file() and Image.open(sidecar).format == "JPEG"
+    assert frames[0]["jpeg"].endswith("xhs-01.jpg") and frames[0]["jpegBytes"] > 0
+    # 原 PNG 不能被删（它是可编辑母版）
+    assert src.is_file()
+    # 文件不在（或不是图）就跳过，不抛异常：转 JPEG 失败不该拖垮整条 poster 阶段
+    assert cd._to_jpeg([{"path": str(tmp_path / "nope.png")}]) == 0
+    assert cd._to_jpeg([{"id": "x", "path": ""}]) == 0

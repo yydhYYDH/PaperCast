@@ -157,17 +157,26 @@ voice    → 语气、人称、句长节奏、归属强度、证据呈现方式
 
 | 轴 | 取值 | 位置 |
 | --- | --- | --- |
-| platform | `xhs` 小红书 · `zhihu` 知乎 · `bilibili` B 站 · `wechat` 公众号 | `styles.PLATFORMS` |
-| voice | `author` 作者自述 · `peer` 同行拆解 · `newsflash` 科技快讯（新智元式） · `analyst` 技术解读（机器之心式） · `reviewer` 审稿人视角 | `styles.VOICES` |
+| platform | `xhs` 小红书 · `zhihu` 知乎 · `bilibili` B 站 · `en` 英文传播（X / LinkedIn）。公众号已于 2026-09-19 下线 | `styles.PLATFORMS` |
+| voice | `independent` 第三方独立视角（**默认**，取代已退役的 `author`） · `peer` 同行拆解 · `newsflash` 科技快讯（新智元式） · `analyst` 技术解读（机器之心式） · `reviewer` 审稿人视角 | `styles.VOICES` |
 
 约定：
 
 1. **约束优先级：事实源 > 平台硬约束 > 人格语气**。人格不得放宽平台规则，也不参与校验。
 2. 提示词由 `prompts.article_system(platform, voice)` 拼装：人格片段 + 平台规则 + 输出模板 + `FACT_RULES`。
-3. 旧 id（`xhs`、`wechat`、`xhs-academic`、`xhs-media` …）在 `styles.parse_variant()` 里做兼容映射，
-   历史配置不会失效（`academic` → `author`，`media` → `newsflash`）。
+3. 旧 id（`xhs`、`xhs-academic`、`xhs-media`、`zhihu-academic`、`bilibili-academic` …）在 `styles.parse_variant()` 里做兼容映射，
+   历史配置不会失效（`academic` → `independent`，`media` → `newsflash`）；`author` 经 `RETIRED_VOICES` 落到 `independent`，
+   公众号相关 id 解析不出平台，会被如实报成「无法识别的变体」。
 4. 新增人格的取样与归纳流程见 skill `paper-voice-styles`；`newsflash` / `analyst` 有 8 篇真实语料支撑，
-   `author` / `peer` / `reviewer` 目前是设计稿。
+   `independent` / `peer` / `reviewer` 目前是设计稿。
+5. 每个 voice 还要给两行面向用户的字：`short`（口语名，如「震惊流」「专业科普」）与 `hint`（一句话手感），
+   经 `GET /api/styles` 进前端风格页。
+
+**用户从哪里改风格**：前端「风格」页把 4 平台 × 5 人格 = 20 条组合列全（选项、口语名、硬约束都来自
+`GET /api/styles`），勾中的 id 就是这次运行的 `config.article.variants`；不勾则用工作台默认。
+在工作台输入框里说的（「做成小红书+知乎，用机器之心的口吻」）由前端 `data/stylePick.ts` 解析成同样的 id ——
+**说出口的要真的生效**，不能只当一句 brief 文字飘过去。
+
 
 调试用脚本（只跑 article 阶段，复用已有 run 的事实源，不碰原 run 目录）：
 

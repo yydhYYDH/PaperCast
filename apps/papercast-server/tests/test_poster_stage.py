@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -299,6 +300,102 @@ def test_write_spec_accepts_bare_spec_payload(fake_ctx, make_run):
     spec, cover, _ = asyncio.run(ps._write_spec(ctx, DIGEST, FIGURES, "正文"))
     assert spec["title"] == "论文海报"
     assert cover == {}
+
+
+# --------------------------------------------------------------------------- #
+# deck_artifact_rel（组图产物登记路径）
+# --------------------------------------------------------------------------- #
+
+def test_deck_artifact_rel_uses_RENDERER_reported_path(tmp_path):
+    """渲染器落的是 <poster>/cards/output/*.png —— 登记的 rel 必须与它一致。
+
+    回归（2026-09-19 真跑 run_77d2410986e6）：这里原先把 rel 硬写成 `cards/{id}.png`，
+    而文件在 `cards/output/`，于是 7 张组图全部登记成「缺失」（渲染 JSON 说 ok、文件也在，
+    阶段产物却点不开），而阶段闸门照样判 pass。
+    """
+    out_dir = tmp_path / "poster"
+    png = out_dir / "cards" / "output" / "xhs-01.png"
+    png.parent.mkdir(parents=True)
+    png.write_bytes(b"png")
+    rel = ps.deck_artifact_rel({"id": "xhs-01", "path": str(png)}, out_dir)
+    assert rel == "cards/output/xhs-01.png"
+    assert (out_dir / rel).is_file()          # 登记路径必须真能落到文件上
+
+
+def test_deck_artifact_rel_never_leaks_paths_outside_poster_dir(tmp_path):
+    out_dir = tmp_path / "poster"
+    out_dir.mkdir()
+    outside = tmp_path / "elsewhere" / "xhs-02.png"
+    outside.parent.mkdir()
+    outside.write_bytes(b"png")
+    assert ps.deck_artifact_rel({"id": "xhs-02", "path": str(outside)}, out_dir) == "cards/output/xhs-02.png"
+
+
+def test_deck_artifact_rel_falls_back_to_skill_convention(tmp_path):
+    # 渲染器没报 path（旧版本/异常输出）时按技能约定拼，至少与索引同源
+    assert ps.deck_artifact_rel({"id": "xhs-03"}, tmp_path) == "cards/output/xhs-03.png"
+    assert ps.deck_artifact_rel({"id": "", "path": ""}, tmp_path) == "cards/output/.png"
+
+
+def test_deck_deliverable_rel_prefers_jpeg_sidecar(tmp_path):
+    """有 JPEG 侧车就登记 JPEG：PNG 是母版（~900KB/张），JPEG 才是上传那份（~300KB/张）。"""
+    out_dir = tmp_path / "poster"
+    (out_dir / "cards" / "output").mkdir(parents=True)
+    (out_dir / "cards" / "output" / "xhs-01.png").write_bytes(b"png")
+    (out_dir / "cards" / "output" / "xhs-01.jpg").write_bytes(b"jpg")
+    assert ps.deck_deliverable_rel("cards/output/xhs-01.png", out_dir) == "cards/output/xhs-01.jpg"
+
+
+def test_deck_deliverable_rel_keeps_png_without_sidecar(tmp_path):
+    """没转成 JPEG（Pillow 缺席/旧产物）就照旧登记 PNG，不能登记出不存在的文件。"""
+    out_dir = tmp_path / "poster"
+    (out_dir / "cards" / "output").mkdir(parents=True)
+    (out_dir / "cards" / "output" / "xhs-01.png").write_bytes(b"png")
+    assert ps.deck_deliverable_rel("cards/output/xhs-01.png", out_dir) == "cards/output/xhs-01.png"
+    assert ps.deck_deliverable_rel("cards/output/xhs-01.jpg", out_dir) == "cards/output/xhs-01.jpg"
+
+
+# --------------------------------------------------------------------------- #
+# _run_deck：1x 渲染 + 登记 JPEG 侧车（不真起 chromium，渲染器被替身接管）
+# --------------------------------------------------------------------------- #
+
+def test_run_deck_renders_1x_and_registers_jpeg(fake_ctx, tmp_path, monkeypatch):
+    """组图阶段的三条口径：scale=1、登记 JPEG（有侧车时）、meta 尺寸是实际像素。
+
+    回归（2026-09-19）：这里原来写死 scale=2 且 meta 里手写 w*2，产出 2160×2880 / 20MB
+    的 PNG；而小红书原生口径就是 1080×1440、上传还会被平台再压一遍。
+    """
+    out_dir = tmp_path / "work"
+    deck_out = out_dir / "cards" / "output"
+    deck_out.mkdir(parents=True)
+    frames = []
+    for i in (1, 2):
+        png = deck_out / ("xhs-%02d.png" % i)
+        png.write_bytes(b"png")
+        png.with_suffix(".jpg").write_bytes(b"jpg")      # JPEG 侧车（投递那份）
+        frames.append({"id": "xhs-%02d" % i, "path": str(png), "w": 1080, "h": 1440,
+                       "jpegBytes": 300_000})
+    (out_dir / "cards" / "index.html").write_text("<html></html>", encoding="utf-8")
+
+    seen: dict = {}
+    monkeypatch.setattr(ps.cards_deck, "enabled", lambda mode: True)
+    monkeypatch.setattr(ps.cards_deck, "build", lambda *a, **k: {
+        "plan": [{"kind": "cover"}, {"kind": "figure"}], "theme": "midnight-ink"})
+    monkeypatch.setattr(ps.cards_deck, "render", lambda d, **kw: seen.update(kw) or {
+        "ok": True, "count": 2, "scale": 1, "jpegs": 2, "frames": frames})
+    monkeypatch.setattr(ps.cards_deck, "validate",
+                        lambda d, **k: {"fails": 0, "warns": 0, "sections": 2, "clean": 2, "details": []})
+
+    ctx = fake_ctx(work=out_dir)
+    ctx.settings = SimpleNamespace(poster_deck="auto")
+    asyncio.run(ps._run_deck(ctx, {"title": "论文海报", "venue": "会议"}, None, {}, str(tmp_path), out_dir))
+
+    assert seen.get("scale") == 1, "组图必须按 1x（1080×1440）渲染"
+    imgs = [a for a in ctx.artifacts if a["kind"] == "image"]
+    assert [a["rel"] for a in imgs] == ["cards/output/xhs-01.jpg", "cards/output/xhs-02.jpg"]
+    assert imgs[0]["meta"]["width"] == 1080 and imgs[0]["meta"]["height"] == 1440
+    assert imgs[0]["meta"]["bytes"] == 300_000
+    assert ctx.state_of("小红书组图（guizang 技能）") == "pass"
 
 
 def test_write_spec_prompt_carries_figure_list_and_brief(fake_ctx, make_run):
