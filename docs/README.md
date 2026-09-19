@@ -18,6 +18,7 @@
 | [`research/paper-dissemination-agents-landscape.md`](research/paper-dissemination-agents-landscape.md) | 论文传播类 Agent 生态调研（各平台工具链盘点） | 有效 |
 | [`research/upstream-repos.md`](research/upstream-repos.md) | `reference/upstream/` 上游仓库登记表（来源/HEAD/借用点/许可证），是 `ops/sync_upstream.sh` 的唯一输入；当前 **28 个** | 有效 |
 | [`research/paper-share-skills-run-notes.md`](research/paper-share-skills-run-notes.md) | upstream `paper-share-skills` 实跑笔记（Paper2Video → B站投稿）与踩坑 | 记录 |
+| [`research/poster-visual-system-repos.md`](research/poster-visual-system-repos.md) | 小红书/知乎出图的**现成仓库与 skill 选型**（星数/许可/路线）、为什么走"移植视觉系统"、AGPL 边界 | 有效 |
 | [`windows-deployment.md`](windows-deployment.md) | 小红书 MCP 跑在 Windows：混合部署架构、缓存重定向、实测坑位 | 有效 |
 | [`xhs-account-safety.md`](xhs-account-safety.md) | 小红书账号安全：风控发生了什么、护栏（访问预算 + 登录态缓存）、恢复期注意事项 | 有效 |
 | [`evidence/`](evidence/) | 验收证据：小红书测试帖截图等 | — |

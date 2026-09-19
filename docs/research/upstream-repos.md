@@ -37,7 +37,7 @@
 | 目录 | 上游 | HEAD | 最后提交 | 体积 | 我们借用什么 |
 | --- | --- | --- | --- | --- | --- |
 | `paper-share-skills` | [yhbcode000/paper-share-skills](https://github.com/yhbcode000/paper-share-skills) | `bd2f48a` | 2026-08-12 | 7.2M | PDF→MinerU md→Beamer→配音视频→B站；`pdf-to-markdown`、`paper-to-beamer` 等 8 个技能 |
-| `guizang-social-card-skill` | [op7418/guizang-social-card-skill](https://github.com/op7418/guizang-social-card-skill) | `cf4b810` | 2026-07-02 | 4.5M | 社交卡片的分栏排版与配色（卡片图 HTML 模板参考） |
+| `guizang-social-card-skill` | [op7418/guizang-social-card-skill](https://github.com/op7418/guizang-social-card-skill) | `cf4b810` | 2026-07-02 | 4.5M | 社交卡片的**版式规则**（安全边、封面结构、栏目序号化）。⚠️ AGPL-3.0：**只读规则、不抄 CSS/模板**；我们的实现是自写的 `apps/papercast-server/app/modules/poster_theme.py`（选型见 `poster-visual-system-repos.md`） |
 | `paper-to-wechat` | [flyanx/paper-to-wechat](https://github.com/flyanx/paper-to-wechat) | `0a7ffd8` | 2026-08-12 | 3.3M | 论文→公众号文章的排版与配图 |
 | `wechat-article-skills` | [aiworkskills/wechat-article-skills](https://github.com/aiworkskills/wechat-article-skills) | `985bfbe` | 2026-09-17 | 2.6M | 公众号写作技能集（R2 渠道扩展） |
 

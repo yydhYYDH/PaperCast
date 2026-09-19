@@ -78,11 +78,19 @@ SPEC_USER = """论文：{title}
 
 PRESETS_RENDER: list[tuple[str, str, str, str]] = [
     # (preset, 输出名, 用哪份 spec, 说明)
-    ("conf", "poster", "spec", "会议海报 48×36in（打印/存档）"),
+    # 顺序 = 掉档顺序：信息流先出（小红书首图在最前），够不着再往后掉。
+    ("xhs-cover", "poster-xhs-cover", "cover", "小红书首图 1080×1440（3:4 封面：大标题 + 主图 + 标签）"),
     ("xhs-long", "poster-xhs-long", "spec", "小红书/知乎竖长图 1080×2400"),
     ("zhihu", "poster-zhihu", "spec", "知乎正文横版 1600×1200"),
     ("bili-cover", "poster-bili-cover", "cover", "B 站视频封面 1920×1080"),
+    ("conf", "poster", "spec", "会议海报 48×36in（打印/存档）"),
 ]
+
+# 画布归属的平台。前端作品库按命名记号推平台（`src/data/library.ts` 的 platformOf），
+# 同时一直想要后端给 meta.platform —— 这里补上，省得它继续猜文件名。
+PRESET_PLATFORM: dict[str, str] = {
+    "xhs-cover": "xhs", "xhs-long": "xhs", "zhihu": "zhihu", "bili-cover": "bilibili", "conf": "generic",
+}
 
 NUM_RE = re.compile(r"\d+(?:\.\d+)?")
 
@@ -340,6 +348,7 @@ async def run_poster(ctx) -> None:
     figs_arg = os.pathsep.join([str(intake_dir / "images"), str(out_dir)])
 
     reports: list[dict[str, Any]] = []
+    preview_html: Optional[str] = None
     for preset, out_name, which, note in PRESETS_RENDER:
         if which not in specs:
             continue
@@ -361,9 +370,20 @@ async def run_poster(ctx) -> None:
         if rep.get("dropped_blocks"):
             detail += f" · 已按优先级砍掉 {rep['dropped_blocks']} 个次要块"
         ctx.check(f"画布 · {note}", state, detail if rep.get("ok") else detail + f" —— {rep.get('reason', '存在溢出')}")
-        ctx.artifact("image", f"{note}", f"{out_name}.png", preview=True, meta={"width": rep.get("width"), "height": rep.get("height")})
+        ctx.artifact(
+            "image", f"{note}", f"{out_name}.png", preview=True,
+            meta={
+                "width": rep.get("width"), "height": rep.get("height"),
+                "preset": preset, "platform": PRESET_PLATFORM.get(preset, "generic"),
+            },
+        )
+        if preview_html is None:      # 第一张画布（小红书首图）的 HTML 给查看器当预览
+            preview_html = out_name
         ctx.progress(min(0.95, 0.15 + 0.8 * len(reports) / max(1, len(PRESETS_RENDER))))
 
+    # 查看器（PosterViewer）按 kind==='html' 找预览；以前只登记 PNG，于是界面上永远是「尚未产出」。
+    if preview_html:
+        ctx.artifact("html", "首图预览（可读可改的 HTML 原文）", f"{preview_html}.html", preview=True)
     ctx.artifact("json", "版面描述 poster.spec.json（可复现、可换后端重排）", "poster.spec.json", preview=False)
     if cover:
         ctx.artifact("json", "封面版面描述", "poster.spec.cover.json", preview=False)

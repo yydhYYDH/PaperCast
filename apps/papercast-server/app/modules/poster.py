@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import argparse
-import html as html_mod
 import json
 import shutil
 import subprocess
@@ -26,6 +25,11 @@ import os
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+# 视觉系统（版式 + 配色 + 字阶）在 poster_theme.py：本文件只管机制（二分字号、几何闸门、
+# 渠道预设、出图）。换风格改那一个文件即可。
+from . import poster_theme
+from .poster_theme import build_html  # noqa: F401  （对外保留 poster.build_html 这个入口）
+
 SIZE_IN = (48.0, 36.0)          # 会议海报默认 48x36 英寸横版（唯一需要"英寸"的场景：打印）
 DPI = 48                        # 2304x1728 px；打印可提高到 150（7200x5400）
 SCALE_MIN = 0.45                # 自适应字号的下界；到界还溢出说明内容太多，需要删字数
@@ -33,8 +37,11 @@ SCALE_MIN = 0.45                # 自适应字号的下界；到界还溢出说�
 # 渠道画布预设：数字渠道只认像素，不认英寸。每个预设带一个 tag，
 # spec 里的块可以用 "sizes": ["wide"] / ["tall"] 声明自己上哪些画布 —— 窄画布装不下就减块，
 # 而不是把字缩到看不清。
-BODY_CQW = 0.97                  # CSS 里正文的字号常量（见 build_html 的 .panel p/li）
+BODY_CQW = poster_theme.BODY_CQW  # 唯一事实源在 poster_theme：正文 .panel li/p 的 cqw 常量
 LEGIBILITY_FLOOR = 0.75          # 字号最多缩到目标值的 75%，再小就判"装不下"，去减内容而不是缩字
+# 封面（cover 版式）没有正文可比，可读性改成「标题必须占到画布宽度的这个百分比」。
+# 4.0% 的含义：1080 宽的小红书首图 → 标题 ≥43px（手机上三米外认得出），1920 宽的 B 站封面 → ≥77px。
+COVER_H1_FLOOR_PCT = 4.0
 
 PRESETS: dict[str, dict[str, Any]] = {
     # body_px 是**在最终像素画布上的目标正文大小**：cqw 相对宽度，所以同一个 CSS 在 1080 宽的
@@ -45,8 +52,10 @@ PRESETS: dict[str, dict[str, Any]] = {
     "bili":     {"px": (1920, 1080), "tag": "wide", "cols_max": 3, "body_px": 22, "note": "B 站视频封面 / 横版头图（16:9）"},
     "xhs":      {"px": (1080, 1440), "tag": "tall", "cols_max": 1, "body_px": 30, "note": "小红书首图（3:4，单栏）"},
     "xhs-long": {"px": (1080, 2400), "tag": "tall", "cols_max": 1, "body_px": 26, "note": "小红书/知乎竖长图（1080x2400，单栏）"},
-    # 封面类：内容很少，所以从一个大倍率往下二分，求「能放多大放多大」——封面要的就是大标题
-    "bili-cover": {"px": (1920, 1080), "tag": "cover", "cols_max": 1, "body_px": 26, "scale_start": 2.6, "note": "B 站视频封面：大标题 + 主视觉"},
+    # 封面类：内容很少（标题 + 一句钩子 + 3 个标签 + 一张主视觉），从一个大倍率往下二分求「能放多大放多大」。
+    # 纸面编辑风的封面标题本来就是「两三行的大字」，所以起点比旧版（2.6）低：再大就会一个字一行。
+    "xhs-cover":  {"px": (1080, 1440), "tag": "cover", "cols_max": 1, "body_px": 30, "scale_start": 1.0, "note": "小红书首图封面（3:4 竖版：大标题 + 主视觉 + 底部标签）"},
+    "bili-cover": {"px": (1920, 1080), "tag": "cover", "cols_max": 1, "body_px": 26, "scale_start": 1.15, "note": "B 站视频封面：左侧大标题 + 右侧主视觉"},
 }
 
 
@@ -122,205 +131,6 @@ def load_spec(path: str | Path) -> dict[str, Any]:
     if not cols and data.get("layout") != "cover":
         raise ValueError("spec 缺少 columns")
     return data
-
-
-def _esc(s: Any) -> str:
-    return html_mod.escape(str(s if s is not None else ""))
-
-
-def _items_html(block: dict[str, Any]) -> str:
-    items = block.get("items") or []
-    if items:
-        lis = "".join(f"<li>{_esc(x)}</li>" for x in items)
-        return f"<ul>{lis}</ul>"
-    if block.get("text"):
-        return f"<p>{_esc(block['text'])}</p>"
-    return ""
-
-
-def _block_html(block: dict[str, Any], idx: int, col: int, last: bool) -> str:
-    grow = " grow" if last else ""
-    kind = block.get("kind", "panel")
-    name = f"c{col + 1}-{idx}"
-    if kind == "figure":
-        src = _esc(block.get("src", ""))
-        cap = block.get("caption") or ""
-        num = block.get("number") or ""
-        cap_html = (
-            f'<figcaption><b>Fig. {_esc(num)}</b> {_esc(cap)}</figcaption>' if cap and num
-            else (f"<figcaption>{_esc(cap)}</figcaption>" if cap else "")
-        )
-        return f'<figure class="figure{grow}" data-panel="{name}"><img src="{src}" alt="" />{cap_html}</figure>'
-    accent = f' style="--accent:{_esc(block["accent"])}"' if block.get("accent") else ""
-    kicker = f'<span class="kicker">{_esc(block["kicker"])}</span>' if block.get("kicker") else ""
-    return (
-        f'<section class="panel{grow}" data-panel="{name}"{accent}>'
-        f'{kicker}<h2>{_esc(block.get("title", ""))}</h2>{_items_html(block)}</section>'
-    )
-
-
-def build_html(spec: dict[str, Any], *, size_in: tuple[float, float] = SIZE_IN, scale: float = 1.0) -> str:
-    """spec → 自包含 HTML。尺寸一律 calc(var(--s) * Ncqw)：cqw 让版式与像素无关，--s 控制整体字号。"""
-    w_in, h_in = size_in
-    ratio = round(w_in / h_in, 4)
-    theme = spec.get("theme") or {}
-    css_vars = "".join(f"--{k}:{_esc(v)};" for k, v in theme.items())
-
-    header_bits = []
-    if spec.get("kicker"):
-        header_bits.append(f'<div class="kicker">{_esc(spec["kicker"])}</div>')
-    header_bits.append(f"<h1>{_esc(spec['title'])}</h1>")
-    if spec.get("subtitle"):
-        header_bits.append(f'<p class="subtitle">{_esc(spec["subtitle"])}</p>')
-    meta_bits = []
-    if spec.get("authors"):
-        meta_bits.append(f'<div class="authors">{_esc(" · ".join(spec["authors"]))}</div>')
-    if spec.get("affiliation"):
-        meta_bits.append(f'<div class="aff">{_esc(spec["affiliation"])}</div>')
-    if spec.get("venue"):
-        meta_bits.append(f'<div class="venue">{_esc(spec["venue"])}</div>')
-    if meta_bits:
-        header_bits.append('<div class="meta">' + "".join(meta_bits) + "</div>")
-    if spec.get("chips"):
-        header_bits.append('<div class="chips">' + "".join(f"<span>{_esc(c)}</span>" for c in spec["chips"]) + "</div>")
-
-    teaser = ""
-    if spec.get("teaser"):
-        t = spec["teaser"]
-        cap = f'<figcaption>{_esc(t.get("caption", ""))}</figcaption>' if t.get("caption") else ""
-        teaser = (
-            f'<figure class="teaser" data-region="teaser" data-panel="teaser">'
-            f'<img src="{_esc(t["src"])}" alt="" />{cap}</figure>'
-        )
-
-    cols_html = []
-    for ci, blocks in enumerate(spec["columns"]):
-        inner = "".join(_block_html(b, i, ci, last=(i == len(blocks) - 1)) for i, b in enumerate(blocks))
-        cols_html.append(f'<div class="col" data-region="col">{inner}</div>')
-
-    if spec.get("layout") == "cover":
-        cv_bits = []
-        if spec.get("kicker"):
-            cv_bits.append(f'<div class="kicker">{_esc(spec["kicker"])}</div>')
-        cv_bits.append(f"<h1>{_esc(spec['title'])}</h1>")
-        if spec.get("subtitle"):
-            cv_bits.append(f'<p class="subtitle">{_esc(spec["subtitle"])}</p>')
-        meta = " · ".join([x for x in [
-            " ".join(spec.get("authors") or []), spec.get("affiliation") or "", spec.get("venue") or "",
-        ] if x])
-        if meta:
-            cv_bits.append(f'<div class="meta-line">{_esc(meta)}</div>')
-        if spec.get("chips"):
-            cv_bits.append('<div class="chips">' + "".join(f"<span>{_esc(c)}</span>" for c in spec["chips"]) + "</div>")
-        hero_src = _esc((spec.get("teaser") or {}).get("src", ""))
-        hero = f'<img class="hero" src="{hero_src}" alt="" />' if hero_src else ""
-        return f"""<!doctype html>
-<html lang="{_esc(spec.get('lang', 'zh'))}">
-<head>
-<meta charset="utf-8" />
-<title>{_esc(spec['title'])} — cover</title>
-<style>
-  :root{{ --s:{scale:g}; --ink:#0b0f18; --ink2:#161d2e; --paper:#ffffff; {css_vars} }}
-  *{{box-sizing:border-box;margin:0;padding:0}}
-  html,body{{background:var(--ink)}}
-  body{{display:flex;justify-content:center;font-family:"Helvetica Neue",Helvetica,Arial,"PingFang SC","Microsoft YaHei",sans-serif}}
-  .cover{{container-type:inline-size;width:100%;aspect-ratio:{ratio};position:relative;overflow:hidden;
-          background:linear-gradient(115deg,var(--ink) 0%,var(--ink2) 62%,#22304d 100%);display:flex;align-items:center}}
-  .cover::after{{content:"";position:absolute;right:-8cqw;top:-12cqw;width:52cqw;height:52cqw;border-radius:50%;
-                 background:radial-gradient(circle,rgba(77,124,254,.30),transparent 68%)}}
-  .text{{position:relative;z-index:2;width:57%;padding:0 0 0 5.2cqw;display:flex;flex-direction:column;
-         gap:calc(var(--s)*.7cqw);color:#fff}}
-  .kicker{{font-size:calc(var(--s)*1.0cqw);letter-spacing:.24em;text-transform:uppercase;color:#8fa6d8}}
-  h1{{font-size:calc(var(--s)*4.25cqw);line-height:1.05;letter-spacing:-.02em;font-weight:800}}
-  .subtitle{{font-size:calc(var(--s)*1.5cqw);color:#c7d3ee;line-height:1.35}}
-  .meta-line{{font-size:calc(var(--s)*1.0cqw);color:#8fa6d8}}
-  .chips{{display:flex;flex-wrap:wrap;gap:calc(var(--s)*.6cqw);margin-top:calc(var(--s)*.3cqw)}}
-  .chips span{{font-size:calc(var(--s)*.95cqw);background:rgba(255,255,255,.10);border:.08cqw solid rgba(255,255,255,.22);
-               border-radius:2cqw;padding:calc(var(--s)*.3cqw) calc(var(--s)*.95cqw);color:#e8eeff}}
-  .art{{position:relative;z-index:1;flex:1;height:100%;display:flex;align-items:center;justify-content:center;padding:4.5cqw 4.5cqw 4.5cqw 2cqw}}
-  .art img{{max-width:100%;max-height:100%;object-fit:contain;border-radius:1.1cqw;
-            box-shadow:0 1.4cqw 3.4cqw rgba(0,0,0,.42);background:#fff}}
-  .src{{position:absolute;left:5.2cqw;bottom:2.6cqw;z-index:2;font-size:calc(var(--s)*.8cqw);color:#7d8cad}}
-</style>
-</head>
-<body>
-<div class="cover">
-  <div class="text" data-panel="cover-text">{''.join(cv_bits)}</div>
-  <div class="art" data-panel="cover-art" data-region="art">{hero}</div>
-  <div class="src">{_esc(spec.get('footer') or '')}</div>
-</div>
-</body>
-</html>
-"""
-
-    footer = spec.get("footer") or ""
-    note = spec.get("generated_note") or ""
-    footer_html = (
-        f'<footer data-region="footer"><span class="src">{_esc(footer)}</span><span class="gen">{_esc(note)}</span></footer>'
-        if footer or note else ""
-    )
-
-    return f"""<!doctype html>
-<html lang="{_esc(spec.get('lang', 'en'))}">
-<head>
-<meta charset="utf-8" />
-<title>{_esc(spec['title'])} — poster</title>
-<style>
-  :root{{ --s:{scale:g}; --ink:#0e1524; --ink2:#1b2437; --line:#cfd7e8; --paper:#f5f7fc; --muted:#5b6780;
-          --accent:#4d7cfe; --accent2:#ff4d6d; --accent3:#12b981; {css_vars} }}
-  *{{box-sizing:border-box;margin:0;padding:0}}
-  html,body{{background:#0b0f18}}
-  body{{display:flex;justify-content:center;font-family:"Helvetica Neue",Helvetica,Arial,"PingFang SC","Microsoft YaHei",sans-serif}}
-  .poster{{container-type:inline-size;width:100%;aspect-ratio:{ratio};
-           background:var(--paper);color:var(--ink);display:flex;flex-direction:column;overflow:hidden}}
-  header{{background:linear-gradient(120deg,var(--ink),var(--ink2));color:#fff;
-          padding:calc(var(--s)*1.35cqw) 2.4cqw calc(var(--s)*1.15cqw)}}
-  .kicker{{font-size:calc(var(--s)*.92cqw);letter-spacing:.3em;text-transform:uppercase;color:#8fa6d8}}
-  h1{{font-size:calc(var(--s)*3.0cqw);line-height:1.07;letter-spacing:-.02em;font-weight:800;margin-top:calc(var(--s)*.45cqw)}}
-  .subtitle{{font-size:calc(var(--s)*1.22cqw);color:#c7d3ee;margin-top:calc(var(--s)*.6cqw);max-width:80%}}
-  .meta{{display:flex;flex-wrap:wrap;gap:calc(var(--s)*.35cqw) 1.6cqw;align-items:baseline;
-         margin-top:calc(var(--s)*.8cqw);font-size:calc(var(--s)*1.08cqw);color:#dbe5fb}}
-  .meta .aff,.meta .venue{{color:#8fa6d8}}
-  .chips{{display:flex;flex-wrap:wrap;gap:calc(var(--s)*.55cqw);margin-top:calc(var(--s)*.8cqw)}}
-  .chips span{{font-size:calc(var(--s)*.86cqw);background:rgba(255,255,255,.1);border:.08cqw solid rgba(255,255,255,.22);
-               border-radius:2cqw;padding:calc(var(--s)*.28cqw) calc(var(--s)*.85cqw);color:#e8eeff}}
-  .teaser{{margin:calc(var(--s)*.85cqw) 2.4cqw 0;background:#fff;border:.12cqw solid var(--line);border-radius:.9cqw;
-           padding:calc(var(--s)*.6cqw);display:flex;flex-direction:column;gap:calc(var(--s)*.4cqw)}}
-  .teaser img{{width:100%;max-height:calc(var(--s)*11.5cqw);object-fit:contain;display:block}}
-  .teaser figcaption{{font-size:calc(var(--s)*.86cqw);color:var(--muted);line-height:1.35}}
-  .cols{{flex:1;min-height:0;display:grid;grid-template-columns:repeat({len(spec['columns'])},1fr);
-         gap:calc(var(--s)*.92cqw);padding:calc(var(--s)*.9cqw) 2.4cqw}}
-  .col{{display:flex;flex-direction:column;gap:calc(var(--s)*.92cqw);min-height:0}}
-  .panel,.figure{{background:#fff;border:.12cqw solid var(--line);border-radius:.9cqw;
-                  padding:calc(var(--s)*.95cqw) calc(var(--s)*1.1cqw);
-                  box-shadow:0 .25cqw .8cqw rgba(16,24,40,.05);overflow:hidden}}
-  .panel h2{{font-size:calc(var(--s)*1.32cqw);letter-spacing:-.01em;display:flex;align-items:center;gap:.55cqw;
-             margin-bottom:calc(var(--s)*.55cqw)}}
-  .panel h2::before{{content:"";width:.5cqw;height:calc(var(--s)*1.32cqw);border-radius:.3cqw;background:var(--accent)}}
-  .panel .kicker{{display:block;font-size:calc(var(--s)*.74cqw);letter-spacing:.22em;color:var(--muted);text-transform:uppercase}}
-  .panel p,.panel li{{font-size:calc(var(--s)*.97cqw);line-height:1.4;color:#26314a}}
-  .panel ul{{padding-left:calc(var(--s)*1.3cqw);display:flex;flex-direction:column;gap:calc(var(--s)*.4cqw)}}
-  .panel li::marker{{color:var(--accent)}}
-  .figure{{display:flex;flex-direction:column;gap:calc(var(--s)*.45cqw);padding:calc(var(--s)*.7cqw)}}
-  .figure img{{width:100%;object-fit:contain;display:block;max-height:calc(var(--s)*17cqw)}}
-  .figure figcaption{{font-size:calc(var(--s)*.84cqw);color:var(--muted);line-height:1.35}}
-  .figure figcaption b{{color:#324061}}
-  .grow{{flex:1 1 auto;min-height:0}}
-  footer{{display:flex;justify-content:space-between;gap:2cqw;background:var(--ink);color:#a9b8d8;
-          padding:calc(var(--s)*.95cqw) 2.6cqw;font-size:calc(var(--s)*.9cqw)}}
-</style>
-</head>
-<body>
-<div class="poster">
-  <header data-region="header">{''.join(header_bits)}</header>
-  {teaser}
-  <div class="cols" data-region="cols">{''.join(cols_html)}</div>
-  {footer_html}
-</div>
-</body>
-</html>
-"""
-
 
 def stage_figures(spec: dict[str, Any], figures_dir: Path | str, out_dir: Path) -> dict[str, Any]:
     """把 spec 引用到的图拷进 <out>/figures/，并把 src 改成相对路径（HTML 自包含、可搬运）。
@@ -422,6 +232,8 @@ def geometry_report(info: dict[str, Any], width: int, height: int, *, scale: flo
         "panel_fill": round(panel_area / cols_area, 4) if cols_area else None,
         "body_px": round(BODY_CQW * width / 100.0 * scale, 1),
         "fonts_px": info.get("fonts") or {},
+        # 封面没有正文：可读性判据改用标题字号（占画布宽度的百分比），见 COVER_H1_FLOOR_PCT
+        "h1_pct": round(100.0 * float((info.get("fonts") or {}).get("h1") or 0) / max(width, 1), 2),
         "regions": {
             k: ({"w": v[0].get("w"), "h": v[0].get("h")} if len(v) == 1 else
                 {"w": max(x.get("w") or 0 for x in v), "h": max(x.get("h") or 0 for x in v), "count": len(v)})
@@ -511,7 +323,15 @@ def make_poster(
     report["preset"] = preset or None
     report["columns"] = len(spec.get("columns") or [])
     report["body_px_target"] = body_px_target or None
-    if body_px_target and report.get("body_px", 0) < body_px_target * LEGIBILITY_FLOOR - 0.5:
+    if spec.get("layout") == "cover":
+        # 封面：标题就是全部。标题太小 = 这条渠道白出（信息流里点不进去）。
+        if report["h1_pct"] < COVER_H1_FLOOR_PCT:
+            report["ok"] = False
+            report["reason"] = (
+                "封面标题只有画布宽度的 %.1f%%（下限 %g%%）—— 要么把标题压到 15 字内，要么换更大的画布"
+                % (report["h1_pct"], COVER_H1_FLOOR_PCT)
+            )
+    elif body_px_target and report.get("body_px", 0) < body_px_target * LEGIBILITY_FLOOR - 0.5:
         report["ok"] = False
         report["reason"] = (
             "画布装不下：正文只有 %.1fpx（目标 %gpx）—— 该渠道要减内容，或换更大画布（xhs → xhs-long）"

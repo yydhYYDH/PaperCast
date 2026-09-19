@@ -26,68 +26,120 @@
 | 会议海报 / 打印 / 存档 | `conf` | 2304×1728（48×36in@48dpi） | 3 | 18px≈27pt | 组会、答辩、会议墙报 |
 | 知乎 · 公众号正文横版图 | `zhihu` | 1600×1200（4:3） | 3 | 16.5–22px | 文章内嵌，可点开放大 |
 | B 站/知乎横版**信息图** | `bili` | 1920×1080（16:9） | 3 | 17px | 一屏讲清方法的横图 |
-| 小红书首图（封面） | `xhs` | 1080×1440（3:4） | 1 | 26–30px | 组图第 1 张，只放 hero + 几句话 |
+| 小红书首图（封面版式） | `xhs-cover` | 1080×1440（3:4） | cover 版式 | 标题 ≥4% 画布宽 | **信息流首图**：大标题 + 一句钩子 + 论文主图 + 标签条 |
+| 小红书单栏卡（正文版式） | `xhs` | 1080×1440（3:4） | 1 | 26–30px | 单栏正文卡（与 `cards/render.py` 的组图并存） |
 | 小红书/知乎 竖长图（信息图） | `xhs-long` | 1080×2400（3:4 长） | 1 | 23–26px | 一图讲完整篇论文 |
 | 小红书正文卡片 | （`app/cards/render.py`） | 1080×1440 ×N | — | PIL 固定版式 | 组图第 2..N 张 |
-| B 站视频封面 | `bili-cover` | 1920×1080（16:9） | cover 版式 | 标题 212px | 视频封面：暗底 + 大标题 + 主视觉 |
+| B 站视频封面 | `bili-cover` | 1920×1080（16:9） | cover 版式 | 标题 ≥4% 画布宽 | 视频封面：左大标题 + 右主视觉（横竖两种封面排法见 §2.4） |
 
 > 公众号封面（900×383）按 2026-09-19 的决定**不做**；`wechat` 预设已从代码里移除。
 
 **为什么必须按渠道重排而不是缩放**：CSS 尺寸用 `cqw`（相对画布宽度），同一份 CSS 放到 1080 宽的画布上，正文字号就只有 2304 宽时的 47% —— 会掉到 10px 左右，手机上完全看不清。
 所以 `poster.py` 按 `body_px`（目标正文像素）反推基础倍率，并设 `LEGIBILITY_FLOOR=0.75`：字号最多缩到目标值的 75%，再小就**判失败**，提示去减内容或换更大的画布。
 
-实测（arXiv 2510.05096）：
+实测（2026-09-19 换纸面编辑风之后，DeepRare 真 run `run_36997981259d` 的 spec/原图，`var/scratch/poster-review/stage/`）：
 
 | 预设 | 结果 |
 | --- | --- |
-| `conf` 2304×1728 | ✅ body 18px / `panel_fill` 0.979 |
-| `zhihu` 1600×1200（用 `poster.spec.wide.json`） | ✅ body 16.5px（刚好在下限） |
-| `bili` 1920×1080（用 `poster.spec.wide.json`） | ✅ body 17.2px |
-| `bili-cover` 1920×1080（用 `poster.spec.bili-cover.json`） | ✅ **标题 212px**（占宽 11%，视频封面量级） |
-| `xhs` 1080×1440（用 `poster.spec.cover.json`） | ✅ body 25.7px |
-| `xhs-long` 1080×2400（用主 spec） | ✅ body 22.8px / fill 0.944 |
-| `zhihu` + 主 spec（8 个块塞 4:3） | ❌ 装不下 —— 这就是"必须按渠道砍内容"的证据 |
-| `xhs` + 主 spec | ❌ 同上（21 条 bullet 塞不进 3:4 一栏） |
+| `xhs-cover` 1080×1440 | ✅ 标题 79px（占宽 7.3%）· 无溢出 |
+| `xhs-long` 1080×2400 | ✅ body 21.5px / `panel_fill` 0.930 |
+| `zhihu` 1600×1200 | ✅（第 3 次尝试：**砍掉 2 个次要块**后通过）body 16.5px / fill 0.730 |
+| `bili-cover` 1920×1080 | ✅ 标题 98px（占宽 5.1%） |
+| `conf` 2304×1728 | ✅ body 21.4px / fill 0.835 |
+
+**`zhihu` 那条就是「必须按渠道砍内容」的活证据**：8 个块塞 4:3 时正文会被压到下限以下还溢出，`poster_stage._render_with_budget` 按优先级砍到第 2 块才过，日志里如实写「装不下，砍掉 2 个次要块后通过」。
+（换风格前这条是 ❌ 且不砍块也"通过"—— 那是**闸门瞎了**，见 §2.3。）
 
 同一份内容预算下，**竖长图（1080×2400）是唯一能装下"论文全貌信息图"的数字画布**；首图和横版都必须砍到 3 个块左右。窄画布用 `items_tall` 提供更短的条目、用 `sizes: ["wide"]` 把次要块排除。
 
-### cover 版式（视频封面）
+### cover 版式（小红书首图 / 视频封面）
 
-封面不是"缩小版海报"，是另一种版式：spec 里写 `"layout": "cover"`（不需要 `columns`），渲染成**暗底渐变 + 左侧大标题/副标题/标签 + 右侧主视觉卡片**。
-字号比海报大一个量级（`h1` 用 4.25cqw 而不是 3.0cqw），并且这类内容很少，所以预设用 `scale_start` **从大倍率往下二分**（`bili-cover` 从 2.6 起），求"能放多大放多大"—— 而不是海报那种"刚好不溢出"。
-主视觉位（`.art`）就是路线 C 的 AI 生图落点：把 `fig-1-teaser.png` 换成千问出的 hero 即可。
+封面不是"缩小版海报"，是另一种版式：spec 里写 `"layout": "cover"`（不需要 `columns`），
+渲染成**纸面上的大标题 + 一句钩子 + 论文主图 + 标签条**（横画布左右分栏、竖画布上下堆叠，见 §2.2）。
+这类内容很少，所以预设用 `scale_start` 从一个大倍率往下二分，求"能放多大放多大"；因为封面的
+判据是标题字号（`h1_pct ≥ 4%`），起点不能太高 —— 旧版从 2.6 起会把中文标题挤成**一个字一行**。
+主视觉位（`.art`）就是路线 C 的 AI 生图落点：把 `fig-1.png` 换成千问出的 hero 即可。
 
 ### 落到 run 目录的哪里
 
 ```
 var/runs/<runId>/
 ├── article/cards/p1..pN.png        ← 小红书组图（3:4，1080×1440）
-├── poster/poster.png               ← 会议海报（打印/存档）
+├── poster/poster-xhs-cover.png     ← 小红书首图（3:4 封面版式，信息流第一张）
 ├── poster/poster-xhs-long.png      ← 小红书/知乎竖长图
 ├── poster/poster-zhihu.png         ← 知乎正文横版
-├── poster/poster-bili.png          ← B 站封面
+├── poster/poster-bili-cover.png    ← B 站视频封面
+├── poster/poster.png               ← 会议海报（打印/存档；掉档顺序里排最后）
 ├── poster/poster.spec*.json        ← 版面描述（可复现、可换后端重排）
 └── publish/export/                 ← 投放兜底：title/content/首图
 ```
 
 ---
 
-## 2. 路线 A · 会议海报（`app/modules/poster.py`）
+## 2. 路线 A · 确定性排版（`app/modules/poster.py` 机制 + `poster_theme.py` 长相）
 
 ### 设计
 
 ```
 digest.json / 论文原文
-      ↓ （人/Agent 写成 poster.spec.json：标题、作者、栏目、引用哪些图）
-poster.py: spec → poster.html（cqw 版式，与像素无关）
+      ↓ （M2 写成 poster.spec.json：标题、作者、栏目、引用哪些图）
+poster.py:  spec → build_html()（cqw 版式，与像素无关）+ 二分 --s + 几何闸门 + 渠道预设
       ↓ ops/shot/render.mjs（chrome-headless-shell，横切 B 渲染底座）
-      ↓ 二分字号 --s：从 1.0 往下找到「不溢出的最大字号」
-poster.png（默认 48x36 in @ 48dpi = 2304x1728）+ poster.render.json（几何自检）
+poster-*.png + poster.render.json（自检：溢出 / 缺图 / 填充率 / 字号）
 ```
 
-- **内容与版式分离**：`poster.spec.json` 只描述"放什么"，`poster.py` 决定"怎么排"。换一篇论文只需要换 spec。
+**两个文件的分工**：`poster.py` 是引擎（二分字号、闸门、预设、出图，`make_poster` 是唯一入口）；
+`poster_theme.py` 是**视觉系统**（CSS + 两套版式）。换风格只动 `poster_theme.py`，引擎契约不变。
+
+- **内容与版式分离**：`poster.spec.json` 只描述"放什么"，版式决定"怎么排"。换一篇论文只需要换 spec。
 - **字号自适应**：全篇字号/间距都乘一个统一变量 `--s`，二分求"不溢出的最大字号"。这是 Paper2Poster 的 Painter-Commentor 循环的机械化版本 —— 不需要视觉模型，结果可复现。
-- **几何闸门**：渲染时用 DOM 实测每个 `[data-panel]` 的 `scrollHeight/clientHeight`，溢出即失败；`panel_fill`（正文面板面积 / 三栏面积）反映"栏内是否留大片空白"。
+
+### 2.1 视觉系统：纸面编辑风（2026-09-19 换掉旧版暗底墙报）
+
+面向**信息流**而不是论文墙报，三条判据（写在 `poster_theme.py` 的模块 docstring 里）：
+
+| 判据 | 做法 | 反面（旧版） |
+| --- | --- | --- |
+| 像一篇文章，不像一块展板 | 暖白纸面 `#f7f6f3` + 近黑 `#1a1918` + 1px 发丝线；层次靠字号对比与留白 | 深蓝黑渐变抬头 + 蓝色卡片 + 投影 |
+| 一个强调色 | 朱红 `#c8362a` 只出现在栏目标题序号（01/02）与 kicker 短杠 | 蓝/红/绿三色混用 |
+| 外框固定、字随内容二分 | 外边距用**不乘 `--s`** 的 cqw（每条渠道都留够安全边），内部字号乘 `--s` | 无 |
+
+配色不是新造的：`--paper` 就是前端 `src/style.css` 的 `--bg`，所以海报和产品界面是同一套语言。
+
+**不复制 AGPL 代码**：版式规则（安全边、封面结构、栏目序号化）参考了
+`reference/upstream/guizang-social-card-skill`（AGPL-3.0，只读）。CSS 与模板是照上述判据自己写的 ——
+本仓库是 MIT 且公开发布，抄进去会传染。仓库选型见 `docs/research/poster-visual-system-repos.md`。
+
+### 2.2 两套版式 + 三条版式规则
+
+- **网格版式**（默认）：文章式抬头 → 栏目（序号 + 发丝线分隔的要点）→ 页脚素材行。
+- **cover 版式**（`"layout": "cover"`）：大标题 + 一句钩子 + 论文主图 + 标签条。
+  **横画布（≥1.2）左右分栏，竖画布上下堆叠** —— 16:9 的视频封面和 3:4 的小红书首图是两种排法。
+- **密度旋钮 `--rhythm`**：横画布 0.72、竖画布 1.0。宽画布要"一屏讲完"、内容多，收紧间距；
+  竖长图还能往下滚，保持舒展。**收的是间距，不是字号** —— 字号下限由 `LEGIBILITY_FLOOR` 守着。
+- **主图规则**：横画布上通栏主图会当成**第一栏的导语图**（通栏横带在宽画布上会在图注右侧留一大片空档）；
+  竖画布上保留通栏，但排成"图左 + 图注右"的一行。
+
+### 2.3 几何闸门（三档判据，都是 fail-closed）
+
+| 闸门 | 判据 | 说明 |
+| --- | --- | --- |
+| 溢出 | 每个 `[data-panel]` 的 `scrollHeight - clientHeight > 2` 即失败 | 靠 `.col > *{min-height:0}` 让"装不下"表现为**面板被压扁并报溢出**，而不是被 `overflow:hidden` 静默裁掉 |
+| 可读性（网格） | `body_px ≥ 目标 × 0.75` | 目标按渠道给（见上表）；到下限还溢出就**减内容**，不许继续缩字 |
+| 可读性（封面） | `h1_pct ≥ 4.0%` 画布宽 | 封面没有正文，比标题：1080 宽的小红书首图 → 标题 ≥43px |
+| 填充率 | `panel_fill`（正文面板面积 / 栏位面积） | 反映"栏内是否留大片空白"；换风格时用它否掉了"卡片之间裂开一道缝"的排法（0.64） |
+
+### 2.4 产物登记（界面上看得见才算数）
+
+`poster_stage` 每渲染一张画布就登记一个 image 产物，`meta` 里带
+`{width, height, preset, platform}`（`platform` 给前端作品库用 —— 它一直在按文件名猜平台）；
+另外把**第一张画布（小红书首图）的 HTML** 登记为 `kind="html"` 的「首图预览」：
+查看器 `PosterViewer.vue` 是按 `kind === 'html'` 找预览的，以前只登记 PNG，所以那个页签一直显示「尚未产出」。
+
+> ⚠️ **2026-09-19 修的一个真 bug**：旧版 `.col` 的子项没设 `min-height:0`，
+> 内容装不下时会把整栏顶出画布再被 `.sheet{overflow:hidden}` 裁掉，而 `[data-panel]` 一个都不报溢出 ——
+> 于是 `zhihu` 这类"其实塞不下"的画布会**带着裁掉的半张图**判 pass。现在这类画布会如实报溢出。
+
 
 ### 命令
 
@@ -105,10 +157,15 @@ cd apps/papercast-server
 
 打印的 JSON 就是验收口径：`ok` / `overflow` / `broken_images` / `panel_fill` / `scale`。退出码 3 表示几何闸门不过。
 
-### 实测（arXiv 2510.05096 Paper2Video）
+### 二分收敛的样子（实例）
 
-`scale=0.81`（即字号是设计值的 81%）、8 个面板、`overflow=[]`、`broken_images=[]`、`panel_fill=0.9786`、`ok=true`。
-二分过程：`1.0 溢出 307px → 0.45 通过 → 0.725 通过 → 0.8625 溢出 106px → 0.7937 溢出 31px → 0.7593 通过 → 0.7765 溢出 5px`，7 次尝试收敛。
+`conf` 2304×1728、DeepRare 真 spec：从 `--s=1.0` 起，落到 `0.9565`（body 21.4px）通过；
+`zhihu` 1600×1200 同一份 spec：一路降到下限 `1.0631`（= 目标 22px 的 75%）还溢出，
+于是走 §1.5 那条"砍 2 个次要块"，砍完在 `1.0631` 通过 —— 每次尝试都记在
+`poster-<preset>.render.json` 的 `report.tries` 里，可复现、可解释。
+
+离线重放这套逻辑（不联网、不调 LLM，用真 run 的 spec/原图）：
+`apps/papercast-server/.venv/bin/python var/scratch/poster_stage_offline.py var/runs/<runId>/poster`
 
 ---
 
@@ -166,13 +223,26 @@ ops/imagegen.sh --prompt-file var/samples/papercast-lab/paper2video/poster/promp
 | 完整 chrome 起不来（crashpad `--database is required`） | `ops/shot/render.mjs` 优先选 `chrome-headless-shell`；可用 `SHOT_CHROME` 覆盖 |
 | 本机没有 poppler / ImageMagick / LaTeX | PDF 出图只能走 PyMuPDF；海报不能走 LaTeX/Beamer，只能走 HTML 渲染 |
 | 中文字体只命中 `~/.local/share/fonts/waic/msyh.ttc` | 卡片与海报都用它；换机器要装 `fonts-noto-cjk` |
+| 本机**没有中文衬线体**（`fc-match "Noto Serif CJK SC"` → DejaVu Sans） | 纸面编辑风的标题走「重字重 + 紧字距」的黑体，不写 `serif`/`Songti` —— 写了会回退到 DejaVu 造成中英混排跳变。要真衬线得先装字体，再改 `poster_theme.FONT_STACK` |
+| CSS `text-wrap:balance` 在中文里会**拆词**（"可追溯推/理"） | 只用在**封面短标题**（避免尾行只剩两三个字）；长中英混排标题用自然断行。真正的修复要词典级断行，不在本轮 |
 
 ---
 
 ## 6. 待办
 
-0. **已完成（2026-09-19 R1.5）**：A 会议海报、B 小红书卡片、五个数字渠道画布（conf/zhihu/bili/xhs/xhs-long/bili-cover）、cover 版式、可读性闸门、`ops/imagegen.sh` 出图入口。公众号封面不做。
-1. **接进流水线**：`poster` 阶段目前仍是 `skipped`。要变成实现，需要在 `app/modules/` 加 `run_poster(ctx)`（照 `run_article` 的写法：读 `understand/digest.json` + `intake/images`，写 `poster/poster.png`，用 `ctx.check()` 报几何闸门），并在阶段表里把 poster 从 skipped 放开。
-2. **spec 的生成**：现在 `poster.spec.json` 是手写的。要让 M2 自动产出，需要一段 LLM 步骤（digest → spec），并且 spec 里的每条事实都要能回溯到 digest（沿用 `verify_digest()` 的思路）。
+0. **已完成（2026-09-19 R1.5）**：五个数字渠道画布（conf/zhihu/bili/xhs/xhs-long/bili-cover）、cover 版式、
+   可读性闸门、`ops/imagegen.sh` 出图入口。公众号封面不做。
+1. **已完成（2026-09-19 换风格）**：`poster` 阶段接进流水线（`poster_stage.run_poster`，digest → spec → 按渠道渲染）；
+   视觉系统换成纸面编辑风（`poster_theme.py`）；交付集补上 `xhs-cover`（小红书首图）；
+   三档闸门补全（溢出 / 正文可读性 / 封面标题），并修掉"溢出被 `overflow:hidden` 静默裁掉"的 bug。
+   实证：`var/scratch/poster-review/stage/`（5/5 通过）、`docs/evidence/poster-{xhs-cover,zhihu,bili-cover}.png`、
+   测试 `tests/test_poster_theme.py`。
+2. **spec 的生成**：LLM 写 spec 的部分已在 `poster_stage._write_spec`（含数字回溯）。
+   还剩：封面标题仍是主标题切前 40 字 —— 应该单独让 LLM 写一句 ≤14 字的短标题（现在会遇到中文标题被拦腰断行）。
 3. **路线 C 实测**：拿到 `DASHSCOPE_API_KEY` 后跑 `ops/imagegen.sh`，出 hero 图 → `poster.spec.hero.json` 重排。
-4. **视觉自检**：几何闸门只能保证"不溢出、不空"，不能保证"好看"。Paper2Poster 用 VLM 读图打分；本机没有 VLM key，可用千问多模态或 codex（当前不可用）补这一步。
+4. **视觉自检**：几何闸门只能保证"不溢出、不空"，不能保证"好看"。Paper2Poster 用 VLM 读图打分；
+   本机没有 VLM key，可用千问多模态或 codex（当前不可用）补这一步。
+5. **投放侧封面还没分渠道**（不在本模块，别漏）：`publish._pick_media` 给所有渠道挑同一张封面
+   （按文件名排序会挑到 `poster-bili-cover.png`），所以**投到小红书的封面目前不是那张 3:4 首图**；
+   前端 `src/data/works.ts` 的小红书封面回退也没优先认 `poster-xhs-cover.png`。
+   两处都在别的轨道正在改的文件里，本轮**没动**，交接给他们。
