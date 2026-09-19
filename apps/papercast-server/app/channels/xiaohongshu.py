@@ -22,6 +22,9 @@ class XiaohongshuChannel(HttpChannel):
     name = "小红书"
     aliases = ("xhs",)
     capabilities = frozenset({"text", "images", "video"})
+    # 小红书是竖版平台：成片优先用 9:16 的 video-vertical.mp4（这是 2026-09-19 之前
+    # 靠 sorted() 的字典序偶然得到的结果，现在把它写明白，别让它再随文件名漂移）
+    video_orientation = "portrait"
     login_kind = "qrcode"
     transport = "mcp-http"
     why = "图文/视频笔记：MCP 开无头浏览器操作网页版，扫码登录"

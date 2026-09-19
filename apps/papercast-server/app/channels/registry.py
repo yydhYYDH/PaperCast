@@ -39,6 +39,25 @@ def canonical_all(channel_ids: Iterable[str]) -> list[str]:
     return out
 
 
+def class_of(channel_id: str) -> Optional[type[Channel]]:
+    """按 id / 别名取渠道**类** —— 类级元信息（名字、能力、成片朝向）不需要 settings。
+
+    别为了问一句「这个平台要横版还是竖版」去构造渠道实例：那要 settings，还会把
+    「构造失败」和「没这个渠道」混成一件事（构造抛错被吞掉时，调用方拿到的是默认值，
+    看上去一切正常 —— 这种假绿正是 2026-09-19 那次竖版投稿的来源之一）。
+    """
+    cid = canonical(channel_id)
+    for cls in BUILTIN:
+        if cls.id == cid:
+            return cls
+    return None
+
+
+def orientation_of(channel_id: str) -> str:
+    """这个渠道成片要横版(landscape)还是竖版(portrait)。未知渠道按横版（母版）。"""
+    return str(getattr(class_of(channel_id), "video_orientation", "landscape") or "landscape")
+
+
 def build_all(settings: Any) -> list[Channel]:
     """构造全部内置渠道（不探测、不触网）。"""
     return [cls(settings) for cls in BUILTIN]

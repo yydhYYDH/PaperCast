@@ -99,8 +99,9 @@ def _write(run_dir: Path, rel: str, text: str) -> Path:
 
 def _run_tree(tmp_path: Path, *, variants: dict[str, str] | None = None,
               export: tuple[str, str] | None = None, figures: object = None,
-              image_files: tuple[str, ...] = (), cards: int = 0) -> Path:
-    """构造一个最小 run 目录（只有 article/ intake/ 与可选的卡片）。"""
+              image_files: tuple[str, ...] = (), cards: int = 0,
+              videos: tuple[str, ...] = ()) -> Path:
+    """构造一个最小 run 目录（只有 article/ intake/ 与可选的卡片、成片）。"""
     run_dir = tmp_path / "run"
     (run_dir / "article").mkdir(parents=True)
     for name, text in (variants or {}).items():
@@ -117,6 +118,8 @@ def _run_tree(tmp_path: Path, *, variants: dict[str, str] | None = None,
             encoding="utf-8")
     for i in range(1, cards + 1):
         _write(run_dir, "article/cards/p%d.png" % i, "")
+    for name in videos:
+        _write(run_dir, "video/" + name, "")
     return run_dir
 
 
@@ -412,3 +415,61 @@ def test_markdown_variant_words_use_platform_unit(fake_ctx):
     asyncio.run(_gen_markdown_variant(ctx2, styles.PLATFORMS["zhihu"], "analyst", digest, "{}", []))
     zh = ctx2.run.articles[-1]
     assert zh.words == styles.cjk_len(ZHIHU_MD) > 0
+# B7：成片朝向按渠道口径挑（横版/竖版不再由字典序决定）
+# --------------------------------------------------------------------------- #
+
+def test_bilibili_gets_landscape_video_without_channel_hint(tmp_path):
+    """B 站拿横版 —— 这条是 2026-09-19 竖版投稿事故的直接回归。
+
+    事故：`_pick_media` 原来是 `sorted(glob("*.mp4"))[0]`，而
+    `"video-vertical.mp4" < "video.mp4"`（`-`0x2D < `.`0x2E），于是**所有渠道**都投了竖版，
+    B 站那条投稿是 1080×1920。B 站自己的口径（channels/bilibili.py 的 manual steps）是横版 16:9。
+    """
+    run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD},
+                        videos=("video.mp4", "video-vertical.mp4"))
+
+    bili = _collect(run_dir, "bilibili")
+
+    assert bili.video is not None and bili.video.name == "video.mp4"
+
+
+def test_xiaohongshu_still_gets_vertical_video(tmp_path):
+    """小红书是竖版平台：修 B 站不能把小红书从竖版带跑（别把原来的偶然行为改坏）。"""
+    run_dir = _run_tree(tmp_path, variants={"xhs.md": XHS_MD},
+                        videos=("video.mp4", "video-vertical.mp4"))
+
+    xhs = _collect(run_dir, "xiaohongshu")
+
+    assert xhs.video is not None and xhs.video.name == "video-vertical.mp4"
+    # 别名 xhs 走同一个渠道类，口径必须一致
+    assert _collect(run_dir, "xhs").video.name == "video-vertical.mp4"
+
+
+def test_falls_back_to_the_only_video_that_exists(tmp_path):
+    """只有竖版时，B 站拿它而不是 None —— 宁可用现有成片并如实记名，也不要静默没视频。"""
+    run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD},
+                        videos=("video-vertical.mp4",))
+
+    bili = _collect(run_dir, "bilibili")
+
+    assert bili.video is not None and bili.video.name == "video-vertical.mp4"
+
+
+def test_unknown_channel_defaults_to_landscape(tmp_path):
+    """未知渠道（注册表里没有）按横版母版处理，不抛错、不静默变成竖版。"""
+    run_dir = _run_tree(tmp_path, variants={"zhihu-analyst.md": ZHIHU_MD},
+                        videos=("video.mp4", "video-vertical.mp4"))
+
+    assert _collect(run_dir, "nope").video.name == "video.mp4"
+
+
+def test_orientation_is_channel_class_metadata(tmp_path):
+    """朝向是渠道的类级口径，且别名解析到同一个答案。"""
+    from app.channels import registry
+
+    assert registry.orientation_of("bilibili") == "landscape"
+    assert registry.orientation_of("xiaohongshu") == "portrait"
+    assert registry.orientation_of("xhs") == "portrait"
+    assert registry.orientation_of("nope") == "landscape"       # 未知按母版
+    assert registry.class_of("bilibili").__name__ == "BilibiliChannel"
+    assert registry.class_of("nope") is None

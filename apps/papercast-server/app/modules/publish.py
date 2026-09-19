@@ -237,7 +237,42 @@ def _intake_figures(run_dir: Path, warn: Any) -> list[Path]:
     return out
 
 
-def _pick_media(run_dir: Path, *, warn: Any = None) -> tuple[list[Path], Optional[Path], Optional[Path]]:
+# 一版 run 里两种朝向的成片都可能存在：video/video.mp4（1920×1080 母版）与
+# video/video-vertical.mp4（1080×1920 竖切）。选哪个是平台口径，由渠道层声明
+# （Channel.video_orientation），这里只负责按声明挑，**不做猜测**。
+VERTICAL_HINTS = ("vertical", "portrait", "9x16")
+
+
+def _pick_video(run_dir: Path, orientation: str = "landscape") -> Optional[Path]:
+    """按朝向挑成片。
+
+    2026-09-19 的真实事故：这里原来是 `sorted(glob("*.mp4"))[0]`，而
+    `"video-vertical.mp4" < "video.mp4"`（`-`(0x2D) < `.`(0x2E)），于是**所有渠道**都拿到
+    竖版 —— B 站那条投稿因此是 1080×1920 的竖版，而 B 站自己的口径是横版 16:9。
+    字典序不该决定投什么，所以现在按名字里的朝向挑，再按「非竖版优先」兜底。
+    """
+    top = sorted((run_dir / "video").glob("*.mp4")) if (run_dir / "video").is_dir() else []
+    cands = top or sorted((run_dir / "video").rglob("*.mp4"))
+    if not cands:
+        return None
+    vertical = [c for c in cands if any(h in c.name.lower() for h in VERTICAL_HINTS)]
+    landscape = [c for c in cands if c not in vertical]
+    if orientation == "portrait":
+        # 竖版平台：名字带 vertical 的优先，其次母版，最后才轮到别的
+        for name in ("video-vertical.mp4", "video.mp4"):
+            for c in cands:
+                if c.name == name:
+                    return c
+        return (vertical or landscape or cands)[0]
+    for name in ("video.mp4", "video-horizontal.mp4", "video-landscape.mp4"):
+        for c in cands:
+            if c.name == name:
+                return c
+    return (landscape or vertical or cands)[0]
+
+
+def _pick_media(run_dir: Path, *, warn: Any = None,
+                video_orientation: str = "landscape") -> tuple[list[Path], Optional[Path], Optional[Path]]:
     """图片 / 视频 / 封面。视频是 B 站渠道的前提，封面优先用 poster 的成图。
 
     图片顺序：小红书卡片（3:4，排版过）→ intake/figures.json（机器可读清单）→
@@ -253,11 +288,8 @@ def _pick_media(run_dir: Path, *, warn: Any = None) -> tuple[list[Path], Optiona
             _warn(warn, "intake/figures.json 里没有可用图片，退回 intake/images/fig-*.png glob 兜底"
                         "（只认新命名，img-pXX-N.png 这类旧命名会被漏掉）")
         images = images[:MAX_INTAKE_IMAGES]
-    video: Optional[Path] = None
     # 顶层成片优先（video/*.mp4）；上游套件会把中间产物放在嵌套目录里，别抓错
-    for cand in sorted((run_dir / "video").glob("*.mp4")) or sorted((run_dir / "video").rglob("*.mp4")):
-        video = cand
-        break
+    video = _pick_video(run_dir, video_orientation)
     cover: Optional[Path] = None
     for cand in [run_dir / "poster" / "cover.png", *(sorted((run_dir / "poster").glob("*.png")) if (run_dir / "poster").is_dir() else [])]:
         if cand.is_file():
@@ -295,11 +327,12 @@ def previous_delivery(run_dir: Path) -> dict[str, Any]:
 
 
 def _build_materials(run_dir: Path, run: Any, *, title: str, body: str, tags: list[str],
-                     variant: str, variant_platform: str, warn: Any) -> Materials:
+                     variant: str, variant_platform: str, warn: Any,
+                     video_orientation: str = "landscape") -> Materials:
     """组一份物料。标题为空直接拒发（宁可不发，也不发一份没标题的东西）。"""
     if not title.strip():
         raise PublishError("TITLE_MISSING", "标题为空，拒绝发布（先修 M2 的文章变体或 article/export/title.txt）")
-    images, video, cover = _pick_media(run_dir, warn=warn)
+    images, video, cover = _pick_media(run_dir, warn=warn, video_orientation=video_orientation)
     source = ""
     src = getattr(run, "source", None)
     if src is not None:
@@ -321,6 +354,16 @@ def _build_materials(run_dir: Path, run: Any, *, title: str, body: str, tags: li
     )
 
 
+def _video_orientation_for(channel_id: str) -> str:
+    """这个渠道要横版还是竖版 —— 规则在渠道层（Channel.video_orientation），这里只取用。
+
+    渠道解析不出来（未知 id / 注册表里没有）就按横版处理：横版是母版，猜错的代价最小。
+    """
+    from ..channels import registry
+
+    return registry.orientation_of(channel_id)
+
+
 def collect_materials_for(run_dir: Path, run: Any, channel_id: str, *, warn: Any = None) -> Materials:
     """**按渠道**收集物料 —— 这个渠道实际会投的那一份文案。
 
@@ -330,18 +373,21 @@ def collect_materials_for(run_dir: Path, run: Any, channel_id: str, *, warn: Any
     """
     article_dir = run_dir / "article"
     label = channel_id
+    orientation = _video_orientation_for(channel_id)     # 平台口径：横版/竖版
     for path, platform in _variant_candidates(article_dir, channel_id, label, warn):
         title, body, tags = _read_variant(path, platform)
         if not title.strip():
             _warn(warn, f"[{label}] 变体 {path.name} 里没有可用标题，换下一份")
             continue
         return _build_materials(run_dir, run, title=title, body=body, tags=tags,
-                                variant=path.stem, variant_platform=platform, warn=warn)
+                                variant=path.stem, variant_platform=platform, warn=warn,
+                                video_orientation=orientation)
     title, content, tags = _read_article_text(article_dir)
     if title.strip():
         _warn(warn, f"[{label}] 没有可用的变体文案，退回 article/export/（历史兜底）")
     return _build_materials(run_dir, run, title=title, body=content, tags=tags,
-                            variant="export/", variant_platform="", warn=warn)
+                            variant="export/", variant_platform="", warn=warn,
+                            video_orientation=orientation)
 
 
 def collect_materials(run_dir: Path, run: Any, *, warn: Any = None) -> Materials:

@@ -146,6 +146,11 @@ class Channel(ABC):
     # 只出素材包的渠道（X）：不接投递通道，preflight 报 material_only，publish 永远不真发。
     # M3 见到它就跳过「能不能投」的判定，只落 publish/<id>/export/ 并写一份 draft 回执。
     material_only: bool = False
+    # 这个平台要横版(16:9)还是竖版(9:16)成片。run 目录里两种都可能有
+    # （video/video.mp4 1920×1080 是母版，video-vertical.mp4 1080×1920 是竖切），
+    # 选哪个是**平台口径**，所以声明在这里由 channels 层决定，别让素材收集去猜。
+    # 默认横版：B 站等 16:9 平台的题材以横版为母版；竖版平台（小红书）自己覆盖。
+    video_orientation: str = "landscape"
 
     def __init__(self, settings: Any) -> None:
         self.settings = settings
