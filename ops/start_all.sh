@@ -46,8 +46,13 @@ start_backend() {
 
 start_frontend() {
   # 指向真实后端；想回 mock 就去掉 VITE_API_BASE
+  #
+  # 绑 0.0.0.0 而不是 127.0.0.1：手机/平板要能直接打开这个界面（用户要求，2026-09-19）。
+  # 暴露的**只有前端**：接口与产物由 vite 的 /api、/artifacts 代理转发（见
+  # apps/papercast/vite.config.ts），后端仍然只听 127.0.0.1，不需要跟着暴露、也不会有 CORS。
+  # 注意：局域网内谁都能打开这个前端（也就等于能用你的模型额度）；不想暴露就改回 127.0.0.1。
   detach frontend 5178 env VITE_API_BASE=http://127.0.0.1:8000 \
-    npm --prefix "$APPS/papercast" run dev -- --host 127.0.0.1 --port 5178
+    npm --prefix "$APPS/papercast" run dev -- --host 0.0.0.0 --port 5178
 }
 
 start_mcp() {

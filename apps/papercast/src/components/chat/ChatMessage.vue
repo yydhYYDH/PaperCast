@@ -170,6 +170,18 @@ function name(a: Artifact) {
 
 <style scoped>
 .msg { display: flex; gap: 12px; }
+/* 手机：字号收一号，气泡更宽，产物胶囊一定是换行而不是顶破右边界 */
+@media (max-width: 720px) {
+  .msg { gap: 9px; }
+  .bubble { max-width: 94%; padding: 9px 13px; }
+  .u-text { font-size: 15px; }
+  .badge { width: 24px; height: 24px; font-size: 12px; }
+  .who { font-size: 13.5px; }
+  .text { font-size: 15px; line-height: 1.8; }
+  .bullets { font-size: 13px; padding-left: 16px; }
+  .art { max-width: 100%; }
+  .art em { flex: none; }
+}
 .checks { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 4px; }
 .chk {
   font-size: 11.5px; padding: 2px 8px; border-radius: 999px;

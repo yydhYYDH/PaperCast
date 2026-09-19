@@ -53,9 +53,13 @@ curl -s http://127.0.0.1:8000/api/health
    先怀疑 Vite 的内存模块图过期 —— 重启前端（`kill $(cat var/pids/frontend.pid)` 再
    `./ops/start_all.sh frontend`，它幂等但端口还被占时会跳过，所以要先 kill），
    别花时间怀疑自己的 Vue 写法。
-9. **chromium 必须走直连**：这台机器有 `http_proxy=127.0.0.1:7890`，代理会把陈旧模块喂给
-   Playwright（表现就是上面第 8 条）。所有 `ops/shot` 脚本都用 `--no-proxy-server` 起浏览器，
-   新写脚本照抄（`curl` 同理，探活加 `no_proxy=127.0.0.1`）。
+9. **浏览器的代理来自环境变量**：这台机器挂着 `http_proxy=127.0.0.1:7890`，Playwright 会照它给
+   浏览器配代理，**`--no-proxy-server` 盖不住它**（它是靠 `NO_PROXY` 决定直连哪些主机的）。
+   访问 127.0.0.1 一直没事，是因为 `NO_PROXY` 里有 127.*；但测**局域网 IP**（手机走的那条路）时
+   必须把那个 IP 也加进 `NO_PROXY`，否则会被代理拦成 502 —— `mobile_check.mjs` 已按 origin 自动补上。
+   `curl` 同理：`NO_PROXY=127.0.0.1 curl …`。
+10. **改 vite 配置不生效**：`ops/start_all.sh` 起前端时带的 `--host 127.0.0.1` 会**盖掉**
+   `apps/papercast/vite.config.ts` 里的 `server.host`（手机访问就卡在这，2026-09-19 实测）。
 10. **闸门分支要留一句实话**：`review_style_check.mjs` 在「当前没有停在闸门的 run」时
     `gateLine` 为 null —— 这时别写「已验证闸门上方那句话」，如实说它和已验的结论句是同一个
     `review.line`。要真验闸门，得等一条 run 走到 publish 闸门。

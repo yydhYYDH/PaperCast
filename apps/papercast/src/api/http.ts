@@ -61,12 +61,15 @@ import type {
  *
  * 运行前设置 VITE_API_BASE=http://127.0.0.1:8000 即自动切换到这个实现，
  * 前端组件与 store 无需改动。
+ *
+ * base 可以是空串：那时用同源相对地址（/api、/artifacts）。
+ * 手机/局域网上打开页面时就是这个分支 —— 见 src/api/index.ts 与 vite.config.ts 的代理。
  */
 export class HttpPipelineApi implements PipelineApi {
   readonly label: string
 
   constructor(private base: string) {
-    this.label = `HTTP · ${base}`
+    this.label = base ? `HTTP · ${base}` : 'HTTP · 同源（手机访问走这里）'
   }
 
   private async json<T>(path: string, init?: RequestInit): Promise<T> {
@@ -156,6 +159,14 @@ export class HttpPipelineApi implements PipelineApi {
 
   publishRunWork(runId: string, body: RunPublishRequest) {
     return this.json<RunPublishResult>(`/api/runs/${runId}/publish`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  /** 发成片（视频笔记 / B 站投稿）：形态是单独一件事，所以后端给了单独一个端点 */
+  publishRunVideo(runId: string, body: RunPublishRequest) {
+    return this.json<RunPublishResult>(`/api/runs/${runId}/publish/video`, {
       method: 'POST',
       body: JSON.stringify(body),
     })

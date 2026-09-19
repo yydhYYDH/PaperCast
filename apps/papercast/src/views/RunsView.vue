@@ -117,4 +117,28 @@ function open(id: string) {
 .row-item { display: flex; align-items: center; gap: 10px; font-size: 12.5px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
 .row-item:last-child { border-bottom: none; }
 .seg.sm button { padding: 4px 9px; font-size: 11.5px; }
+
+/* 手机：六列表格在 390px 上只能横着拖，改成一条一条的卡片 ——
+   表头藏掉，每个 td 变成卡片里的一格，格子前的小标签用 ::before 补上。 */
+@media (max-width: 720px) {
+  .tbl { font-size: 13.5px; }
+  .tbl thead { display: none; }
+  .tbl, .tbl tbody { display: block; }
+  .tbl tr {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px 10px; padding: 12px 3px 13px;
+  }
+  .tbl td { display: block; padding: 0; border: 0; }
+  .tbl td:nth-child(1) { grid-area: 1 / 1 / 2 / -1; }
+  .tbl td:nth-child(2) { grid-area: 2 / 1 / 3 / 3; align-self: center; }
+  .tbl td:nth-child(7) { grid-area: 2 / 3 / 3 / 4; justify-self: end; align-self: center; }
+  .tbl td:nth-child(3) { grid-area: 3 / 1 / 4 / -1; }
+  .tbl td:nth-child(4)::before { content: '产物 '; color: var(--muted-2); }
+  .tbl td:nth-child(5)::before { content: '耗时 '; color: var(--muted-2); }
+  .tbl td:nth-child(6)::before { content: '提交 '; color: var(--muted-2); }
+  .tbl td:nth-child(4), .tbl td:nth-child(5), .tbl td:nth-child(6) { font-size: 12px; }
+  .tbl td.empty { grid-column: 1 / -1; }
+  .stages { gap: 4px; }
+  .pill { flex: 1; height: 5px; }
+}
 </style>

@@ -105,7 +105,7 @@ export interface ChannelReceipt {
   imageCount: number
   video: string
   tags: string[]
-  /** 用的哪份文案变体，例如 xhs-author；知乎没有专属变体时会退回中文优先的那份 */
+  /** 用的哪份文案变体，例如 xhs-independent（「平台-人格」，见后端 app/styles.py）；知乎没有专属变体时会退回中文优先的那份 */
   variant: string
   source: string
   exportDir: string
@@ -302,6 +302,8 @@ export interface RunDraft {
   channelId: string
   name: string
   capabilities: string[]
+  /** 不指定形态时这个渠道默认发什么：'images' 图文 / 'video' 成片 —— 主按钮发的就是它 */
+  defaultMedia?: string
   transport: string
   state: PlatformState
   account: string

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { EXAMPLE_PAPER } from '../../data/example'
 import { useStyleStore } from '../../stores/style'
 
@@ -13,6 +13,18 @@ const emit = defineEmits<{
 
 /** 当前风格：决定这一轮内容写成什么样（接口见 stores/style.ts） */
 const style = useStyleStore()
+
+/**
+ * 占位文案跟着屏宽走：原来那句「粘贴链接、拖一份 PDF，或者直接问我这次的结果」在
+ * 手机上有一行放不下，会被硬切一半 —— 窄屏换一句短的，意思一样。
+ */
+const narrow = ref(false)
+const mq = window.matchMedia('(max-width: 720px)')
+narrow.value = mq.matches
+mq.addEventListener('change', (e) => { narrow.value = e.matches })
+const placeholder = computed(() =>
+  narrow.value ? '粘贴论文链接，或拖一份 PDF 进来' : '把论文丢进来 —— 粘贴链接、拖一份 PDF，或者直接问我这次的结果',
+)
 
 const text = ref('')
 const box = ref<HTMLTextAreaElement | null>(null)
@@ -77,7 +89,7 @@ function say(t: string) {
         ref="box"
         v-model="text"
         rows="1"
-        placeholder="把论文丢进来 —— 粘贴链接、拖一份 PDF，或者直接问我这次的结果"
+        :placeholder="placeholder"
         @input="grow"
         @keydown="onKey"
         @paste="onPaste"
@@ -146,4 +158,17 @@ textarea::placeholder { color: var(--muted-2); }
 }
 .say:hover { color: var(--ink); border-bottom-color: var(--ink-3); }
 .sep { margin: 0 3px; color: var(--muted-2); }
+
+/* 手机：输入区别占掉半个屏幕，提示文案左对齐、能换行 */
+@media (max-width: 720px) {
+  .composer { padding: 6px 12px 12px; }
+  .box { padding: 10px 12px 8px; border-radius: 16px; }
+  textarea { font-size: 16px; max-height: 112px; }
+  .hint { font-size: 11.5px; text-align: left; line-height: 1.6; }
+  /* 提示里那些「可以这样说」是内联文字按钮：字号小，但要给足手指能点的高度 */
+  .say { font-size: 11.5px; padding: 6px 2px; line-height: 1.3; }
+  /* 手机上「开始」是主行动：占满一整行，别让它缩在角落里 */
+  .row .btn.primary { flex: 1 1 100%; }
+  .row .btn.ghost { flex: 0 1 auto; }
+}
 </style>

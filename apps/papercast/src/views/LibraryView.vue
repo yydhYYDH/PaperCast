@@ -548,5 +548,10 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
 @media (max-width: 720px) {
   .dlg { padding: 0; }
   .dlg-box { height: 100%; width: 100%; border-radius: 0; border: 0; }
+  /* 封面墙的列宽是行内样式按平台比例算的（minmax(320px…)，手机上比屏还宽）：
+     手机上不看比例，一列到底，卡片自己撑满 —— 所以这里必须 !important。 */
+  .shelf { grid-template-columns: minmax(0, 1fr) !important; padding: 14px 15px 18px; gap: 14px; }
+  .work-title { font-size: 15.5px; }
+  .work-foot { flex-wrap: wrap; }
 }
 </style>

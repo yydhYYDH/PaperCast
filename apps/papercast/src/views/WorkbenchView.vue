@@ -70,4 +70,10 @@ function onDrop(e: DragEvent) {
   .chat-page { grid-template-columns: minmax(0, 1fr); }
   .chat-page :deep(.rail-side) { display: none; }
 }
+/* 手机：对话就是一整屏（左栏这时已经是屏幕底部的标签栏，见 NavRail） */
+@media (max-width: 720px) {
+  .chat-page { grid-template-columns: minmax(0, 1fr); }
+  .drop { inset: 8px 10px; }
+  .drop-inner { font-size: 15px; padding: 0 12px; text-align: center; }
+}
 </style>

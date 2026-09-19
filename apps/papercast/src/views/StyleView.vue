@@ -137,7 +137,7 @@ const bodyLines = computed(() => (detail.value?.body ?? '').split('\n'))
 .err-line { color: var(--err); font-size: 12.5px; }
 
 .lines { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.lines li { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid var(--line-soft); }
+.lines li { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
 .lines li:last-child { border-bottom: none; }
 .lines .dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #8fb79b; }
 .lines li.off .dot { background: #ddd9d2; }
@@ -154,4 +154,16 @@ const bodyLines = computed(() => (detail.value?.body ?? '').split('\n'))
 }
 .foot-note { font-size: 12px; color: var(--muted-2); padding: 0 2px 8px; }
 .foot-note code { font-family: var(--mono); font-size: 11.5px; background: #f1f0ec; padding: 1px 5px; border-radius: 5px; }
+
+/* 手机：名字一行、说明一行、按钮一行 —— 别让「含 N 份分册」把整行顶出屏幕 */
+@media (max-width: 720px) {
+  .lines li { gap: 8px; }
+  .pname { min-width: 0; }
+  .pline { flex: 1 1 100%; order: 3; }              /* 名字一行、说明一行、按钮一行 */
+  .pnum { order: 4; }
+  .lines li .btn { order: 5; }
+  .lead-line { font-size: 16.5px; line-height: 1.6; }
+  .src { font-size: 11.5px; }
+  .skill-body { max-height: 320px; padding: 12px; font-size: 11.5px; }
+}
 </style>

@@ -77,6 +77,21 @@ description: PaperCast 前端的界面规范与验证配方（暖调单色编辑
 - 在仓库里写死 `/home/...` 绝对路径或端口；
 - 把 `var/`、`cookies.json`、`.env` 之类提交进 git。
 
+## 4.4 手机端（≤720px，2026-09-19）
+
+**底线**：桌面上是什么样就继续是什么样；手机**不是**「缩小的桌面」，而是同一套信息的另一种排法。
+所有手机规则都关在 `@media (max-width: 720px)` 里（总则在 `src/style.css`，其余在各组件自己的样式块）。
+
+- 左栏 → **底部标签栏**（`NavRail.vue`：`flex-direction: row` + `order: 2`）；顶栏挤成一行
+  （窄屏换短文案：`演示` / `小红书` / `0 项`）；页头只留标题 + 一个动作按钮（`.meta-line` 藏掉）；
+- **表格一律变卡片**（`RunsView.vue` 是样板：表头隐藏、`tr` 变 grid、每格的名字用 `::before` 补）；
+- 行内元素要能换行，**别让固定宽度顶出去**（作品库封面墙的列宽是行内样式，手机上必须
+  `!important` 压回单列）；
+- 手指点得着：按钮 ≥ 34px（`.btn` 40px），输入框字号 **16px**（小于 16px 时 iOS 会自动放大整页）；
+- 占位文案、提示语在窄屏要短一截（`Composer.vue` 用 `matchMedia` 切）；主行动按钮占满一行；
+- 手机访问：vite 要绑 `0.0.0.0`（注意 `ops/start_all.sh` 里那行 `--host` 会盖掉 `vite.config.ts`），
+  接口地址不许写死 127.0.0.1（非本机页面自动改用同源相对地址，vite 代理 `/api`、`/artifacts`）。
+
 ## 4.5 产品上特有的两条流程（改这里之前先读懂）
 
 **Agent 审核**（`src/review.ts`，2026-09-19）
@@ -115,6 +130,7 @@ cd /path/to/repo && node ops/shot/<脚本>            # 见下，控制台必须
 | `ops/shot/chat_viewers.mjs` | 查看器读的是**真产物**（不是内置示例） |
 | `ops/shot/digest_banner_check.mjs` | 论文理解抬头是暖白底（计算样式 luminance > 0.9、无渐变） |
 | `ops/shot/chat_drop.mjs` | 拖 PDF 的遮罩出现/消失（不真的上传） |
+| `ops/shot/mobile_check.mjs` | 手机端（默认 390×844，可传 `[origin] [宽] [高]`）：七页 + 产物查看器的横向溢出 / 越界元素 / 小于 32px 的按钮，截图 `docs/evidence/mobile-*.png` |
 | `ops/shot/review_style_check.mjs` | Agent 审核：名单第七行「审核」+ 43 项检查、`#m-review` 的结论句「Agent 审核已经通过…」、检查项 pill；风格页：后端读到的 6 个技能、展开是 SKILL.md 原文、换风格落 localStorage 并显示在输入框那一行 |
 | `ops/shot/interactions_check.mjs` | 互动 P1+P2：说「看看评论」只读读一遍（真开一次浏览器，几十秒）、页面上没有发送类按钮；贴一段评论 → 草稿**只落盘**（断言 drafts.jsonl 多一行且 `sent:false`）+ **发送卡出现但不自动执行**，点「先不做」后 `var/interactions/sent.jsonl` 行数不变。**脚本全程不点「发出去」** |
 | `ops/shot/chat_action_check.mjs` | 对话派活：只读动作自动执行 + 一句话结论、有副作用的只出卡片且「先不做」无副作用、普通提问 0 新卡、控制台 0 错误（**不点任何会真发出去的动作**；跑前会预热运营数据缓存，别去撞浏览器预算） |

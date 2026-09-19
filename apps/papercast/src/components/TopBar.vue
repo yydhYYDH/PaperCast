@@ -49,7 +49,9 @@ onMounted(() => {
 
     <label class="demo" :title="store.autoConfirm ? '闸门自动放行' : '闸门需人工确认'">
       <input v-model="store.autoConfirm" type="checkbox" />
-      <span>演示模式</span>
+      <!-- 手机上只留「演示」两个字：一整行要放得下品牌、页面名和两个状态胶囊 -->
+      <span class="wide">演示模式</span>
+      <span class="narrow">演示</span>
     </label>
 
     <button
@@ -59,7 +61,8 @@ onMounted(() => {
       @click="ui.setView('platforms')"
     >
       <i class="dot" />
-      {{ platforms.loading ? '正在检查登录状态…' : '查看平台登录状态' }}
+      <span class="wide">{{ platforms.loading ? '正在检查登录状态…' : '查看平台登录状态' }}</span>
+      <span class="narrow">平台</span>
     </button>
 
     <button
@@ -70,7 +73,8 @@ onMounted(() => {
       @click="ui.setView('platforms')"
     >
       <i class="dot" />
-      小红书 {{ xhs.state === 'ready' ? (xhs.account || '已登录') : PLATFORM_STATE[xhs.state].label }}
+      <span class="wide">小红书 {{ xhs.state === 'ready' ? (xhs.account || '已登录') : PLATFORM_STATE[xhs.state].label }}</span>
+      <span class="narrow">小红书</span>
     </button>
 
     <button
@@ -80,7 +84,8 @@ onMounted(() => {
       @click="ui.setView('settings')"
     >
       <i class="dot" />
-      {{ env.ready ? '环境就绪' : '待处理 ' + env.pending.length + ' 项' }}
+      <span class="wide">{{ env.ready ? '环境就绪' : '待处理 ' + env.pending.length + ' 项' }}</span>
+      <span class="narrow">{{ env.ready ? '就绪' : env.pending.length + ' 项' }}</span>
     </button>
   </header>
 </template>
@@ -101,5 +106,19 @@ onMounted(() => {
 .demo input { accent-color: var(--text); }
 .login-chip { cursor: pointer; transition: 0.15s; }
 .login-chip:hover { border-color: #dcdbd6; color: var(--text); }
+.narrow { display: none; }
+
+/* 手机：顶栏只留一行 —— 品牌、页面名、演示开关、两个状态胶囊，都要放得下且不换行 */
+@media (max-width: 720px) {
+  .top { padding: 10px 13px; gap: 8px; flex-wrap: nowrap; overflow: hidden; }
+  .brand { font-size: 15px; white-space: nowrap; }
+  .cur { font-size: 12.5px; white-space: nowrap; }
+  .sep { display: none; }
+  .row.gap { gap: 6px; min-width: 0; }
+  .demo { font-size: 11.5px; white-space: nowrap; }
+  .wide { display: none; }
+  .narrow { display: inline; }
+  .login-chip { padding: 4px 9px; font-size: 11.5px; white-space: nowrap; }
+}
 @media (max-width: 1280px) { .hide-sm { display: none; } }
 </style>

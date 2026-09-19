@@ -77,4 +77,23 @@ const items: { id: ViewId; label: string; icon: string }[] = [
 .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-2); }
 .live.on i { background: var(--ok); box-shadow: 0 0 10px rgba(53, 211, 154, 0.8); animation: pulse 1.4s infinite; }
 @keyframes pulse { 50% { opacity: 0.35; } }
+
+/* 手机：这条竖栏变成屏幕底部的标签栏 —— 拇指够得着，也不占横向空间 */
+@media (max-width: 720px) {
+  .rail {
+    order: 2;                       /* .shell 是网格：这一项排到主内容之后 */
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-top: 1px solid var(--line-soft);
+  }
+  .brand { display: none; }
+  .grow { display: none; }
+  .item { flex: 1 1 0; width: auto; min-width: 0; height: 50px; gap: 2px; }
+  .item svg { width: 19px; height: 19px; }
+  .item .txt { font-size: 10px; white-space: nowrap; }
+  .live { width: 14px; align-self: center; }
+}
 </style>

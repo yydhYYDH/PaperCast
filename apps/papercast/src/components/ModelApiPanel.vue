@@ -224,6 +224,11 @@ onMounted(load)
   display: grid; grid-template-columns: 1fr 260px; gap: 14px;
   align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line-soft);
 }
+/* 手机：说明一行、输入框一行（固定 260px 的输入框在 390px 的屏上会顶出去） */
+@media (max-width: 720px) {
+  .cfg-row { grid-template-columns: minmax(0, 1fr); gap: 8px; align-items: stretch; }
+  .cfg-input input, .cfg-input select { width: 100%; }
+}
 .cfg-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-1); }
 .key { color: var(--muted); font-size: 11px; }
 .cfg-input input, .cfg-input select {

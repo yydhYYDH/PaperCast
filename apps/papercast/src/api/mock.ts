@@ -136,7 +136,7 @@ const LOGS: Record<StageId, Script> = {
   ],
   article: [
     { text: '载入风格层：平台体裁 × 讲述者人格（styles.py）' },
-    { text: '小红书 × 作者自述：≤1000 字、无公式、标题计重 ≤38' },
+    { text: '小红书 × 第三方独立视角：≤1000 字、无公式、标题计重 ≤38' },
     { text: '知乎 × 技术解读：2000-4000 字、允许公式、结论前置' },
     { text: '小红书：6 张卡片，每张一个知识点' },
     { text: '生成封面图 wechat-cover.svg / xhs-cover.svg', level: 'ok' },
@@ -231,7 +231,7 @@ const ARTIFACTS: Record<StageId, Artifact[]> = {
     art('understand', 'note', 'markdown', '中文阅读笔记', 'paper2note_reading_note.md', undefined, { words: 6200 }),
   ],
   article: [
-    art('article', 'xhs-author', 'markdown', '小红书 × 作者自述', 'xhs.md', '/samples/article/xhs-academic.md'),
+    art('article', 'xhs-independent', 'markdown', '小红书 × 第三方独立视角', 'xhs.md', '/samples/article/xhs-academic.md'),
     art('article', 'xhs-newsflash', 'markdown', '小红书 × 科技快讯', 'xhs-newsflash.md', '/samples/article/xhs-media.md'),
   ],
   poster: [
@@ -368,7 +368,9 @@ const DEMO_CHANNELS: PlatformChannel[] = [
 ]
 
 const DEFAULT_CONFIG: RunConfig = {
-  article: { variants: ['xhs-author', 'zhihu-analyst', 'en-analyst'] },
+  // 人格 id 是「平台-人格」（见后端 app/styles.py 的 VOICES）：默认第三方独立视角，
+  // 不再有 author（已下线，后端 RETIRED_VOICES 会把它映射到 independent）
+  article: { variants: ['xhs-independent', 'zhihu-analyst', 'en-analyst'] },
   poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'en' },
   video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '16:9', narration: '中文' },
   publish: { targets: ['xhs', 'zhihu', 'x'], autoPublish: false },
@@ -614,6 +616,9 @@ export class MockPipelineApi implements PipelineApi {
     const drafts: RunDraft[] = DEMO_CHANNELS.map((ch) => {
       const base = {
         channelId: ch.id, name: ch.name, capabilities: ch.capabilities, transport: ch.kind,
+        // 不指定形态时这个渠道发什么（跟后端 Channel.default_media 同一口径）：
+        // 小红书等图文渠道发卡片组图，B 站是投稿平台所以默认成片。
+        defaultMedia: ch.id === 'bilibili' ? 'video' : 'images',
         state: ch.state, account: ch.account, detail: ch.detail, hint: '', ready: false,
         hasDraft: true, suitable: true, reason: '', title, body,
         tags: ['论文', '科普'], images: image, video: null as DraftMedia | null,
@@ -622,11 +627,13 @@ export class MockPipelineApi implements PipelineApi {
         variantPlatform: ch.id === 'zhihu' ? 'xhs' : ch.id,
         source: 'https://arxiv.org/abs/2510.05096',
       }
+      // 成片"可发"和"这次发不发"是两件事：图文渠道默认不发它，但界面要给「发布视频」
+      const film = video?.url ? { path: video.path, name: 'paper2video.mp4', url: video.url } : null
       if (ch.id === 'bilibili') {
-        return { ...base, video: video?.url ? { path: video.path, name: 'paper2video.mp4', url: video.url } : null,
+        return { ...base, video: film,
           variant: 'xhs', suitable: Boolean(video), reason: video ? '视频投稿（演示值）' : '缺视频：B 站是视频投稿' } as RunDraft
       }
-      return base as RunDraft
+      return { ...base, video: film } as RunDraft
     })
 
     return {
@@ -667,6 +674,16 @@ export class MockPipelineApi implements PipelineApi {
       url: DEMO_PUBLISH_URL[target.channelId] ?? '', via: 'work-library', at: Math.floor(Date.now() / 1000) }
     return { ...base, status: 'published', url: String(receipt.url), account: target.account,
       receipt, receiptUrl: `/artifacts/${runId}/publish/direct/${target.channelId}/receipt.json` }
+  }
+
+  /**
+   * 离线同形状：发成片的那个入口。真后端是单独一个端点，差别只在形态 ——
+   * 所以这里复用一遍上面那条路，只把回执里的形态改成「成片」。
+   */
+  async publishRunVideo(runId: string, body: RunPublishRequest): Promise<RunPublishResult> {
+    const res = await this.publishRunWork(runId, body)
+    const receipt = res.receipt ? { ...res.receipt, media: 'video' } : res.receipt
+    return { ...res, receipt }
   }
 
   /**

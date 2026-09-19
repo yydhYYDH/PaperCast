@@ -275,6 +275,32 @@ a { color: var(--accent); text-underline-offset: 3px; }
 /* ---------- 轻动效 ---------- */
 .fade-enter-active, .fade-leave-active { transition: opacity 0.18s; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+/* ── 手机（≤720px）：一个入口 + 一条底部标签栏 ──────────────────────────────
+   手机上只做三件事：① 左栏搬到屏幕底部（方向改在 NavRail 自己的样式里）；
+   ② 页面呼吸收窄、点按目标放大到手指能点；③ 输入框字号 16px（iOS 上小于 16px 会被自动放大）。
+   桌面（>720px）完全不受影响 —— 所有规则都关在这个媒体查询里。 */
+@media (max-width: 720px) {
+  .shell { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .main { order: 1; }
+  .page { padding: 16px 15px 24px; gap: 16px; }
+  .page-head { flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+  .page-head .meta-line { display: none; }        /* 手机上页头只留标题 + 一个动作按钮 */
+  .page-title { font-size: 22px; }
+  .page-lead { font-size: 13.5px; }
+  .panel-head { padding: 13px 15px; flex-wrap: wrap; row-gap: 10px; }
+  .panel-head .seg { flex: 1 1 100%; }
+  .panel-body { padding: 15px; }
+  .btn { min-height: 40px; padding: 8px 14px; }
+  .btn.sm { min-height: 34px; padding: 7px 12px; font-size: 13px; }
+  .field { font-size: 16px; }
+  .seg { width: 100%; }
+  .seg button { min-height: 38px; }
+  .row { flex-wrap: wrap; }
+  /* 手指点得着的下限：胶囊和平台跳转这类小控件也要到 34px */
+  .chip { min-height: 34px; }
+  .jump-item { min-height: 34px; }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .page > * { animation: rise 0.42s cubic-bezier(0.16, 1, 0.3, 1) both; }
   .page > *:nth-child(2) { animation-delay: 0.04s; }
