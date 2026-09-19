@@ -124,6 +124,6 @@ def article_user(title: str, digest_json: str, figures: list[dict], brief: str =
     )
 
 
-# 兼容旧调用点：等价于 平台 xhs × 人格 author（公众号已下线，原来的 WECHAT_SYSTEM 一并移除）
-XHS_SYSTEM = article_system("xhs", "author")
+# 兼容旧调用点：等价于 平台 xhs × 默认人格（公众号已下线，原来的 WECHAT_SYSTEM 一并移除）
+XHS_SYSTEM = article_system("xhs", styles.DEFAULT_VOICE)
 xhs_user = article_user

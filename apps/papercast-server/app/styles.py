@@ -8,9 +8,12 @@
 variant id = "{platform}-{voice}"，例如 "zhihu-analyst"。
 旧 id（xhs / wechat / xhs-academic / wechat-media …）在 parse_variant() 里做兼容映射。
 
+默认人格是 independent（第三方独立视角）：2026-09-19 按用户要求下线「作者自述」——
+工具是第三方，稿子不该冒充论文作者。旧写法里的 author 由 RETIRED_VOICES 映射到它。
+
 人格来源标注：
 - newsflash（新智元式快讯）与 analyst（机器之心式技术解读）来自各自 8 篇真实语料的量化归纳；
-- author / peer / reviewer 是设计稿（尚无取样），改动前先按 skill paper-voice-styles 取样。
+- independent / peer / reviewer 是设计稿（尚无取样），改动前先按 skill paper-voice-styles 取样。
 """
 
 from __future__ import annotations
@@ -208,13 +211,13 @@ _ANALYST = """你是中文技术媒体的论文解读作者，把论文当一份
 - 每个数字保留原文精度与 benchmark 名，并可在事实源里回溯。
 - 不使用 emoji，不写「炸裂 / 颠覆 / 遥遥领先」类词。"""
 
-_AUTHOR = """你是这篇论文的作者，向同领域读者介绍自己的工作。
+_INDEPENDENT = """你是一位与这篇论文没有利益关系的第三方独立观察者，向读者讲清这项工作。
 
 写法特征：
-- 第一人称「我们」，语气克制、诚实，像在组会上讲自己刚做完的工作。
-- 先讲清楚「我们想解决什么问题、为什么之前的方法不够」，再讲方法。
-- 主动交代局限与不做的事，不夸大适用范围。
-- 不写宣传口吻，不用「颠覆 / 最强 / 首个」这类词。"""
+- 视角始终是「我看这篇论文」，不是「我们做了这项工作」：不冒充作者，也不替作者站台。
+- 先讲清作者想解决什么问题、方法怎么做、证据够不够，再给出你自己的判断。
+- 明确区分事实与判断：论文声称什么（可在事实源里回溯）、你认为它强在哪、弱在哪、哪里被过度解读。
+- 该指出局限就指出（数据规模、评测设定、可复现性），不写成宣传稿，也不用「颠覆 / 最强 / 首个」这类词。"""
 
 _PEER = """你是一位读过很多论文的实验室师兄，带着读者把这篇工作拆开看。
 
@@ -233,7 +236,10 @@ _REVIEWER = """你是这篇论文的审稿人，写一份给同行看的评审�
 - 语气专业、克制、可执行；不提改进建议之外的意见。"""
 
 VOICES: dict[str, VoiceSpec] = {
-    "author": VoiceSpec("author", "作者自述", "论文作者本人", _AUTHOR, sampled=False),
+    # 2026-09-19 用户要求：不要「作者自述」。默认人格改为第三方独立视角，不再冒充论文作者。
+    # 旧写法（xhs-author / xhs / xhs-academic / zhihu-academic / bilibili-academic）由下面的
+    # RETIRED_VOICES 与 LEGACY_VARIANTS 映射到这里，老配置不会静默丢变体。
+    "independent": VoiceSpec("independent", "第三方独立视角", "与论文无利益关系的第三方", _INDEPENDENT, sampled=False),
     "peer": VoiceSpec("peer", "同行拆解", "实验室师兄讲论文", _PEER, sampled=False),
     "newsflash": VoiceSpec("newsflash", "科技快讯", "新智元式", _NEWSFLASH, sampled=True),
     "analyst": VoiceSpec("analyst", "技术解读", "机器之心式", _ANALYST, sampled=True),
@@ -241,18 +247,22 @@ VOICES: dict[str, VoiceSpec] = {
 }
 
 DEFAULT_PLATFORM = "xhs"
-DEFAULT_VOICE = "author"
+DEFAULT_VOICE = "independent"
+
+# 已下线的人格 id → 替代人格。旧配置/旧 run 里写了 author 仍然能解析，但落到第三方独立视角，
+# 不会再把稿子写成「我就是论文作者」；也避免旧 id 直接解析失败被静默丢掉。
+RETIRED_VOICES: dict[str, str] = {"author": "independent"}
 MAX_VARIANTS = 4  # 单次运行最多生成几个变体（每个变体一次 LLM 调用，成本线性增长）
 
 # 旧 id → (platform, voice)：保住历史配置与前端 mock 里的写法
 # 公众号（wechat / wechat-academic / wechat-media）已于 2026-09-19 按用户要求下线：
 # 这些 id 现在解析不出平台，会被 resolve 阶段当成「不认识的变体」如实报出来，而不是悄悄生成。
 LEGACY_VARIANTS: dict[str, tuple[str, str]] = {
-    "xhs": ("xhs", "author"),
-    "xhs-academic": ("xhs", "author"),
+    "xhs": ("xhs", "independent"),
+    "xhs-academic": ("xhs", "independent"),
     "xhs-media": ("xhs", "newsflash"),
-    "zhihu-academic": ("zhihu", "author"),
-    "bilibili-academic": ("bilibili", "author"),
+    "zhihu-academic": ("zhihu", "independent"),
+    "bilibili-academic": ("bilibili", "independent"),
 }
 
 
@@ -260,17 +270,22 @@ LEGACY_VARIANTS: dict[str, tuple[str, str]] = {
 # 解析与组装
 # --------------------------------------------------------------------------- #
 
+def _live_voice(platform: str, voice: str) -> tuple[str, str]:
+    """已下线的人格 id 换成替代人格（见 RETIRED_VOICES）。"""
+    return platform, RETIRED_VOICES.get(voice, voice)
+
+
 def parse_variant(variant: str) -> tuple[str, str] | None:
     """把任意历史写法的 variant 解析成 (platform, voice)；无法识别返回 None。"""
     v = (variant or "").strip().lower()
     if not v:
         return None
     if v in LEGACY_VARIANTS:
-        return LEGACY_VARIANTS[v]
+        return _live_voice(*LEGACY_VARIANTS[v])
     if "-" in v:
         p, _, voice = v.partition("-")
-        if p in PLATFORMS and voice in VOICES:
-            return p, voice
+        if p in PLATFORMS and (voice in VOICES or voice in RETIRED_VOICES):
+            return _live_voice(p, voice)
     if v in PLATFORMS:                 # 只写平台，人格取默认
         return v, DEFAULT_VOICE
     return None
