@@ -51,6 +51,7 @@ export const PLATFORM_STATE: Record<PlatformState, { label: string; cls: string 
   offline: { label: '服务离线', cls: 'err' },
   unconfigured: { label: '未配置', cls: '' },
   blocked: { label: '受限', cls: 'warn' },
+  material_only: { label: '只出素材包', cls: '' },
 }
 
 /* 各阶段复用了哪些开源实现，只写在 docs/research/upstream-repos.md 里，不在界面上出现。 */

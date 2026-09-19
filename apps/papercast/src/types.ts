@@ -223,7 +223,8 @@ export interface PaperRun {
 }
 
 /** 平台渠道与登录态（与后端 GET /api/platforms 一致） */
-export type PlatformState = 'ready' | 'login_required' | 'offline' | 'unconfigured' | 'blocked'
+/** material_only = 这个平台没有投递通道，只把稿子落成素材包（X 就是这一类，见后端 channels/x.py） */
+export type PlatformState = 'ready' | 'login_required' | 'offline' | 'unconfigured' | 'blocked' | 'material_only'
 
 /** 登录方式：qrcode=现场扫码 / browser=桌面窗口人工登录 / env=配置凭证 / cli=命令行登录 / none=无 */
 export type PlatformLogin = 'qrcode' | 'browser' | 'env' | 'cli' | 'none'
@@ -231,7 +232,8 @@ export type PlatformLogin = 'qrcode' | 'browser' | 'env' | 'cli' | 'none'
 export interface PlatformChannel {
   id: string
   name: string
-  kind: 'mcp' | 'playwright' | 'openapi' | 'cli'
+  /** export = 没有通道服务，只把素材包落在本地（X） */
+  kind: 'mcp' | 'playwright' | 'openapi' | 'cli' | 'export'
   login: PlatformLogin
   state: PlatformState
   /** 已登录账号；未登录为空串 */
@@ -362,6 +364,8 @@ export interface RunPublishResult {
   exportError?: string
   receipt?: Record<string, unknown> | null
   receiptUrl?: string
+  /** 后端给人看的一句话（例如「只存了草稿，因为渠道还没就绪」），要和文件数一起显示 */
+  note?: string
   warnings?: string[]
 }
 

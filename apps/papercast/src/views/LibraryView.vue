@@ -17,6 +17,7 @@ import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { assetUrl } from '../api'
 import { useRunsStore } from '../stores/runs'
+import { usePublishStore } from '../stores/publish'
 import { useUiStore } from '../stores/ui'
 import type { PaperRun, RunReceipts } from '../types'
 import { PLATFORM_META, relativeTime } from '../data/library'
@@ -25,6 +26,7 @@ import type { Extras, Work } from '../data/works'
 
 const store = useRunsStore()
 const ui = useUiStore()
+const publish = usePublishStore()
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
 
 /* ---------------------------------------------------------------- 回执与标题 */
@@ -155,6 +157,24 @@ function gotoRun(w: Work) {
   store.select(w.run.id)
   ui.setView('workbench')
   void ui.toast('已切到「工作台」的这次运行：' + w.run.title, 'info')
+}
+
+/**
+ * 发布这一件：打开发布面板（组件在 App.vue 里，任何视图都能唤起）。
+ *
+ * 只有真接了投递通道的平台才传渠道：**英文传播（X）与跨平台母版没有投递通道**，
+ * 传一个后端不认识的渠道只会 404，所以这两类让面板列出全部渠道由人挑。
+ * 这里按「哪些是投递平台」正向列举，不反着判 en/generic —— 平台轴还在演进，反判会漏。
+ */
+const DELIVERABLE = ['xhs', 'zhihu', 'bilibili']
+function startPublish() {
+  const w = current.value
+  if (!w) return
+  // 先关掉这一层的详情弹层：**一次只开一个模态**。两层叠着不仅键盘焦点乱，而且详情弹层
+  // 的 z-index 更高（60 > .mask 的 50），发布面板会被它压在底下，按钮点不到（实测）。
+  // 面板本身不能抬到 50 以上 —— 「确认发布」的应用内确认框也是 50、靠 DOM 顺序压顶。
+  close()
+  void publish.openFor(w.run.id, w.run.title, DELIVERABLE.includes(w.platform) ? w.platform : '')
 }
 
 async function copyPath(text: string) {
@@ -355,6 +375,9 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
                 <div class="side-block">
                   <div class="label">动作</div>
                   <div class="acts">
+                    <button class="btn primary sm" @click="startPublish()">
+                      {{ current.state === 'published' ? '再发一次' : '发布这一件' }}
+                    </button>
                     <a v-if="current.reader?.url" class="btn sm" :href="assetUrl(current.reader.url)" target="_blank" rel="noreferrer">打开原稿</a>
                     <a v-if="current.video?.url" class="btn sm" :href="assetUrl(current.video.url)" target="_blank" rel="noreferrer">打开成片</a>
                     <button v-if="current.cover" class="btn sm" @click="copyPath(current.cover.path)">
@@ -424,6 +447,7 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
 .ratio-xhs .shot { aspect-ratio: 3 / 4; }
 .ratio-zhihu .shot { aspect-ratio: 4 / 3; }
 .ratio-bilibili .shot { aspect-ratio: 16 / 9; }
+.ratio-x .shot { aspect-ratio: 3 / 2; }   /* X：英文 thread，没有专属成图，框开成横的 */
 .ratio-generic .shot { aspect-ratio: 3 / 2; }
 .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
 /* 小红书没有 3:4 卡片时会退到竖长图（1080×2400）：从上往下裁，标题那块才留得住 */

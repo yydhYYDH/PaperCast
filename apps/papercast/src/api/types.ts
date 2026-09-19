@@ -65,7 +65,7 @@ export interface ChatRequest {
  * 一句话能变成一张**动作卡**（后端 app/chat_api.py 的「意图 → 动作提案」）：
  * 对话里渲染成「一句话 + 一个动词按钮」，点了才真的执行 —— 服务端不会因为一句话就投递或起停进程。
  */
-export type ChatActionKind = 'gate' | 'metrics' | 'service' | 'run'
+export type ChatActionKind = 'gate' | 'metrics' | 'service' | 'run' | 'interactions' | 'draft'
 export type ChatActionRisk = 'readonly' | 'local' | 'public'
 
 export interface ChatAction {
@@ -79,6 +79,72 @@ export interface ChatAction {
   confirmLabel: string
   /** public = 真的发到平台上、撤不回来；界面上按危险动作渲染 */
   risk: ChatActionRisk
+}
+
+/**
+ * 互动 P1（后端 app/interactions.py）：**只读**评论/通知 + 起草回复，发送是 P2 且要逐条确认。
+ * 契约里写死了 canSend: false —— 前端别自己发明一个「发送」按钮。
+ */
+export interface InteractionItem {
+  id: string
+  /** comment = 真评论（有 commentId 才谈得上回）；其余是关注/点赞这类通知 */
+  kind: string
+  author: string
+  authorId: string
+  text: string
+  workTitle: string
+  at: number
+  liked: boolean
+  feedId: string
+  /** 访问令牌：只用于 P2 的回复，**不要**写进日志/文档/截图 */
+  xsecToken: string
+  commentId: string
+  canReply: boolean
+}
+
+export interface InteractionsResult {
+  fetchedAt: number
+  source: string
+  stage: string
+  canSend: boolean
+  canSendNote: string
+  unread: { mentions?: number; likes?: number; connections?: number; unread?: number } | null
+  items: InteractionItem[]
+  /** 平台上被过滤掉（已删除/不可见）的条数 —— 让「列表比实际少」这件事可见 */
+  filtered: number
+  errors: string[]
+  /** 读不到时的原因（读到了就是空串）。前端照原话说，别拿「0 条评论」顶替 */
+  gap: string
+}
+
+export interface DraftBody {
+  commentText: string
+  author?: string
+  workTitle?: string
+  note?: string
+}
+
+export interface InteractionDraft {
+  id: string
+  at: number
+  author: string
+  workTitle: string
+  commentText: string
+  reply: string
+  why: string
+  model: string
+  stage: string
+  /** 恒为 false：P1 只落盘 */
+  sent: boolean
+  saveError?: string
+}
+
+export interface DraftResult {
+  draft: InteractionDraft
+  savedTo: string
+  stage: string
+  canSend: boolean
+  canSendNote: string
 }
 
 export interface ChatReply {
@@ -154,6 +220,12 @@ export interface PipelineApi {
   /* ---------- 对话 ---------- */
   /** 一问一答：回答只依据该运行已落盘的事实源（见后端 app/chat_api.py） */
   chat(body: ChatRequest): Promise<ChatReply>
+
+  /* ---------- 互动（P1：只读 + 起草，不发送） ---------- */
+  /** 读一遍小红书「评论和@」（只读）。读不到会返回 gap 说明原因，不是异常 */
+  interactions(limit?: number): Promise<InteractionsResult>
+  /** 给一条评论起草回复：**只落盘，不发送**（发送是 P2，要逐条确认） */
+  draftReply(body: DraftBody): Promise<DraftResult>
   /** 上传 PDF/LaTeX 包，拿到 uploadId（createRun 的 source.value 用它） */
   uploadPaper(file: File): Promise<UploadResult>
 

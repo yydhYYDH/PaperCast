@@ -7,10 +7,12 @@
 | 身份层 | app/platforms.py | 这个平台的**账号**是谁、登没登录、怎么扫码 | 前端「平台账号」页 |
 | 投递层 | app/channels/（本包） | 这份**物料**能不能投、怎么投、回执是什么、投不出去怎么兜底 | M3 发布阶段、/api/channels |
 
-渠道 id 与别名见 registry.KNOWN：xiaohongshu（别名 xhs）/ zhihu / bilibili。
+渠道 id 与别名见 registry 的 ALIASES：xiaohongshu（别名 xhs）/ zhihu / bilibili，
+以及**只出素材包的 x**（别名 twitter，2026-09-19 加，见 x.py）。
 
-每个渠道都以「本机独立进程 + HTTP」接入（小红书 :18060、知乎 :18070、B 站 :18080）：
+三个真渠道都以「本机独立进程 + HTTP」接入（小红书 :18060、知乎 :18070、B 站 :18080）：
 backend venv 不背浏览器与上传依赖，渠道可单独重启、单独诊断、单独挂掉。
+x 不走 HTTP：它没有通道服务，只把英文 thread 落成素材包。
 
 三条硬约束（源自 docs/00-goal-and-architecture.md 的 ADR，任何改动都不得违反）：
 1. **真实投递不可逆**：只有人工闸门放行（confirmed=True）才允许调 publish()；
@@ -30,7 +32,10 @@ from typing import Any, Literal, Optional
 
 import httpx
 
-ChannelState = Literal["ready", "login_required", "offline", "unconfigured", "blocked"]
+# material_only（2026-09-19 加）：这个渠道**没有投递通道**，只把物料落成素材包。
+# 与 blocked / unconfigured 的区别是语义：那两者是「本来该能投，但环境不对」，
+# 这个是「设计上就不投」——不该显示成故障，也不该被期待有登录态。
+ChannelState = Literal["ready", "login_required", "offline", "unconfigured", "blocked", "material_only"]
 DeliveryStatus = Literal["published", "failed", "draft", "skipped", "blocked"]
 
 MEDIA_SUFFIX = {"image": ".png", "video": ".mp4", "cover": ".png"}
@@ -119,6 +124,14 @@ class Delivery:
         return out
 
 
+def is_material_only(channel: "Channel") -> bool:
+    """这个渠道是不是 material-only（只出素材包、不接投递）。
+
+    用 getattr 兜底：测试里的替身渠道未必带这个标志，少一个属性不该让整条发布编排 500。
+    """
+    return bool(getattr(channel, "material_only", False))
+
+
 class Channel(ABC):
     """一个平台的投递适配器。新增平台 = 新增一个子类 + 在 registry 注册。"""
 
@@ -130,6 +143,9 @@ class Channel(ABC):
     transport: str = ""
     why: str = ""
     restart_hint: str = ""
+    # 只出素材包的渠道（X）：不接投递通道，preflight 报 material_only，publish 永远不真发。
+    # M3 见到它就跳过「能不能投」的判定，只落 publish/<id>/export/ 并写一份 draft 回执。
+    material_only: bool = False
 
     def __init__(self, settings: Any) -> None:
         self.settings = settings

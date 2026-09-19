@@ -5,6 +5,7 @@ import { useUiStore } from './stores/ui'
 import NavRail from './components/NavRail.vue'
 import TopBar from './components/TopBar.vue'
 import PlatformLoginDialog from './components/PlatformLoginDialog.vue'
+import PublishSheet from './components/PublishSheet.vue'
 import AppDialog from './components/AppDialog.vue'
 import AppToasts from './components/AppToasts.vue'
 import WorkbenchView from './views/WorkbenchView.vue'
@@ -39,6 +40,8 @@ onMounted(() => void store.bootstrap())
 
     <!-- 扫码登录弹层：任何视图里都能打开（发布页也会调它） -->
     <PlatformLoginDialog />
+    <!-- 发布这件作品（作品库详情里点开）：一件作品 → 一个渠道 → 一次人工确认 -->
+    <PublishSheet />
     <!-- 统一的应用内确认框与回执气泡（替代 window.confirm / 静默失败） -->
     <AppDialog />
     <AppToasts />

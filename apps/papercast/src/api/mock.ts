@@ -9,6 +9,9 @@ import type {
   PlatformLogoutResult,
   ChatReply,
   ChatRequest,
+  DraftBody,
+  DraftResult,
+  InteractionsResult,
   UploadResult,
 } from './types'
 import { EXAMPLE_PAPER, exampleSource } from '../data/example'
@@ -288,13 +291,26 @@ const DEMO_CHANNELS: PlatformChannel[] = [
     capabilities: ['视频投稿'],
     loginHint: '安装 biliup 后执行 biliup login',
   },
+  {
+    id: 'x',
+    name: 'X（推特）',
+    kind: 'export',
+    login: 'none',
+    state: 'material_only',
+    account: '',
+    detail: '只把英文 thread 落成本地素材包，不会真的发到 X（模拟）',
+    endpoint: '本地素材包（无通道服务）',
+    needs: ['英文传播：6-10 条英文 thread'],
+    capabilities: ['英文 thread 素材包'],
+    loginHint: '不用登录：导出后打开 X 网页端手动发',
+  },
 ]
 
 const DEFAULT_CONFIG: RunConfig = {
-  article: { variants: ['xhs-author', 'zhihu-analyst'] },
+  article: { variants: ['xhs-author', 'zhihu-analyst', 'en-analyst'] },
   poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'en' },
   video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '16:9', narration: '中文' },
-  publish: { targets: ['xhs', 'zhihu'], autoPublish: false },
+  publish: { targets: ['xhs', 'zhihu', 'x'], autoPublish: false },
 }
 
 let seq = 0
@@ -690,12 +706,97 @@ export class MockPipelineApi implements PipelineApi {
         },
       }
     }
+    if (/评论|回复|互动|通知/.test(t)) {
+      const wantsDraft = /起草|帮我回|回复一下|回一下|怎么回/.test(t)
+      return {
+        reply: wantsDraft
+          ? '（模拟器）我会照读到的评论起草一句；草稿只落盘、不会发出去 —— 发送要你逐条确认（P2）。'
+          : '（模拟器）我去读一遍「评论和@」，只读、不回复。',
+        model: 'mock',
+        context: ctx,
+        action: {
+          kind: wantsDraft ? 'draft' : 'interactions',
+          title: wantsDraft ? '读评论并起草一条回复' : '读一遍评论和@（只读）',
+          detail: '只读平台 + 在本机起草；一个字都不会发出去。',
+          params: wantsDraft ? {} : { limit: 10 },
+          needsConfirm: false,
+          confirmLabel: wantsDraft ? '起草' : '读一遍',
+          risk: 'readonly',
+        },
+      }
+    }
     return {
       reply:
         '（模拟器）这是占位回答。真实回答由本机后端调用你配置的模型产生，而且只依据这次运行已经落盘的事实源（run.json 与 understand/digest.json）。接上真后端后，同一个问题会得到真正的模型回答。',
       model: 'mock',
       context: ctx,
       action: null,
+    }
+  }
+
+  /* ---------- 互动（模拟器：形状与后端一致；**没有连平台，也没有真起草**） ---------- */
+
+  async interactions(): Promise<InteractionsResult> {
+    await new Promise((r) => setTimeout(r, 200))
+    return {
+      fetchedAt: Date.now(),
+      source: '（模拟器）编的演示数据：没连平台，也没真去读',
+      stage: 'P1',
+      canSend: false,
+      canSendNote: '这里只读和起草；发送要逐条确认（P2），现在一个字都不会发出去',
+      unread: { mentions: 2, likes: 5, connections: 1, unread: 8 },
+      filtered: 1,
+      errors: [],
+      gap: '',
+      items: [
+        {
+          id: 'mock-n1',
+          kind: 'comment',
+          author: '阿岚', authorId: 'mock-u1',
+          text: '这个方法能用在临床上吗？我爸的医生也在做类似的方向。',
+          workTitle: 'DeepRare', at: Date.now() - 3600_000, liked: false,
+          feedId: 'mock-f1', xsecToken: 'mock-token', commentId: 'mock-c1', canReply: true,
+        },
+        {
+          id: 'mock-n2',
+          kind: 'comment',
+          author: '老周', authorId: 'mock-u2',
+          text: '图表里的那个对比实验，样本量是不是有点小？',
+          workTitle: 'DeepRare', at: Date.now() - 7200_000, liked: true,
+          feedId: 'mock-f1', xsecToken: 'mock-token', commentId: 'mock-c2', canReply: true,
+        },
+        {
+          id: 'mock-n3',
+          kind: 'follow',
+          author: '小林', authorId: 'mock-u3',
+          text: '小林 关注了你',
+          workTitle: '', at: Date.now() - 9000_000, liked: false,
+          feedId: '', xsecToken: '', commentId: '', canReply: false,
+        },
+      ],
+    }
+  }
+
+  async draftReply(body: DraftBody): Promise<DraftResult> {
+    await new Promise((r) => setTimeout(r, 400))
+    return {
+      draft: {
+        id: 'mock-draft1',
+        at: Date.now(),
+        author: body.author ?? '',
+        workTitle: body.workTitle ?? '',
+        commentText: body.commentText,
+        // 模拟器不调模型、也不落盘，所以这里给的是一段**示例**，别把它当成真草稿
+        reply: '（模拟器示例）临床验证我们还没做，所以我不能说它现在能用；我在做的是让人更快读懂这类研究。',
+        why: '对方问能不能落地：先给边界，再给出路，别承诺没做过的事。',
+        model: 'mock',
+        stage: 'P1',
+        sent: false,
+      },
+      savedTo: '',
+      stage: 'P1',
+      canSend: false,
+      canSendNote: '（模拟器）没有真起草、也没有落盘 —— 接上真后端才会调用模型并写进 var/interactions/drafts.jsonl。',
     }
   }
 

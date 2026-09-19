@@ -11,18 +11,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
+from . import direct_publish as direct_publish_mod
 from . import ops as ops_mod
 from . import platforms as platforms_mod
 from .channels import routes as channels_routes
 from .chat_api import router as chat_router
 from .config_api import router as config_router
 from .config import settings
+from .interactions import router as interactions_router
 from .models import CreateRunRequest, GateRequest, PaperRun, SourceInput, new_run
 from .pipeline import Pipeline
 from .store import RunStore
@@ -45,6 +46,8 @@ app = FastAPI(title="PaperCast API", version=VERSION, lifespan=lifespan)
 app.include_router(channels_routes.router)
 app.include_router(config_router)
 app.include_router(chat_router)
+# 互动（P1）：GET /api/interactions（只读）、POST /api/interactions/draft（只起草，不发送）
+app.include_router(interactions_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -193,16 +196,21 @@ async def api_env() -> dict:
 
     latex = shutil.which("pdflatex") or shutil.which("xelatex") or shutil.which("latexmk") or ""
     gpu = _gpu_state()
+    # 复用 platforms 的探测及其缓存（_xhs_probe + _XHS_CACHE），不要在这里自己再打一遍 MCP。
+    # 这里原来是独立的 httpx 直连，两个问题：
+    #   1. **完全绕过缓存** —— 每次 /api/env 都真打 MCP，和 /api/platforms 一起把探测次数翻倍；
+    #   2. timeout=6.0 **比冷启动浏览器（8~20 秒）还短** —— 缓存未命中的那一次必然超时，
+    #      环境页于是间歇显示小红书探测失败。
+    # 顺带这也让 /api/env 与 /api/platforms 共用同一份结果，不会再同一瞬间双双未命中。
     mcp: dict[str, Any] = {"base": settings.xhs_mcp_base, "reachable": False, "loggedIn": False, "account": ""}
     try:
-        async with httpx.AsyncClient(timeout=6.0, trust_env=False) as cx:
-            h = await cx.get(f"{settings.xhs_mcp_base}/health")
-            mcp["reachable"] = h.status_code == 200
-            if mcp["reachable"]:
-                r = await cx.get(f"{settings.xhs_mcp_base}/api/v1/login/status")
-                d = (r.json() or {}).get("data") or {}
-                mcp["loggedIn"] = bool(d.get("is_logged_in"))
-                mcp["account"] = d.get("username") or ""
+        ch = await platforms_mod.get_channel("xhs", force=False)
+        # state: offline = MCP 不可达；login_required = 在线但未登录；ready = 已登录
+        mcp["reachable"] = ch.get("state") != "offline"
+        mcp["loggedIn"] = ch.get("state") == "ready"
+        mcp["account"] = ch.get("account") or ""
+        if not mcp["reachable"]:
+            mcp["error"] = ch.get("detail") or ""
     except Exception as e:
         mcp["error"] = f"{type(e).__name__}: {e}"
 
@@ -276,6 +284,17 @@ class PlatformPublishBody(PlatformDraftBody):
     confirmAccount: str = ""
 
 
+class RunPublishBody(BaseModel):
+    """作品库直投：一个渠道一次确认（可选地改标题/正文/标签）。"""
+
+    channelId: str
+    confirmed: bool = False
+    confirmAccount: str = ""
+    title: Optional[str] = None
+    content: Optional[str] = None
+    tags: Optional[list[str]] = None
+
+
 def _draft_payload(body: PlatformDraftBody) -> dict[str, Any]:
     data = body.model_dump()
     data["run_id"] = data.pop("runId", None)
@@ -308,6 +327,34 @@ async def platform_logout(channel_id: str) -> dict[str, Any]:
     前端会把这句话原样展示给用户，避免「点了没反应」。
     """
     return await platforms_mod.logout(channel_id)
+
+
+# --------------------------------------------------------------------------- #
+# 契约：/api/runs/{id}/drafts 与 /api/runs/{id}/publish —— 作品库直投
+#
+# 为什么要它：M3 的发布闸门是流水线里的一个内存协程，只有运行停等在 publish 阶段时才能放行；
+# run 跑完或后端重启后，界面上就再也没有发布入口，作品库里的作品只能看。这两个端点让作品
+# **任何时候**都能发（物料与渠道判定复用 M3 同一套渠道层，不重写变体选择逻辑）。
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/runs/{run_id}/drafts")
+async def run_drafts(run_id: str) -> dict[str, Any]:
+    """这次运行的逐渠道待发草稿：真实物料 + 真实登录态 + 为什么投不了。"""
+    return await direct_publish_mod.list_drafts(store, run_id)
+
+
+@app.post("/api/runs/{run_id}/publish")
+async def run_publish_work(run_id: str, body: RunPublishBody) -> dict[str, Any]:
+    """**把作品投到一个渠道**：`confirmed=false` 只落 export/（无副作用），`true` 才真投递。
+
+    投不出去时返回 `status="blocked"` + 人话原因（不是 4xx）：界面要把「为什么投不了」原样显示。
+    """
+    return await direct_publish_mod.publish_work(
+        store, run_id, body.channelId,
+        confirmed=bool(body.confirmed),
+        overrides={"title": body.title, "content": body.content, "tags": body.tags},
+        confirm_account=body.confirmAccount or "",
+    )
 
 
 # --------------------------------------------------------------------------- #

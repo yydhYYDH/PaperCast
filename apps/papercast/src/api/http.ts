@@ -10,6 +10,9 @@ import type {
   PlatformPublishRequest,
   PlatformPublishResult,
   PlatformQrcode,
+  RunDrafts,
+  RunPublishRequest,
+  RunPublishResult,
   StageId,
 } from '../types'
 import type {
@@ -17,7 +20,10 @@ import type {
   ChatReply,
   ChatRequest,
   ConfigPatchResult,
+  DraftBody,
+  DraftResult,
   EnvStatus,
+  InteractionsResult,
   LlmTestResult,
   PlatformLogoutResult,
   UploadResult,
@@ -39,6 +45,8 @@ import type {
  *   POST   /api/platforms/:id/export      -> { dir, files }（只落盘，无副作用）
  *   POST   /api/platforms/:id/publish     -> PlatformPublishResult（必须 confirmed=true）
  *   POST   /api/platforms/:id/login/logout-> 204
+ *   GET    /api/runs/:id/drafts           -> RunDrafts（作品库直投：逐渠道待发草稿）
+ *   POST   /api/runs/:id/publish          -> RunPublishResult（一个渠道一次确认；confirmed 才真投）
  *   GET    /api/ops/services              -> OpsService[]（五个服务的端口/pid/健康/日志）
  *   POST   /api/ops/services/:name/:action-> 起停服务（start|stop|restart）
  *   GET    /api/ops/logs?name=&lines=     -> OpsLog（var/logs/*.log 的尾巴）
@@ -62,8 +70,23 @@ export class HttpPipelineApi implements PipelineApi {
       headers: { 'Content-Type': 'application/json' },
       ...init,
     })
-    if (!res.ok) throw new Error(`${init?.method ?? 'GET'} ${path} -> ${res.status}`)
+    if (!res.ok) throw new Error(await this.why(res, init?.method ?? 'GET', path))
     return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
+  }
+
+  /**
+   * 出错时说人话：后端所有错误都是 `{ error: { code, message } }`（见 app/main.py 的 fail()），
+   * 而 `POST /x -> 409` 这种机械信息会被原样弹给用户 —— 「发布失败」和「为什么失败」是两回事。
+   */
+  private async why(res: Response, method: string, path: string): Promise<string> {
+    try {
+      const body = (await res.json()) as { error?: { code?: string; message?: string } }
+      const err = body?.error
+      if (err?.message) return err.code ? `${err.message}（${err.code}）` : err.message
+    } catch (e) {
+      // 不是 JSON（网关 / 代理返回的 HTML）→ 退到状态码
+    }
+    return `${method} ${path} -> ${res.status}`
   }
 
   listRuns() {
@@ -121,6 +144,19 @@ export class HttpPipelineApi implements PipelineApi {
     return this.json<PlatformLogoutResult>(`/api/platforms/${channelId}/login/logout`, { method: 'POST' })
   }
 
+  /* ---------- 作品库直投 ---------- */
+
+  listRunDrafts(runId: string) {
+    return this.json<RunDrafts>(`/api/runs/${runId}/drafts`)
+  }
+
+  publishRunWork(runId: string, body: RunPublishRequest) {
+    return this.json<RunPublishResult>(`/api/runs/${runId}/publish`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
   /* ---------- 对话 ---------- */
 
   chat(body: ChatRequest) {
@@ -148,6 +184,16 @@ export class HttpPipelineApi implements PipelineApi {
 
   opsMetrics(force = false) {
     return this.json<OpsMetrics>('/api/ops/metrics' + (force ? '?force=true' : ''))
+  }
+
+  /** 读一遍互动（只读）；读不到由后端如实写进 gap，不抛错 */
+  interactions(limit = 10) {
+    return this.json<InteractionsResult>(`/api/interactions?limit=${limit}`)
+  }
+
+  /** 起草回复：后端只落盘、不发送（发送是 P2，要逐条确认） */
+  draftReply(body: DraftBody) {
+    return this.json<DraftResult>('/api/interactions/draft', { method: 'POST', body: JSON.stringify(body) })
   }
 
   opsServiceAction(name: string, action: 'start' | 'stop' | 'restart') {
