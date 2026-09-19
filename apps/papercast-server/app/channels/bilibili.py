@@ -116,6 +116,7 @@ class BilibiliChannel(HttpChannel):
             channel=self.id, status="published",
             url=str(data.get("url") or ""),
             remote_id=str(data.get("bvid") or ""),
+            account=str(data.get("account") or ""),
             raw=data,
         )
 

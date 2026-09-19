@@ -32,6 +32,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -86,6 +87,12 @@ LOGIN_DIR = Path(os.environ.get("BILIBILI_LOGIN_DIR") or WS / "var" / "artifacts
 BILIUP_HOME = Path(os.environ.get("BILIBILI_HOME") or WS / "var" / "home")
 BILIUP = os.environ.get("BILIBILI_BILIUP") or shutil.which("biliup") or _find_biliup()
 DEFAULT_TID = int(os.environ.get("BILIBILI_TID", "231"))   # 学术向分区；以投稿页当前口径为准，可用环境变量改
+
+# B 站平台硬限制。超了不是「B 站会帮你截」，而是整次投稿失败：
+# 2026-09-19 实测，拿一篇 3624 字的知乎文章当简介 → biliup 退出码 1，
+# `ResponseData { code: 21052, message: "稿件描述长度太长，已超过限制" }` —— 上传白跑一趟。
+BILI_TITLE_LIMIT = 80        # 标题上限（创作中心口径）
+BILI_DESC_LIMIT = 2000       # 简介上限
 UPLOAD_TIMEOUT = int(os.environ.get("BILIBILI_UPLOAD_TIMEOUT", "2400"))
 EXTRA_ARGS = os.environ.get("BILIBILI_UPLOAD_EXTRA", "")    # 追加参数，例如 "--submit web --line cnbd"
 # 413（文件被拒）时的一次补救重试：换固定线路 + 限并发。方向以 biliup 文档为准，可用环境变量覆盖。
@@ -122,6 +129,39 @@ class ExportBody(BaseModel):
 class PublishBody(ExportBody):
     tid: int = DEFAULT_TID
     confirmed: bool = False
+
+
+def _clamp_text(text: str, limit: int) -> tuple[str, bool]:
+    """超长就截断（尽量切在句末），返回 (文本, 是否截断)。
+
+    宁可截断并如实说明，也不要让 B 站把整次投稿打回 —— 但**必须让调用方知道截了**，
+    所以截断要进 warnings（通道会把它带进回执的 degradations）。
+    """
+    if len(text) <= limit:
+        return text, False
+    head = text[: limit - 1]
+    for sep in ("。", "\n", "；", ". "):
+        idx = head.rfind(sep)
+        if idx >= int(limit * 0.6):        # 只在靠后处找，避免截得太短
+            return head[: idx + len(sep)].rstrip() + "…", True
+    return head.rstrip() + "…", True
+
+
+def _apply_platform_limits(body: PublishBody) -> tuple[PublishBody, list[str]]:
+    """把标题/简介收到 B 站上限内，返回 (改过的 body, warnings)。"""
+    warnings: list[str] = []
+    title, title_cut = _clamp_text(body.title, BILI_TITLE_LIMIT)
+    desc, desc_cut = _clamp_text(body.desc, BILI_DESC_LIMIT)
+    if title_cut:
+        warnings.append(f"标题超过 B 站 {BILI_TITLE_LIMIT} 字上限，已截断（原 {len(body.title)} 字）")
+    if desc_cut:
+        warnings.append(
+            f"简介超过 B 站 {BILI_DESC_LIMIT} 字上限，已从 {len(body.desc)} 字截断"
+            "（多半是这条 run 没有 B 站变体、直接借用了别的平台的稿子）"
+        )
+    if title_cut or desc_cut:
+        body = body.model_copy(update={"title": title, "desc": desc})
+    return body, warnings
 
 
 class CookiesBody(BaseModel):
@@ -444,7 +484,12 @@ async def publish(body: PublishBody) -> dict[str, Any]:
     if not state["is_logged_in"]:
         raise ChannelError(401, "NOT_LOGGED_IN", f"没有可用的 B 站登录态：{state['detail']}")
 
-    package = _write_package(body)          # 投之前先留一份可复核的素材包
+    body, limit_warnings = _apply_platform_limits(body)   # 超长先截断，别让整次投稿白跑
+    for item in limit_warnings:
+        # 这个服务没有 logger（日志就是 uvicorn 的访问日志），所以直接打标准错误，
+        # 保证 var/logs/bilibili.log 里能查到「这次投稿到底被截了什么」。
+        print(f"[limits] {item}", file=sys.stderr, flush=True)
+    package = _write_package(body)          # 投之前先留一份可复核的素材包（用的是收口后的文案）
     extra = shlex.split(EXTRA_ARGS)
     argv = _upload_argv(body, extra)
     command = " ".join(shlex.quote(a) for a in argv)
@@ -483,7 +528,11 @@ async def publish(body: PublishBody) -> dict[str, Any]:
         "command": command,
         "stdoutTail": stdout[-800:],
         "publishedAt": int(time.time() * 1000),
+        # 回执里要有「谁发的」：B 站这条以前是空的，作品库里看不出是哪个账号投的
+        "account": state.get("username") or "",
         "note": "biliup 返回 0 即已提交；是否过审以创作中心为准",
+        # 降级/收口必须跟着结论一起回去（通道 → 回执 degradations）
+        "warnings": limit_warnings,
     }
     if body.run_id:
         receipt = EXPORT_ROOT / body.run_id / "bilibili_receipt.json"
