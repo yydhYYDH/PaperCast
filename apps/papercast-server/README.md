@@ -59,6 +59,7 @@ uv pip install --python .venv/bin/python -r requirements-dev.txt   # 只有 pyte
 | [`docs/09-voice-styles.md`](docs/09-voice-styles.md) | 平台 × 人格的文案身份层（variant 解析与校验） |
 | [`docs/10-module-video.md`](docs/10-module-video.md) | video 阶段：分镜 → edge-tts 配音 → ffmpeg 合成真 mp4 |
 | [`docs/11-verification-6-stages.md`](docs/11-verification-6-stages.md) | 六阶段端到端真实验证记录（已知失败项 / 未修 bug 清单 / 未验证清单） |
+| [`docs/12-single-run-six-agents.md`](docs/12-single-run-six-agents.md) | 同一条 run 覆盖全部 6 个 Agent 的验证记录（51 件登记产物 / 42 件带 url） |
 
 ## 目录
 
