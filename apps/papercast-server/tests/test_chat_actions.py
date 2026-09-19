@@ -130,13 +130,34 @@ def test_service_action_is_whitelisted_and_confirmed() -> None:
     assert kind_of("重启一下那个不知道叫啥的东西", make_run()) != "service"
 
 
-def test_interaction_intent_replies_honestly_without_action() -> None:
-    """互动（读评论/起草回复）还没做：如实说没接上，但**不许**编一个不存在的动作出来。"""
-    proposed = _propose("帮我回一下评论", "run_test", make_run())
-    assert proposed is not None
-    reply, action = proposed
-    assert action is None
-    assert "还没接上" in reply
+def test_interaction_intents_give_readonly_cards_and_never_a_send_card() -> None:
+    """互动 P1：读评论 / 起草回复都给**只读**卡片 —— 永远不许出现「发送/回复」这类对外动作。
+
+    P1 = 只读 + 起草（草稿只落盘），发送是 P2 且要逐条确认（见 docs/10-ops-and-theme.md）。
+    """
+    read = _propose("看看评论", "run_test", make_run())
+    assert read is not None
+    _, read_action = read
+    assert read_action is not None
+    assert read_action["kind"] == "interactions"
+    assert read_action["risk"] == "readonly" and read_action["needsConfirm"] is False
+    assert read_action["params"] == {"limit": 10}
+
+    draft = _propose("帮我回一下评论", "run_test", make_run())
+    assert draft is not None
+    _, draft_action = draft
+    assert draft_action is not None
+    assert draft_action["kind"] == "draft"
+    assert draft_action["risk"] == "readonly"
+    assert draft_action["params"] == {}
+
+    # 话里带了评论原文 → 照它起草（MCP 没起/未登录时这条退路照样能用）
+    pasted = _propose("帮我回复一下：图表里的对比实验样本量是不是有点小？", "run_test", make_run())
+    assert pasted is not None and pasted[1] is not None
+    assert pasted[1]["params"]["commentText"].startswith("图表里的对比实验")
+
+    # 「帮我回一下」这种空指令不许被当成评论原文
+    assert _propose("帮我回一下", "run_test", make_run())[1]["params"] == {}
 
 
 def test_unrecognized_goes_to_the_model() -> None:

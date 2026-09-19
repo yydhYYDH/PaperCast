@@ -13,6 +13,10 @@
    变成一张**动作卡**（返回体里的 `action`），前端的对话里渲染成「一句话 + 一个动词按钮」，
    点了才真的执行。规则见下方「意图 → 动作提案」一节：**规则优先、模型兜底**，且**服务端零副作用**
    —— 这个端点永远只产出「打算做什么 + 参数」，不投递、不起停进程、不改任何东西。
+6. **互动是主 agent 的技能，不是第 7 个 agent**（2026-09-19，用户拍板）：说「看看评论」给一张
+   `kind=interactions` 的只读卡（真读在 `app/interactions.py`，只调 MCP 的只读路由）；说「帮我
+   起草回复」给 `kind=draft`（草稿只落 var/interactions/drafts.jsonl）。**这里永远不给「发送」这种
+   动作** —— 发送是 P2，要逐条人工确认，见 docs/10-ops-and-theme.md。
 
 挂载方式与 `app/config_api.py`、`app/channels/routes.py` 一致（APIRouter + 统一错误形状）。
 """
@@ -162,6 +166,8 @@ RERUN_WORDS = ("重跑", "重新跑", "再跑", "重来", "再来一遍", "重�
 METRIC_WORDS = ("数据", "效果", "表现", "多少", "几个", "播放", "点赞", "投币", "收藏",
                 "浏览", "涨了", "互动数", "阅读量")
 INTERACT_WORDS = ("评论", "回复", "通知", "私信", "回一下", "互动")
+#: 「起草」类话术：读评论之后顺手起草一条。**仍然只起草，不发送**（发送是 P2，要逐条确认）
+DRAFT_WORDS = ("起草", "帮我回", "帮我回复", "写个回复", "怎么回", "回复一下", "回一下评论", "回评论")
 
 
 def _hit(text: str, words: tuple[str, ...]) -> bool:
@@ -226,6 +232,23 @@ def _choose_option(gate: StageGate, text: str) -> Optional[GateOption]:
             if o.id == want:
                 return o
     return opts[0]
+
+
+#: 起草话术去掉之后，剩下的这截如果是「一段人话」，就当成用户贴进来的评论原文
+_COMMENT_LEAD = ("帮我回复一下", "帮我回一下", "帮我回复", "帮我回", "帮我起草回复", "起草回复",
+                 "起草一条回复", "写个回复", "回复一下", "回一下评论", "回评论", "怎么回", "起草")
+
+
+def _pasted_comment(text: str) -> str:
+    """从一句话里把「贴进来的评论原文」摘出来；摘不出就返回空串。
+
+    只在明显带了一段话时才认（>=8 个字），免得把「帮我回一下」这种空指令当成评论去起草。
+    """
+    t = text.strip()
+    for w in _COMMENT_LEAD:
+        t = t.replace(w, "")
+    t = t.strip().strip("：:，,。.、 「」“”\"'")
+    return t if len(t) >= 8 else ""
 
 
 def _propose(text: str, run_id: Optional[str], run: Optional[PaperRun]) -> Optional[tuple[str, Optional[dict[str, Any]]]]:
@@ -329,13 +352,51 @@ def _propose(text: str, run_id: Optional[str], run: Optional[PaperRun]) -> Optio
             },
         )
 
-    # 5) 互动（评论/回复/通知）—— 本轮只做到「看得懂能发什么任务」，读与起草还在下一轮
+    # 5) 互动（P1）：读评论/通知 + 起草回复。**永远不给「发送」这个动作**
+    if _hit(t, DRAFT_WORDS):
+        # 话里已经带了评论原文（「帮我回复一下：这条能用吗」）→ 直接照它起草，不必先去读平台；
+        # 没带原文 → 先去读最新的评论，读不到就如实说，并把「贴原文也能起草」这条退路讲清楚。
+        pasted = _pasted_comment(t)
+        if pasted:
+            return (
+                "我照你贴的这段起草一句，草稿只留在本机、不会发出去（发送要你逐条确认，P2 才做）。",
+                {
+                    "kind": "draft",
+                    "title": "就这段起草一句回复？",
+                    "detail": f"要回的评论原文：{pasted[:120]}",
+                    "params": {"commentText": pasted},
+                    "needsConfirm": False,
+                    "confirmLabel": "起草",
+                    "risk": "readonly",
+                },
+            )
+        return (
+            "我去把最新的评论读出来，再就那条起草一句回复。草稿只落在本机、不会发出去 —— "
+            "发送那一步要你逐条确认（P2 才做）。没有可回的评论我直接说，不硬凑；"
+            "要是这次读不到，你把评论原文贴给我，我照样能起草。",
+            {
+                "kind": "draft",
+                "title": "读评论并起草一条回复",
+                "detail": "只读平台 + 在本机起草；草稿落盘，一个字都不会发出去。",
+                "params": {},
+                "needsConfirm": False,
+                "confirmLabel": "起草",
+                "risk": "readonly",
+            },
+        )
     if _hit(t, INTERACT_WORDS):
         return (
-            "看评论、起草回复这件事还没接上：本机的小红书通道其实有读评论和回复的工具，但后端故意没暴露，"
-            "而且账号正在风控恢复期，我不会在这时候去撞它。已经排在下一步（只读评论 + 起草回复，不发送），"
-            "今天先把「用对话发任务」做实。",
-            None,
+            "我去读一遍小红书「评论和@」，只读、不回复。读的时候会真开一次浏览器，慢一点；"
+            "读不到我会直接说为什么，不拿「0 条评论」顶替。",
+            {
+                "kind": "interactions",
+                "title": "读一遍评论和@（只读）",
+                "detail": "只调用平台的只读接口；回复、点赞这类动作这里一个都不做。",
+                "params": {"limit": 10},
+                "needsConfirm": False,
+                "confirmLabel": "读一遍",
+                "risk": "readonly",
+            },
         )
 
     return None

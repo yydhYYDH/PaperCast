@@ -143,6 +143,7 @@ VAR_DIR = _WORKSPACE / "var" if (_WORKSPACE / "apps").is_dir() else ROOT / "data
 | `var/samples/` | 固定样例（`paper2video.pdf`、`papercast-lab/`） | 冒烟脚本要重新准备样例 |
 | `var/cache/` | 包缓存、浏览器登录态、fontconfig、tectonic | **`var/cache/xiaohongshu-mcp/browser` 删掉就要重新扫码登录** |
 | `var/toolchains/` | Go 工具链、`bili-venv`（biliup）、`zhihu-*-venv`、`p2b`（TeX/conda） | 重建成本高，且要重新联网 |
+| `var/interactions/` | **互动草稿**：`drafts.jsonl`（P1 起草的回复草稿，一行一条，`sent` 恒为 false —— 发没发看这个字段）。只落盘、不发送，见 `docs/10-ops-and-theme.md` §13 | 丢了起草记录（要重读一次评论）；不影响任何已发布内容 |
 | `var/scratch/` | 一次性探索产物：临时截图、调试输出、临时数据 | 无 |
 | `var/tmp/` · `var/build/` · `var/npm-tmp/` | 脚本临时文件、`build_mcp.sh` 的编译工作区、npm 临时目录 | 无（可随时清） |
 

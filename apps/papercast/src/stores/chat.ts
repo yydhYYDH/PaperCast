@@ -496,7 +496,7 @@ export const useChatStore = defineStore('chat', {
           const read = await this.interactionsTurn()
           if (!this.items.length) {
             return {
-              text: '这次读不到评论，所以我没得起草 —— ' + read.text.replace('这次没读到评论 —— ', ''),
+              text: '这次读不到评论，所以我没得起草 —— ' + read.text.replace('读不到评论 —— ', ''),
               bullets: ['你把评论原文贴进来说「帮我回复一下：<原文>」，我照样能起草（草稿只落盘，不发送）。'],
             }
           }
