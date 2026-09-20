@@ -110,10 +110,13 @@ class XiaohongshuChannel(HttpChannel):
                 err["code"] = "NOT_LOGGED_IN"
             return Delivery(channel=self.id, status="failed", error=err, raw=data)
         payload = data.get("data") or {}
+        # noteId / noteUrl 是 MCP 2026-09-20 起回的字段（发布成功后它去「我的笔记」按标题找回
+        # 刚发出去那条）。旧字段名留着兼容：改之前 MCP 只回 title/content/images/status，
+        # 回执里因此永远没有链接，界面上「已发布」看不到原文。
         return Delivery(
             channel=self.id, status="published",
-            remote_id=str(payload.get("note_id") or payload.get("noteId") or ""),
-            url=str(payload.get("permlink") or payload.get("url") or ""),
+            remote_id=str(payload.get("noteId") or payload.get("note_id") or ""),
+            url=str(payload.get("noteUrl") or payload.get("permlink") or payload.get("url") or ""),
             raw=payload,
         )
 
