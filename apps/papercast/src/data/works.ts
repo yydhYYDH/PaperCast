@@ -131,6 +131,16 @@ function readerFor(run: PaperRun, token: string): Artifact | undefined {
   return mine ?? mds[0] ?? find(all, /article\/export\/content\.txt$/)
 }
 
+/**
+ * 视频那一件的可读文字稿：成片的**旁白字幕**（video/subtitles.srt）。
+ * 视频件原先没有 reader，点开只剩一块空白；而字幕本来就是「它讲了什么」，
+ * 拿它当这件东西的文字稿最实在。没有就不给 —— 绝不拿别家的文章顶替。
+ */
+function scriptFor(run: PaperRun): Artifact | undefined {
+  return (stageOf(run, 'video')?.artifacts ?? [])
+    .find((a) => !!a.url && /video\/subtitles\.srt$/i.test(a.path))
+}
+
 function lineupFor(run: PaperRun, p: PlatformId): Lineup {
   const cards = images(run, 'article').filter((a) => /article\/cards\//.test(a.path)).sort((x, y) => x.path.localeCompare(y.path))
   const posters = images(run, 'poster')
@@ -162,6 +172,8 @@ function lineupFor(run: PaperRun, p: PlatformId): Lineup {
     return {
       cover: videoCover ?? biliCover,
       video: find(videos, /video\/video\.mp4$/) ?? videos[0],
+      // 成片 + 它自己的旁白稿：点开既能放片子，也能读它讲了什么
+      reader: scriptFor(run),
       shots: [],
     }
   }
@@ -300,8 +312,9 @@ export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
       const title = (channelRec?.title || exportTitle || run.title).trim()
 
       const reader = l.reader
+      // 视频件的文字稿是它自己的字幕，谈不上「借了别家的文案」
       const borrowed =
-        p !== 'generic' && reader && !TOKEN_RE[p].test(reader.path)
+        p !== 'generic' && !l.video && reader && !TOKEN_RE[p].test(reader.path)
           ? '这个平台没有专属文案，这份借的是「' + PLATFORM_META[platformTokenOf(reader.path)].label + '」的稿子'
           : ''
 

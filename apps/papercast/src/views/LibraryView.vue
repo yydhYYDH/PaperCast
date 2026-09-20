@@ -7,7 +7,7 @@
  *     B 站这一件同时给封面与成片；
  *   · 卡片右下角是**发布状态**（已发布 / 等你确认 / 存了草稿 / 没发成功），
  *     状态与「为什么是这个状态」都来自发布回执与发布阶段的检查项，不编；
- *   · 点开就是这一件本身：一篇文章（渲染后的正文）或一条视频（真播放器），
+ *   · 点开就是这一件本身：一篇文章（渲染后的正文）或一条视频（真播放器 + 它自己的旁白稿），
  *     右边一条窄栏说清状态、来源论文与可以做的动作。
  *
  * 原来的这一页是按「产物文件」罗列的（一张张 p1.png / video.mp4），用户看到的是文件，
@@ -156,6 +156,18 @@ const siblings = computed(() => current.value
   ? works.value.filter((w) => w.run.id === current.value!.run.id)
   : [])
 
+/**
+ * 字幕（.srt）→ 可读段落：丢掉「序号」和「00:00:01,000 --> 00:00:04,200」这种时间轴，只留讲出来的话。
+ * 视频那一件点开要能看到它自己说了什么，而不是一块空白。
+ */
+function srtToText(raw: string): string {
+  return raw
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => !!l && !/^\d+$/.test(l) && !/\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->/.test(l))
+    .join('\n\n')
+}
+
 watch(current, async (w) => {
   bodyHtml.value = ''
   bodyState.value = 'idle'
@@ -168,7 +180,9 @@ watch(current, async (w) => {
     // 纯文本导出的稿件没有 markdown 结构，按空行切段，别挤成一坨
     const body = w.reader.kind === 'markdown'
       ? text
-      : text.split(/\n+/).map((l) => l.trim()).filter(Boolean).join('\n\n')
+      : /\.srt$/i.test(w.reader.path)
+        ? srtToText(text) // 视频件的旁白稿：字幕文件，按「说的话」分段
+        : text.split(/\n+/).map((l) => l.trim()).filter(Boolean).join('\n\n')
     bodyHtml.value = md.render(body)
     bodyState.value = 'idle'
   } catch (e) {
@@ -369,14 +383,24 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
                   </a>
                 </div>
 
+                <!-- 视频件：下面这段是它自己的旁白稿（字幕），不是别家的文章 -->
+                <div v-if="current.kind === 'video' && bodyHtml" class="preview-note">
+                  这一件是视频，下面是它的旁白（讲解稿）。
+                </div>
+
                 <div v-if="bodyState === 'loading'" class="preview-note">正在读这份稿子…</div>
                 <div v-else-if="bodyState === 'error'" class="preview-note">
                   这份稿子读不出来（可能还没导出）。路径：<span class="mono">{{ current.reader?.path }}</span>
                 </div>
                 <article v-else-if="bodyHtml" class="reader prose" v-html="bodyHtml" />
 
-                <div v-else-if="!current.video" class="preview-note">
-                  这一件只有成图，没有可读的正文 —— 上面那些图就是它。
+                <div v-else class="preview-note">
+                  <template v-if="current.video">
+                    这一件是视频，本地没有它的旁白稿 —— 上面那条成片就是它本身。
+                  </template>
+                  <template v-else>
+                    这一件只有成图，没有可读的正文 —— 上面那些图就是它。
+                  </template>
                 </div>
               </div>
 
