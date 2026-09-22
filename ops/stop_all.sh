@@ -38,6 +38,11 @@ PATTERNS=(
 want() {
   [ "$WANT" = "all" ] && return 0
   for w in $WANT; do [ "$w" = "$1" ] && return 0; done
+  # 停 mcp 时把它的浏览器一起停：无头 Chromium 是 MCP 自己开的，留着会占住浏览器 profile，
+  # 下次起 MCP 可能因为这个残留 profile 出问题（它本来只能靠 stop_all.sh mcp mcp-browser 才停）。
+  if [ "$1" = "mcp-browser" ]; then
+    for w in $WANT; do [ "$w" = "mcp" ] && return 0; done
+  fi
   return 1
 }
 
@@ -53,16 +58,28 @@ echo "== 目标：$WANT =="
 
 SEEN=""   # 同一个进程可能先被 pid 文件、再被命令行特征匹配到，去重避免重复 kill 的噪音
 
-# --- 0) Windows 侧的 MCP -----------------------------------------------------
-# MCP 默认跑在 Windows 侧，而下面两种手段（pid 文件、/proc/<pid>/cmdline）**都只能停 Linux 进程**。
-# 不单独停它就会留下一个占着 18060 的 Windows 孤儿：下次 start_all.sh 又因为 WSL 的 ss
-# 看不到 Windows 的监听而以为端口空闲，于是重复去起 —— 所以这一步不能省。
-if command -v powershell.exe >/dev/null 2>&1 && want mcp; then
-  echo "== 0) Windows 侧的 MCP =="
-  if [ "$DRY" = "1" ]; then
-    echo "  (dry) 会停 Windows 侧的 xiaohongshu-mcp 与它自己的 Chrome"
+# --- 0) Windows 侧的 MCP（**只在 MCP 真跑在 Windows 侧时才做**）-----------------
+# 下面两种手段（pid 文件、/proc/<pid>/cmdline）都只能停 Linux 进程，所以真跑 Windows 侧时
+# 这一步不能省：不单独停它就会留下一个占着 18060 的 Windows 孤儿，下次 start_all.sh 又因为
+# WSL 的 ss 看不到 Windows 的监听而以为端口空闲、重复去起。
+#
+# 但**默认已经不是 Windows 侧了**：start_all.sh 里 XHS_MCP_PLATFORM 默认 wsl（2026-09-19 改，
+# 能真发成功的那一侧）。而 WSL 里 `command -v powershell.exe` 恒为真 —— 只按它判断的话，
+# 每次 stop 都会先去停 Windows 侧，而 mcp_windows.sh 的存活探测是 curl 127.0.0.1:18060，
+# 在 WSL2 里会探到**我们自己的 Linux 监听**（localhost 转发），于是必然回一句
+# 「18060 仍有响应」+「停止没成功」—— 纯假告警（2026-09-19 用户报的就是这个）。
+# 所以这里跟 start_all.sh 用同一个开关：跑 Linux 侧时整段跳过，交给下面 1)/2) 停。
+XHS_MCP_PLATFORM="${XHS_MCP_PLATFORM:-wsl}"
+if [ "$XHS_MCP_PLATFORM" = "windows" ] && want mcp; then
+  if command -v powershell.exe >/dev/null 2>&1; then
+    echo "== 0) Windows 侧的 MCP =="
+    if [ "$DRY" = "1" ]; then
+      echo "  (dry) 会停 Windows 侧的 xiaohongshu-mcp 与它自己的 Chrome"
+    else
+      "$WS/ops/mcp_windows.sh" stop || echo "  ⚠️ Windows 侧停止没成功，看上面的输出"
+    fi
   else
-    "$WS/ops/mcp_windows.sh" stop || echo "  ⚠️ Windows 侧停止没成功，看上面的输出"
+    echo "== 0) Windows 侧的 MCP：XHS_MCP_PLATFORM=windows 但找不到 powershell.exe，跳过 =="
   fi
 fi
 
@@ -102,10 +119,21 @@ done
 
 echo "== 2) 按命令行特征兜底 =="
 me="$$"
+# 自己这一条祖先链一律不碰。原因：`bash -c '<整段脚本正文>'` 这种调用方式，进程 cmdline 里
+# 带着正文，正文里只要出现过 "ops/bin/xiaohongshu-mcp" 字样（核验脚本里 ls 一下这个路径就够了），
+# 按子串兜底就会把**调用方自己**当成 MCP 停掉 —— 2026-09-19 实测：核验脚本跑到这一步直接被
+# 自己 SIGTERM，输出断在那里，看表像"停成功了但没输出"。
+self_chain=" $me "
+p="$me"
+while [ -n "$p" ] && [ "$p" != "0" ] && [ "$p" != "1" ]; do
+  p="$(awk '/^PPid:/{print $2}' "/proc/$p/status" 2>/dev/null)"
+  [ -n "$p" ] || break
+  case " $self_chain " in *" $p "*) ;; *) self_chain="$self_chain $p " ;; esac
+done
 hit=0
 for d in /proc/[0-9]*; do
   pid="${d#/proc/}"
-  [ "$pid" = "$me" ] && continue
+  case " $self_chain " in *" $pid "*) continue ;; esac
   cmd="$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)" || continue
   [ -n "$cmd" ] || continue
   # 别碰任何沙箱包装进程：它们的命令行里会带上被执行的脚本正文，容易误伤调用方
@@ -116,6 +144,16 @@ for d in /proc/[0-9]*; do
     pat="${entry#*|}"
     label="${entry%%|*}"
     want "$label" || continue
+    # mcp 这条要更严：它的路径短、最容易被别人的脚本正文带上，所以只在 **argv0 就是那个二进制**
+    # 时才认（正常运行时 argv0 正是 .../ops/bin/xiaohongshu-mcp-auth）。别的条目是长命令行串，
+    # 误命中概率低，保持子串匹配。
+    if [ "$label" = "mcp" ]; then
+      argv0="$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -1)"
+      case "$argv0" in
+        */xiaohongshu-mcp|*/xiaohongshu-mcp-auth) ;;
+        *) continue ;;
+      esac
+    fi
     case "$cmd" in
       *"$pat"*)
         stop_pid "$pid" "$label"
@@ -126,5 +164,18 @@ for d in /proc/[0-9]*; do
   done
 done
 [ "$hit" = "1" ] || echo "  （没有匹配到残留进程）"
+
+# --- 收尾核对：18060 到底清干净没有 ------------------------------------------
+# Linux 手段停不掉对面的实例，所以停完再问一次 18060。**HTTP 是跨 WSL/Windows 都成立的
+# 判据**（WSL 的 ss 看不到 Windows 的监听），只按端口/进程表判断会误报"已停"。
+# 还有响应就如实说清"剩下的是哪一侧"并给下一步，而不是留一句含糊的告警。
+if [ "$DRY" != "1" ] && want mcp && curl -s -o /dev/null --max-time 3 "http://127.0.0.1:18060/health"; then
+  if [ "$XHS_MCP_PLATFORM" = "windows" ]; then
+    echo "⚠️ 18060 还有响应：Windows 侧那个实例没停掉，看上面 ops/mcp_windows.sh 的输出"
+  else
+    echo "⚠️ 18060 还有响应：本机这一侧已经按 pid 与命令行停过了，那它多半在对面（Windows）——"
+    echo "   停对面：XHS_MCP_PLATFORM=windows ./ops/stop_all.sh mcp"
+  fi
+fi
 
 echo "== 完成（DRY=$DRY）=="

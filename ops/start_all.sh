@@ -123,6 +123,21 @@ mcp_alive() { curl -s -o /dev/null --max-time 3 "http://127.0.0.1:18060/health";
 
 start_mcp() {
   mcp_side_mismatch_warn
+
+  # 先问 18060 有没有实例在响应，再决定起不起 —— 不能用 ss 判断：WSL 的 ss 看不到 Windows
+  # 侧的监听，会以为端口空闲，于是去起第二个（撞端口 → 「启动失败」，日志里一句 EADDRINUSE，
+  # 看上去像 MCP 坏了，其实是它已经在服务了）。默认 Linux 侧时，占着端口的往往正是对面的实例，
+  # 这里如实说清是哪一侧、以及换边要先停谁。
+  if mcp_alive; then
+    if [ "$XHS_MCP_PLATFORM" = "windows" ]; then
+      echo "[mcp] 18060 已有实例在响应，跳过启动（要换到 Linux 侧：先 XHS_MCP_PLATFORM=windows ./ops/stop_all.sh mcp）"
+    else
+      echo "[mcp] 18060 已有实例在响应，跳过启动 —— 它可能是**对面（Windows）**那个；"
+      echo "[mcp] 要改跑本机（Linux）侧：先 XHS_MCP_PLATFORM=windows ./ops/stop_all.sh mcp，再 ./ops/start_all.sh mcp"
+    fi
+    return 0
+  fi
+
   if [ "$XHS_MCP_PLATFORM" = "windows" ]; then
     if command -v powershell.exe >/dev/null 2>&1; then
       "$WS/ops/mcp_windows.sh" start
