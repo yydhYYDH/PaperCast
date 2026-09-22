@@ -44,6 +44,34 @@ index 74c4654..086874f 100644
  	golang.org/x/net v0.25.0 // indirect
  	golang.org/x/oauth2 v0.34.0 // indirect
  	golang.org/x/sys v0.40.0 // indirect
+diff --git a/handlers_api.go b/handlers_api.go
+index ca5eff6..65d3172 100644
+--- a/handlers_api.go
++++ b/handlers_api.go
+@@ -43,9 +43,21 @@ func respondSuccess(c *gin.Context, data any, message string) {
+ 	c.JSON(http.StatusOK, response)
+ }
+ 
+-// checkLoginStatusHandler 检查登录状态
++// checkLoginStatusHandler 检查登录状态。
++// 默认吃 TTL 缓存（轮询调用的就该是这个）；?force=1 才跳过缓存强制重探，
++// 供「用户主动点刷新」这类明确意图使用——它一定伴随一次真实浏览器访问。
+ func (s *AppServer) checkLoginStatusHandler(c *gin.Context) {
+-	status, err := s.xiaohongshuService.CheckLoginStatus(c.Request.Context())
++	force := c.Query("force") == "1" || c.Query("force") == "true"
++
++	var (
++		status *LoginStatusResponse
++		err    error
++	)
++	if force {
++		status, err = s.xiaohongshuService.CheckLoginStatusForce(c.Request.Context())
++	} else {
++		status, err = s.xiaohongshuService.CheckLoginStatus(c.Request.Context())
++	}
+ 	if err != nil {
+ 		respondError(c, http.StatusInternalServerError, "STATUS_CHECK_FAILED",
+ 			"检查登录状态失败", err.Error())
 diff --git a/main.go b/main.go
 index bbcbb62..47514a3 100644
 --- a/main.go
@@ -95,7 +123,7 @@ index bbcbb62..47514a3 100644
  		logrus.Fatalf("failed to run server: %v", err)
  	}
 diff --git a/middleware.go b/middleware.go
-index dd7047f..9bdaa1b 100644
+index dd7047f..f4cc8db 100644
 --- a/middleware.go
 +++ b/middleware.go
 @@ -1,37 +1,14 @@
@@ -138,6 +166,35 @@ index dd7047f..9bdaa1b 100644
  
  // corsMiddleware CORS 中间件
  func corsMiddleware() gin.HandlerFunc {
+@@ -58,3 +35,28 @@ func errorHandlingMiddleware() gin.HandlerFunc {
+ 			"服务器内部错误", recovered)
+ 	})
+ }
++
++// accessBudgetMiddleware 浏览器访问预算用尽时直接拒绝。
++//
++// /api/v1 下的接口底层都可能拉起浏览器访问小红书，调用方一旦写成秒级轮询，
++// 账号在平台侧就会被判定为机器人。这里宁可拒绝也不放行：多一次真实访问就多一分风险。
++// 预算只统计「真的开了浏览器」的调用，命中 login/status 缓存的轮询不计入。
++func accessBudgetMiddleware() gin.HandlerFunc {
++	return func(c *gin.Context) {
++		if used, max, window := xhsBudget.Snapshot(); max > 0 && used >= max {
++			logrus.Warnf("浏览器访问预算已用尽（近 %s 内 %d/%d），拒绝 %s %s",
++				window, used, max, c.Request.Method, c.Request.URL.Path)
++
++			respondError(c, http.StatusTooManyRequests, "BROWSER_BUDGET_EXCEEDED",
++				"小红书访问过于频繁，已触发保护性限流", gin.H{
++					"used":          used,
++					"max":           max,
++					"windowSeconds": int(window.Seconds()),
++				})
++			c.Abort()
++			return
++		}
++
++		c.Next()
++	}
++}
 diff --git a/middleware_test.go b/middleware_test.go
 index 6e69676..dfedfa7 100644
 --- a/middleware_test.go
@@ -229,7 +286,7 @@ index 6e69676..dfedfa7 100644
 +	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
 +}
 diff --git a/routes.go b/routes.go
-index f6bffc3..e503fdd 100644
+index f6bffc3..00ef01a 100644
 --- a/routes.go
 +++ b/routes.go
 @@ -23,6 +23,11 @@ func setupRoutes(appServer *AppServer) *gin.Engine {
@@ -244,7 +301,7 @@ index f6bffc3..e503fdd 100644
  	// MCP 端点 - 使用官方 SDK 的 Streamable HTTP Handler
  	mcpHandler := mcp.NewStreamableHTTPHandler(
  		func(r *http.Request) *mcp.Server {
-@@ -37,7 +42,7 @@ func setupRoutes(appServer *AppServer) *gin.Engine {
+@@ -37,13 +42,15 @@ func setupRoutes(appServer *AppServer) *gin.Engine {
  		},
  	)
  	protected := router.Group("")
@@ -253,6 +310,14 @@ index f6bffc3..e503fdd 100644
  
  	protected.Any("/mcp", gin.WrapH(mcpHandler))
  	protected.Any("/mcp/*path", gin.WrapH(mcpHandler))
+ 
+ 	// API 路由组
+ 	api := protected.Group("/api/v1")
++	// 预算护栏放在鉴权之后：未授权的调用不该消耗预算，也不该拿到预算信息。
++	api.Use(accessBudgetMiddleware())
+ 	{
+ 		api.GET("/login/status", appServer.checkLoginStatusHandler)
+ 		api.GET("/login/qrcode", appServer.getLoginQrcodeHandler)
 diff --git a/routes_test.go b/routes_test.go
 index 4a07208..e3bb8bc 100644
 --- a/routes_test.go
@@ -302,3 +367,290 @@ index 4a07208..e3bb8bc 100644
  	recorder := httptest.NewRecorder()
  	request := httptest.NewRequest(http.MethodPost, "/mcp",
  		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+diff --git a/service.go b/service.go
+index 499b216..3410ca5 100644
+--- a/service.go
++++ b/service.go
+@@ -60,6 +60,9 @@ type PublishResponse struct {
+ 	Content string `json:"content"`
+ 	Images  int    `json:"images"`
+ 	Status  string `json:"status"`
++	// 发布成功后回填：笔记 id 与公开地址（拿不到就为空，调用方据此判断有没有链接）
++	NoteID  string `json:"noteId,omitempty"`
++	NoteURL string `json:"noteUrl,omitempty"`
+ }
+ 
+ // PublishVideoRequest 发布视频请求（仅支持本地单个视频文件）
+@@ -79,6 +82,9 @@ type PublishVideoResponse struct {
+ 	Content string `json:"content"`
+ 	Video   string `json:"video"`
+ 	Status  string `json:"status"`
++	// 同图文：发布成功后回填笔记 id 与公开地址
++	NoteID  string `json:"noteId,omitempty"`
++	NoteURL string `json:"noteUrl,omitempty"`
+ }
+ 
+ // FeedsListResponse Feeds列表响应
+@@ -98,11 +104,73 @@ type UserProfileResponse struct {
+ func (s *XiaohongshuService) DeleteCookies(ctx context.Context) error {
+ 	cookiePath := cookies.GetCookiesFilePath()
+ 	cookieLoader := cookies.NewLoadCookie(cookiePath)
+-	return cookieLoader.DeleteCookies()
++	if err := cookieLoader.DeleteCookies(); err != nil {
++		return err
++	}
++
++	// 登录态已变，立刻失效缓存，否则最长一个 TTL 内仍会报「已登录」。
++	loginStatusCA.invalidate()
++	return nil
+ }
+ 
+-// CheckLoginStatus 检查登录状态
++// CheckLoginStatus 轮询路径。**永不主动开浏览器**：
++//
++//	TTL 内           -> 直接返回
++//	过期但查过       -> 返回上次的结果，不重新探测
++//	本次启动从没查过 -> 真查一次（每个进程生命周期最多一次）
++//
++// 为什么不改成「读本地 cookies.json 判断」：不可靠。实测 cookies.json 里有 18 个
++// cookie、含 web_session 与 id_token，看起来完全像已登录，但服务端会话其实早已失效
++// （真访问才发现是 login_required）。本地文件只能证明「手里有 cookie」，
++// 不能证明「服务端还认它」，所以宁可复用旧结论，也不用一个会谎报的本地猜测。
++//
++// 要权威结果请用 CheckLoginStatusForce（HTTP 上的 ?force=1）。
+ func (s *XiaohongshuService) CheckLoginStatus(ctx context.Context) (*LoginStatusResponse, error) {
++	if cached, ok := loginStatusCA.get(); ok {
++		return cached, nil
++	}
++	if stale, age, ok := loginStatusCA.peek(); ok {
++		logrus.Infof("登录态沿用上次结果（%s 前），不主动探测", age.Truncate(time.Second))
++		return stale, nil
++	}
++	return s.probeLoginStatus(ctx)
++}
++
++// CheckLoginStatusForce 跳过缓存强制重探，供调用方明确要求时使用（如用户主动点刷新）。
++// 它一定伴随一次真实浏览器访问，**不要**接到自动轮询上。
++func (s *XiaohongshuService) CheckLoginStatusForce(ctx context.Context) (*LoginStatusResponse, error) {
++	return s.probeLoginStatus(ctx)
++}
++
++// probeLoginStatus 探测登录态。并发未命中时**只让一个调用真去开浏览器**，其余等它的结果（单飞）。
++// 为什么必须单飞：TTL 到期那一瞬间同时到达的两个请求会双双未命中、各开一个浏览器，
++// 用户就看到小红书窗口成对弹出。实测后端有两条路径（/api/platforms 与 /api/env）
++// 以 60 秒为周期同时打过来。细节见 statusCache.begin。
++func (s *XiaohongshuService) probeLoginStatus(ctx context.Context) (*LoginStatusResponse, error) {
++	cached, f, mine := loginStatusCA.begin()
++	if cached != nil {
++		return cached, nil
++	}
++	if !mine {
++		// 已有探测在跑：等它，别自己再开一个浏览器
++		select {
++		case <-f.done:
++			if f.resp != nil {
++				return f.resp, nil
++			}
++			return nil, f.err
++		case <-ctx.Done():
++			return nil, ctx.Err()
++		}
++	}
++
++	resp, err := s.probeLoginStatusOnce(ctx)
++	loginStatusCA.end(f, resp, err)
++	return resp, err
++}
++
++// probeLoginStatusOnce 真正开浏览器探测。缓存回填统一放在 probeLoginStatus 的 end 里。
++func (s *XiaohongshuService) probeLoginStatusOnce(ctx context.Context) (*LoginStatusResponse, error) {
+ 	b := newBrowser()
+ 	defer b.Close()
+ 
+@@ -130,6 +198,7 @@ func (s *XiaohongshuService) CheckLoginStatus(ctx context.Context) (*LoginStatus
+ 		}
+ 	}
+ 
++	// 缓存回填由 probeLoginStatus 里的 end 统一负责，这里不写缓存。
+ 	return response, nil
+ }
+ 
+@@ -192,6 +261,8 @@ func (s *XiaohongshuService) waitScanInBackground(
+ 				logrus.Errorf("扫码成功但保存 cookies 失败，会话 #%d: %v", seq, err)
+ 				return
+ 			}
++			// 刚登录成功，让登录态缓存失效，调用方能马上看到新状态。
++			loginStatusCA.invalidate()
+ 			logrus.Infof("扫码登录成功，cookies 已保存，会话 #%d", seq)
+ 			return
+ 		}
+@@ -249,7 +320,8 @@ func (s *XiaohongshuService) PublishContent(ctx context.Context, req *PublishReq
+ 		Products:     req.Products,
+ 	}
+ 
+-	if err := s.publishContent(ctx, content); err != nil {
++	noteID, noteURL, err := s.publishContent(ctx, content)
++	if err != nil {
+ 		logrus.Errorf("发布内容失败: title=%s %v", content.Title, err)
+ 		return nil, err
+ 	}
+@@ -259,6 +331,8 @@ func (s *XiaohongshuService) PublishContent(ctx context.Context, req *PublishReq
+ 		Content: req.Content,
+ 		Images:  len(imagePaths),
+ 		Status:  "发布完成",
++		NoteID:  noteID,
++		NoteURL: noteURL,
+ 	}
+ 
+ 	return response, nil
+@@ -270,8 +344,9 @@ func (s *XiaohongshuService) processImages(images []string) ([]string, error) {
+ 	return processor.ProcessImages(images)
+ }
+ 
+-// publishContent 执行内容发布
+-func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohongshu.PublishImageContent) error {
++// publishContent 执行内容发布，成功后再找回这条笔记的 id 与公开地址。
++// 地址拿不到不算失败（我的笔记列表有刷新延迟），只是回执里没有链接。
++func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohongshu.PublishImageContent) (noteID, noteURL string, err error) {
+ 	b := newBrowser()
+ 	defer b.Close()
+ 
+@@ -280,10 +355,14 @@ func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohon
+ 
+ 	action, err := xiaohongshu.NewPublishImageAction(page)
+ 	if err != nil {
+-		return err
++		return "", "", err
++	}
++	if err := action.Publish(ctx, content); err != nil {
++		return "", "", err
+ 	}
+ 
+-	return action.Publish(ctx, content)
++	noteID, noteURL = xiaohongshu.NewUserProfileAction(page).FindMyNote(ctx, content.Title)
++	return noteID, noteURL, nil
+ }
+ 
+ // PublishVideo 发布视频（本地文件）
+@@ -336,7 +415,8 @@ func (s *XiaohongshuService) PublishVideo(ctx context.Context, req *PublishVideo
+ 		Products:     req.Products,
+ 	}
+ 
+-	if err := s.publishVideo(ctx, content); err != nil {
++	noteID, noteURL, err := s.publishVideo(ctx, content)
++	if err != nil {
+ 		return nil, err
+ 	}
+ 
+@@ -345,12 +425,14 @@ func (s *XiaohongshuService) PublishVideo(ctx context.Context, req *PublishVideo
+ 		Content: req.Content,
+ 		Video:   req.Video,
+ 		Status:  "发布完成",
++		NoteID:  noteID,
++		NoteURL: noteURL,
+ 	}
+ 	return resp, nil
+ }
+ 
+-// publishVideo 执行视频发布
+-func (s *XiaohongshuService) publishVideo(ctx context.Context, content xiaohongshu.PublishVideoContent) error {
++// publishVideo 执行视频发布，成功后再找回这条笔记的 id 与公开地址（同图文）。
++func (s *XiaohongshuService) publishVideo(ctx context.Context, content xiaohongshu.PublishVideoContent) (noteID, noteURL string, err error) {
+ 	b := newBrowser()
+ 	defer b.Close()
+ 
+@@ -359,10 +441,14 @@ func (s *XiaohongshuService) publishVideo(ctx context.Context, content xiaohongs
+ 
+ 	action, err := xiaohongshu.NewPublishVideoAction(page)
+ 	if err != nil {
+-		return err
++		return "", "", err
++	}
++	if err := action.PublishVideo(ctx, content); err != nil {
++		return "", "", err
+ 	}
+ 
+-	return action.PublishVideo(ctx, content)
++	noteID, noteURL = xiaohongshu.NewUserProfileAction(page).FindMyNote(ctx, content.Title)
++	return noteID, noteURL, nil
+ }
+ 
+ // ListFeeds 获取Feeds列表
+@@ -617,7 +703,11 @@ func (s *XiaohongshuService) ReplyNotification(ctx context.Context, commentID, c
+ 	return xiaohongshu.NewNotificationAction(page).Reply(ctx, commentID, content)
+ }
+ 
++// newBrowser 是所有业务操作的唯一浏览器入口，因此在这里统一记访问预算。
++// 不改签名是为了不动 19 个调用点；超限由 accessBudgetMiddleware 在入口拦截。
+ func newBrowser() *headless_browser.Browser {
++	xhsBudget.Record()
++
+ 	return browser.NewBrowser(configs.IsHeadless(),
+ 		browser.WithFingerprintSeed(configs.FingerprintSeed()),
+ 		browser.WithProxy(configs.Proxy()),
+diff --git a/xiaohongshu/publish.go b/xiaohongshu/publish.go
+index 96fe7a1..2774dc0 100644
+--- a/xiaohongshu/publish.go
++++ b/xiaohongshu/publish.go
+@@ -734,14 +734,17 @@ func inputTag(ctx context.Context, contentElem *rod.Element, tag string) error {
+ 
+ 	time.Sleep(1 * time.Second) // 技术等待：等联想结果刷新
+ 
++	// 联想框查找必须自带短超时：rod 的 Element 会一直等到 page 的 deadline，
++	// 而发布页的 deadline 是 300s（见 NewPublishImageAction）。标签没有联想项时，
++	// 这一句会把整个发布预算耗光，最后只报一句看不懂的 context canceled。
+ 	page := contentElem.Page()
+-	topicContainer, err := page.Element("#creator-editor-topic-container")
++	topicContainer, err := page.Timeout(3 * time.Second).Element("#creator-editor-topic-container")
+ 	if err != nil || topicContainer == nil {
+ 		slog.Warn("未找到标签联想下拉框，直接输入空格", "tag", tag)
+ 		return humanize.Type(ctx, contentElem, " ")
+ 	}
+ 
+-	firstItem, err := topicContainer.Element(".item")
++	firstItem, err := topicContainer.Timeout(2 * time.Second).Element(".item")
+ 	if err != nil || firstItem == nil {
+ 		slog.Warn("未找到标签联想选项，直接输入空格", "tag", tag)
+ 		return humanize.Type(ctx, contentElem, " ")
+diff --git a/xiaohongshu/user_profile.go b/xiaohongshu/user_profile.go
+index 61216c7..45f3539 100644
+--- a/xiaohongshu/user_profile.go
++++ b/xiaohongshu/user_profile.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"encoding/json"
+ 	"fmt"
++	"log/slog"
+ 	"strings"
+ 	"time"
+ 
+@@ -145,6 +146,29 @@ func makeUserProfileURL(userID, xsecToken string, tab ProfileTab) string {
+ 	return url
+ }
+ 
++// FindMyNote 去「我的笔记」里按标题找一条笔记，返回它的 id 与公开地址。
++// 发布成功之后调用它，把刚发出去的那条地址带回给调用方（小红书的成功页 URL 里没有笔记号）。
++// 找不到就返回空串：列表有刷新延迟，宁可没有地址，也不能给一个错地址。
++func (u *UserProfileAction) FindMyNote(ctx context.Context, title string) (id, url string) {
++	title = strings.TrimSpace(title)
++	if title == "" {
++		return "", ""
++	}
++
++	resp, err := u.GetMyProfileViaSidebar(ctx, TabNotes)
++	if err != nil {
++		slog.Warn("发布后读不到我的笔记列表，这次回执里就没有笔记地址", "err", err)
++		return "", ""
++	}
++	for _, f := range resp.Feeds {
++		if strings.TrimSpace(f.NoteCard.DisplayTitle) == title {
++			return f.ID, makeFeedDetailURL(f.ID, f.XsecToken)
++		}
++	}
++	slog.Warn("我的笔记列表里没有标题匹配的那条（可能还没刷新出来）", "title", title)
++	return "", ""
++}
++
+ func (u *UserProfileAction) GetMyProfileViaSidebar(ctx context.Context, tab ProfileTab) (*UserProfileResponse, error) {
+ 	page := u.page.Context(ctx).Timeout(60 * time.Second) // 重设被 .Context 清掉的 deadline
+ 

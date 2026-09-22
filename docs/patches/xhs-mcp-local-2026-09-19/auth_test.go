@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -89,7 +90,16 @@ func TestLoginAcceptsCorrectPasswordAndOpensSession(t *testing.T) {
 	assert.True(t, cookie.HttpOnly, "会话 cookie 必须是 HttpOnly")
 	assert.Equal(t, http.SameSiteLaxMode, cookie.SameSite)
 
-	// 带 cookie 访问受保护接口应当放行
+	// 带 cookie 访问受保护接口应当放行。
+	//
+	// 注意：受保护端点全都是小红书业务接口，**每个都会真开浏览器**，
+	// 不热缓存就会卡在 browser.go 的启动浏览器上（曾经让整个套件挂死 60 秒超时）。
+	// 这里关心的是「鉴权有没有放行」，不是业务结果，所以先把缓存热上。
+	saved := loginStatusCA
+	loginStatusCA = &statusCache{ttl: time.Minute}
+	loginStatusCA.set(&LoginStatusResponse{IsLoggedIn: false})
+	defer func() { loginStatusCA = saved }()
+
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/login/status", nil)
 	request.AddCookie(cookie)
 	protected := httptest.NewRecorder()
