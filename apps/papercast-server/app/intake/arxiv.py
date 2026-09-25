@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
@@ -30,12 +31,37 @@ ID_RE = re.compile(
 RETRYABLE_STATUS = frozenset({406, 408, 425, 429, 500, 502, 503, 504})
 ATTEMPTS = 4
 BASE_DELAY = 0.7
+API_INTERVAL = 3.1
+_API_LOCK: Optional[asyncio.Lock] = None
+_API_LOCK_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_LAST_API_REQUEST = 0.0
 # arXiv 的 API 使用条款要求带上能识别调用方的 User-Agent（默认的 python-httpx 不达标）
 UA = "PaperCast/0.1 (arXiv intake; +https://github.com/yydhYYDH/PaperCast)"
 
 
 def _headers() -> dict[str, str]:
-    return {"User-Agent": UA}
+    return {
+        "User-Agent": UA,
+        "Accept": "application/atom+xml, application/xml;q=0.9, */*;q=0.8",
+    }
+
+
+def _api_lock() -> asyncio.Lock:
+    global _API_LOCK, _API_LOCK_LOOP, _LAST_API_REQUEST
+    loop = asyncio.get_running_loop()
+    if _API_LOCK is None or _API_LOCK_LOOP is not loop:
+        _API_LOCK = asyncio.Lock()
+        _API_LOCK_LOOP = loop
+        _LAST_API_REQUEST = 0.0
+    return _API_LOCK
+
+
+async def _wait_for_api_slot() -> None:
+    global _LAST_API_REQUEST
+    delay = API_INTERVAL - (time.monotonic() - _LAST_API_REQUEST)
+    if delay > 0:
+        await asyncio.sleep(delay)
+    _LAST_API_REQUEST = time.monotonic()
 
 
 async def _get(client: httpx.AsyncClient, url: str, **kw) -> httpx.Response:
@@ -47,7 +73,9 @@ async def _get(client: httpx.AsyncClient, url: str, **kw) -> httpx.Response:
     last: Exception | None = None
     for i in range(ATTEMPTS):
         try:
-            resp = await client.get(url, headers=_headers(), **kw)
+            async with _api_lock():
+                await _wait_for_api_slot()
+                resp = await client.get(url, headers=_headers(), **kw)
         except httpx.TransportError as e:  # 连接失败 / 超时 / 协议错
             last = e
         else:
@@ -69,19 +97,21 @@ async def _stream_to(client: httpx.AsyncClient, url: str, dest: Path) -> None:
     last: Exception | None = None
     for i in range(ATTEMPTS):
         try:
-            async with client.stream("GET", url, headers=_headers()) as resp:
-                if resp.status_code in RETRYABLE_STATUS:
-                    last = httpx.HTTPStatusError(
-                        f"arXiv 返回 {resp.status_code}，已重试 {i + 1}/{ATTEMPTS} 次",
-                        request=resp.request,
-                        response=resp,
-                    )
-                else:
-                    resp.raise_for_status()
-                    with dest.open("wb") as fh:
-                        async for chunk in resp.aiter_bytes(1 << 16):
-                            fh.write(chunk)
-                    return
+            async with _api_lock():
+                await _wait_for_api_slot()
+                async with client.stream("GET", url, headers=_headers()) as resp:
+                    if resp.status_code in RETRYABLE_STATUS:
+                        last = httpx.HTTPStatusError(
+                            f"arXiv 返回 {resp.status_code}，已重试 {i + 1}/{ATTEMPTS} 次",
+                            request=resp.request,
+                            response=resp,
+                        )
+                    else:
+                        resp.raise_for_status()
+                        with dest.open("wb") as fh:
+                            async for chunk in resp.aiter_bytes(1 << 16):
+                                fh.write(chunk)
+                        return
         except httpx.TransportError as e:
             last = e
         if i < ATTEMPTS - 1:

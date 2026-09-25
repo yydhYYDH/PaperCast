@@ -9,6 +9,7 @@ import PublishSheet from './components/PublishSheet.vue'
 import AppDialog from './components/AppDialog.vue'
 import AppToasts from './components/AppToasts.vue'
 import WorkbenchView from './views/WorkbenchView.vue'
+import DailyPapersView from './views/DailyPapersView.vue'
 import RunsView from './views/RunsView.vue'
 import LibraryView from './views/LibraryView.vue'
 import PlatformsView from './views/PlatformsView.vue'
@@ -31,6 +32,7 @@ onMounted(() => void store.bootstrap())
 
       <!-- 工作台：一个对话入口（左侧对话，右侧谁在干活） -->
       <WorkbenchView v-if="ui.view === 'workbench'" />
+      <DailyPapersView v-else-if="ui.view === 'daily'" />
 
       <RunsView v-else-if="ui.view === 'runs'" />
       <LibraryView v-else-if="ui.view === 'library'" />

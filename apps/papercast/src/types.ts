@@ -1,6 +1,6 @@
 /** 领域模型：一条「论文 → 多形态产物」的运行 */
 
-export type ViewId = 'workbench' | 'runs' | 'library' | 'platforms' | 'style' | 'ops' | 'settings'
+export type ViewId = 'workbench' | 'runs' | 'daily' | 'library' | 'platforms' | 'style' | 'ops' | 'settings'
 
 export type StageId = 'intake' | 'understand' | 'article' | 'poster' | 'video' | 'publish'
 

@@ -24,6 +24,7 @@ from .channels import routes as channels_routes
 from .chat_api import router as chat_router
 from .config_api import router as config_router
 from .config import settings
+from .hf_daily_api import router as hf_daily_router
 from .interactions import router as interactions_router
 from .skills_api import router as skills_router
 from .styles_api import router as styles_router
@@ -55,6 +56,8 @@ app.include_router(interactions_router)
 app.include_router(skills_router)
 # 文章风格清单：GET /api/styles（平台 × 讲述者人格，给风格页直接展示）
 app.include_router(styles_router)
+# HuggingFace Daily Papers：GET /api/hf-daily（当日/指定日期的每日论文 → arXiv 链接）
+app.include_router(hf_daily_router)
 
 app.add_middleware(
     CORSMiddleware,

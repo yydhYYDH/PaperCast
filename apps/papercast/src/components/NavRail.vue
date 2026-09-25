@@ -6,6 +6,8 @@ defineEmits<{ (e: 'navigate', v: ViewId): void }>()
 
 const items: { id: ViewId; label: string; icon: string }[] = [
   { id: 'workbench', label: '工作台', icon: 'M4 13h6V4H4v9Zm10 7h6v-9h-6v9ZM4 20h6v-4H4v4Zm10-11h6V4h-6v5Z' },
+  // 每日论文：HF Daily Papers 榜单，挑一篇直接开跑
+  { id: 'daily', label: '每日论文', icon: 'M4 5h13a3 3 0 0 1 3 3v11H7a3 3 0 0 1-3-3V5Zm0 0v13M8 9h8M8 13h8M8 17h5' },
   { id: 'runs', label: '运行记录', icon: 'M12 8v5l4 2M12 3a9 9 0 1 0 9 9' },
   { id: 'library', label: '作品库', icon: 'M4 5h16v4H4zM4 15h16v4H4zM4 11h16' },
   { id: 'platforms', label: '平台账号', icon: 'M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm-7 9a7 7 0 0 1 11.7-5.2M16.5 15.5l2 2 3.5-3.5' },

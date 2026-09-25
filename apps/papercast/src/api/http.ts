@@ -23,6 +23,7 @@ import type {
   SkillDetail,
   SkillInfo,
   StyleMenu,
+  HfDailyResult,
   DraftBody,
   DraftResult,
   EnvStatus,
@@ -198,6 +199,15 @@ export class HttpPipelineApi implements PipelineApi {
 
   styles() {
     return this.json<StyleMenu>('/api/styles')
+  }
+
+  hfDaily(date = '', sort = '', force = false) {
+    const q = new URLSearchParams()
+    if (date) q.set('date', date)
+    if (sort) q.set('sort', sort)
+    if (force) q.set('force', '1')
+    const suffix = q.toString() ? `?${q}` : ''
+    return this.json<HfDailyResult>('/api/hf-daily' + suffix)
   }
 
   /* ---------- 运营维护 ---------- */

@@ -265,6 +265,32 @@ export interface StyleOption {
   cards: boolean
 }
 
+/** 一条 HF Daily Paper（GET /api/hf-daily） */
+export interface HfDailyPaper {
+  arxivId: string
+  title: string
+  summary: string
+  upvotes: number | null
+  publishedAt: string
+  authors: string[]
+  thumbnail: string
+  githubRepo: string
+  arxivUrl: string
+  pdfUrl: string
+}
+
+export interface HfDailyResult {
+  date: string
+  /** '' = 按日期/最新；'trending' = 趋势榜 */
+  sort?: string
+  fetchedAt: number
+  count: number
+  papers: HfDailyPaper[]
+  /** true = 抓不到新的，回的是旧缓存（界面要如实说） */
+  stale: boolean
+  error: string
+}
+
 export interface StyleMenu {
   default: { platform: string; voice: string; variant: string }
   maxVariants: number
@@ -325,6 +351,11 @@ export interface PipelineApi {
   skill(name: string): Promise<SkillDetail>
   /** 文章风格清单：平台 × 讲述者人格（风格页用它渲染「小红书 · 专业科普」这类条目） */
   styles(): Promise<StyleMenu>
+
+  /* ---------- 每日论文 ---------- */
+  /** HuggingFace Daily Papers：date 留空取最新；sort='trending' 取趋势榜；force 绕过缓存重新抓 */
+  hfDaily(date?: string, sort?: string, force?: boolean): Promise<HfDailyResult>
+
 
   /* ---------- 运营维护 ---------- */
   /** 本机五个服务的真实状态（端口 / pid / 健康 / 日志） */

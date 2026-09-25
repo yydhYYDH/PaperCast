@@ -159,7 +159,10 @@ class Settings:
     port: int = 8000
     data_dir: Path = field(default_factory=lambda: VAR_DIR / "runs")
     upload_dir: Path = field(default_factory=lambda: VAR_DIR / "uploads")
-    allow_origins: list[str] = field(default_factory=lambda: ["http://127.0.0.1:5178"])
+    allow_origins: list[str] = field(default_factory=lambda: [
+        "http://127.0.0.1:5178",
+        "http://localhost:5178",
+    ])
     intake_engine: str = "pymupdf"
     cards_enabled: bool = True
     # 小红书组图（guizang 技能链路）：on | off | auto（auto = 装了技能才跑，见 app/modules/cards_deck.py）

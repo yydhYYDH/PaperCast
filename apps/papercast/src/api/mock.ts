@@ -16,6 +16,7 @@ import type {
   SkillDetail,
   SkillInfo,
   StyleMenu,
+  HfDailyResult,
   UploadResult,
 } from './types'
 import { EXAMPLE_PAPER, exampleSource } from '../data/example'
@@ -125,6 +126,16 @@ const MOCK_STYLE_MENU: StyleMenu = {
       cards: p.id === 'xhs',
     })),
   ),
+}
+
+/* 模拟器里的 HF Daily Papers（接真后端时来自 GET /api/hf-daily） */
+const MOCK_HF_DAILY: HfDailyResult = {
+  date: '2026-09-24', fetchedAt: 0, count: 3, stale: false, error: '',
+  papers: [
+    { arxivId: '2609.28466', title: 'The Past Frames the Future: Memory for Autoregressive Video Generation', summary: '（模拟器）当日 HF 每日论文示例。', upvotes: 20, publishedAt: '2026-09-22T20:00:00.000Z', authors: ['Harold Haodong Chen', 'Rongjin Guo'], thumbnail: '', githubRepo: '', arxivUrl: 'https://arxiv.org/abs/2609.28466', pdfUrl: 'https://arxiv.org/pdf/2609.28466' },
+    { arxivId: '2609.22947', title: 'RewardVerse: Rubric-Guided Policy Optimization for Video Reward Modeling', summary: '（模拟器）示例。', upvotes: 15, publishedAt: '', authors: [], thumbnail: '', githubRepo: '', arxivUrl: 'https://arxiv.org/abs/2609.22947', pdfUrl: 'https://arxiv.org/pdf/2609.22947' },
+    { arxivId: '2609.26780', title: 'SpeakerMem-R1: Speaker-Centered Dual-Track Memory for Multi-Party Dialogue', summary: '（模拟器）示例。', upvotes: 12, publishedAt: '', authors: [], thumbnail: '', githubRepo: '', arxivUrl: 'https://arxiv.org/abs/2609.26780', pdfUrl: 'https://arxiv.org/pdf/2609.26780' },
+  ],
 }
 
 import type {
@@ -789,6 +800,12 @@ export class MockPipelineApi implements PipelineApi {
   async styles(): Promise<StyleMenu> {
     await new Promise((r) => setTimeout(r, 120))
     return MOCK_STYLE_MENU
+  }
+
+  async hfDaily(date = '', sort = '', force = false): Promise<HfDailyResult> {
+    void force
+    await new Promise((r) => setTimeout(r, 200))
+    return { ...MOCK_HF_DAILY, date: sort === 'trending' ? '' : (date || MOCK_HF_DAILY.date), sort }
   }
 
   async skill(name: string): Promise<SkillDetail> {
