@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .. import prompts as prompts_mod
+from ..models import enabled_platforms
 from . import cards_deck
 from . import poster as renderer
 
@@ -38,28 +39,99 @@ SPEC_SYSTEM = """你是学术传播的视觉设计编辑。给你一篇论文的
    - 需要精简版条目的块，额外写 `items_tall`（给竖版用的短条目）。
 4. 图片只能从给定清单里选（写 `file` 字段，值必须是清单里的文件名）。
 
+**5. `subtitle` 写成一句「痛点 → 方法 → 结果」的话，spec 与 cover 用**同一句**。**
+   一句话把三件事串起来，读者不用翻后面的卡就能明白这篇论文值不值得看：
+   `<什么难处/缺口> → <用什么方法解决> → <拿到什么结果>`。
+   - 长度 **60–130 字**（封面是 28px、904px 宽，每行 32 字，实测能放 4 行）；
+     写不满 60 字通常是没把三段都写出来。
+   - **禁止第三人称自称**：「本文」「该论文」「作者提出」「我们」一律不许出现 ——
+     直接用方法/模型名当主语：「==双轨记忆== 把可追溯的逐字消息…」
+     「==SpeakerMem-R1== 用双轨存储解决…」。没有具名方法时用中文方法名，也别退回「本文」。
+   - 数字只能用 digest 里出现过的（下面第 1 条），没有把握就不写数字。
+   - 三段之间用「。」「，」「→」自然连接，读起来要像一句话，不像三个标签。
+   - 反例（这些是「本文」式写法，不合格）：「本文提出一种双轨记忆系统」「作者认为…」
+   - 正例：「通用记忆系统记不住「谁说的、这话跟谁有关」。双轨存储把逐字消息与结构化状态分开记，
+     查询时再按人物、事件、时间组合两条证据。三个多人基准全部超过主流框架最好结果，公开榜 62.33%。」
+
+**6. 每个 `panel` 块**自己带一个 `kicker`**（4-8 字的分类词，如「难点」「做法」「对照」）。
+   没有它，卡片左上角就不印东西 —— 不要写「要点 · 论文里的事实」这种每页都一样的套话。
+7. 块的 title 与封面 title 必须是「一句能站住的判断」，不是分类标签。
+   这是 2026-09-26 用户直接打回的点：读者在信息流里只看到标题那一行，标签等于没说话。
+   - 坏（只会分类，读者读完不知道这篇论文在解决什么）：
+     「问题」「数据」「结果」「方法」「两个瓶颈」「三个提升」「实验」「消融」
+   - 好（带判断，读者一眼知道难点/张力在哪）：
+     「多人对话记忆系统普遍丢掉人物关系」
+     「通用 LLM 记不住「这句话是谁说的」」
+     「同一条消息要同时写进逐字与结构化两条轨」
+   规则：标题里要出现**具体的对象或动作**（谁、在什么情况下、做不到什么），
+   不许只写数量词 + 名词（"两个/三个/几个 + 瓶颈/提升/问题/结论"一律不合格）。
+   标题长度 ≤18 字，超了就砍到读起来仍然是一句完整的话。
+
+**8. 每个块声明 `"role"`，组图会按它排序 —— 你必须给出正确的逻辑次序。**
+   `problem`（这有什么难的）→ `method`（怎么做的）→ `evidence`（拿什么证明）
+   → `result`（做到了什么）→ `detail`（训练/消融等细节）。
+   2026-09-26 实测踩过的坑：训练细节排在结果之后，而证明它的那两张图又被丢到最后，
+   整组图读下来像「先讲完再补图」，不像一条论证。**训练在结果之前。**
+
+9. 每个 `panel` 可以带 `"figure"`，写**最能证明这一组要点**的那张原图的 file；
+   找不到配得上的就不写（宁缺毋滥，不要凑）。
+   这张图会**紧贴在那个 panel 后面**（2026-09-26 实测：以前所有图都堆在最后，
+   第 7-10 张是四张连着的纯图页）。
+
+10. `items` 写**读者能带走的判断**，不要抄实现细节。
+   - 坏（这是论文的规格表，不是社交卡）：「System 1 逐字轨道追加每条消息的文本、说话人、时间与频道，保留可追溯坐标」
+   - 好（同一件事，讲成读者关心的后果）：「逐字轨道不用任何语言模型，原文和「谁说的」永远查得到」
+   - 英文术语只留**必须认得**的那几个（方法名、模块名），其余翻成中文。
+     一张卡里西文专名超过 5 个就说明在抄论文。
+
+11. `"figureNotes"` 给**清单里的每一张图**写一句中文说明。
+    必须写：图注原文是英文，直接印在卡片上等于让读者看外语（实测附录页印出过
+    「Memory-path and hierarchy ablations. Labels show accuracy…」这种截断英文）。
+    写「这张图在证明什么」，不是逐字翻译标题：
+    - fig-4 → 「去掉逐字轨或结构化轨，三个基准都掉分；两条轨缺一不可」
+    - fig-5 → 「逐字轨给得越多越准，但结构化轨的条数决定收益上限」
+    40 字内、整句中文、不写「Figure N:」前缀、图上没有的信息不要编。
+
+**12. 行内强调：`**重点**` 加粗、`==重点==` 加底色（荧光笔）。**
+   每张卡最多 1-2 处，**只标真正要读者停下来的那个词**：关键数字、结论里的那个反差、
+   或最容易被忽略的限制。通篇加满就等于没强调，底色也会把大标题切碎。
+   - 要点条目里：`GroupMemBench 47.9%、==SocialMemBench 69.2%==，分别超出主流框架 12.4 与 9.4 个百分点`
+   - 不要套在整句上，只标短语；一个标记里不要再套另一个。
+
 只输出 JSON，结构如下：
 {
   "title": "论文标题（可中文，保留英文原名）",
   "kicker": "会议或来源，如 arXiv 2510.05096",
-  "subtitle": "一句话结论（中文，40 字内）",
+  "subtitle": "痛点→方法→结果，一句话（60-130 字，见第 5 条）",
   "authors": ["作者1", "作者2"],
   "affiliation": "单位",
   "venue": "会议/期刊/来源",
   "chips": ["关键词1", "关键词2", "关键词3"],
   "teaser": {"file": "fig-1.png", "caption": "中文图注（一句话）"},
+  "figureNotes": {"fig-1.png": "这张图在证明什么（≤40 字）", "fig-2.png": "…"},
   "columns": [
-    [{"kind": "panel", "title": "问题", "items": ["要点1", "要点2"]},
-     {"kind": "panel", "title": "数据", "items": ["要点"], "sizes": ["wide"]}],
-    [{"kind": "figure", "file": "fig-2.png", "number": "2", "caption": "中文图注"}],
-    [{"kind": "panel", "title": "结果", "items": ["要点1"], "items_tall": ["更短的要点"]}]
+    [{"kind": "panel", "role": "problem", "kicker": "难点", "title": "记忆系统普遍丢掉人物关系",
+      "items": ["要点1", "要点2"], "figure": "fig-1.png", "figureCaption": "中文图注"},
+     {"kind": "panel", "role": "result", "kicker": "结果", "title": "跨数据集召回还差多少",
+      "items": ["要点"], "sizes": ["wide"]}],
+    [{"kind": "figure", "role": "evidence", "file": "fig-2.png", "number": "2", "caption": "中文图注"}],
+    [{"kind": "panel", "role": "detail", "kicker": "训练", "title": "三个基准都超最好结果",
+      "items": ["要点1"], "items_tall": ["更短的要点"]}]
   ],
   "footer": "素材：arXiv xxxx · 图 1、图 2"
 }
 
 另外再输出一份**封面** spec（同一内容，版式更少更醒目，供视频封面用）：
-{"cover": {"layout": "cover", "kicker": "...", "title": "短标题（15 字内）", "subtitle": "副标题（40 字内）",
+{"cover": {"layout": "cover", "kicker": "...", "title": "封面大标题（≤18 字，见第 6 条）",
+           "subtitle": "与 spec.subtitle 完全相同的那一句（60-130 字，见第 5 条）",
            "chips": ["a", "b", "c"], "teaser": {"file": "fig-1.png"}, "footer": "..."}}
+
+封面 title 同样遵守第 7 条（块与 panel 的 title 同理）：**不要只写方法名**。「SpeakerMem-R1：双轨记忆」这种只说了
+论文叫什么、没说读者为什么要看下去；kicker 已经带了 arXiv 编号和来源，论文名不必再占大标题。
+封面大标题写「读者最想知道的那件事」—— 结论、冲突或反常识的发现，例如
+「一次记两个想法，不串味」「多数记忆系统记不住谁说了什么」。
+封面 subtitle **照抄 spec.subtitle**，不要另写一句短的：以前两处定义不一致，
+模型给同一条 run 写出过「方法总结」和「结果总结」两种句子（SpeakerMem 那次）。
 
 最终只输出：{"spec": {...}, "cover": {...}}"""
 
@@ -109,10 +181,13 @@ def _spec_text(spec: dict[str, Any]) -> str:
     parts.extend(str(x) for x in (spec.get("chips") or []))
     teaser = spec.get("teaser") or {}
     parts.append(str(teaser.get("caption") or ""))
+    # figureNotes 也会印在图卡页上，里面的数字同样要能回溯
+    parts.extend(str(v) for v in (spec.get("figureNotes") or {}).values())
     for col in spec.get("columns") or []:
         for b in col:
             parts.append(str(b.get("title") or ""))
             parts.append(str(b.get("caption") or ""))
+            parts.append(str(b.get("figureCaption") or ""))
             parts.append(str(b.get("text") or ""))
             parts.extend(str(x) for x in (b.get("items") or []))
             parts.extend(str(x) for x in (b.get("items_tall") or []))
@@ -222,6 +297,25 @@ def _sanitize(data: dict[str, Any], figures: list[dict[str, Any]], haystack: str
     spec["columns"] = cols
     if not cols:
         raise ValueError("所有栏目都被清空了（多半是图片引用全部不存在）")
+
+    # figureNotes：每张图一句中文说明。丢掉指向不存在图片的键，以及含无法回溯数字的说明 ——
+    # 它会印在图卡页上，数字同样要能回溯。
+    notes_in = spec.get("figureNotes")
+    if isinstance(notes_in, dict):
+        notes: dict[str, str] = {}
+        for k, v in notes_in.items():
+            name = Path(str(k or "")).name
+            text = str(v or "").strip()
+            if not text:
+                continue
+            if name not in names:
+                dropped.append(f"figureNotes 指向了不存在的图：{k}")
+                continue
+            if not num_ok(text):
+                dropped.append(f"{name} 的中文说明含无法回溯的数字，已丢掉")
+                continue
+            notes[name] = text
+        spec["figureNotes"] = notes
 
     stats = {"dropped": dropped, "bad_numbers": sorted(set(bad_numbers))}
     return spec, stats
@@ -378,7 +472,10 @@ async def _run_deck(ctx, spec: dict[str, Any], cover: Optional[dict[str, Any]], 
     ctx.log("info", f"用 guizang 技能重排小红书组图（技能：{cards_deck.skill_dir()}）…")
 
     last: dict[str, Any] = {}
-    for attempt, (max_items, keep) in enumerate(((4, None), (3, None), (3, 3))):
+    # 减内容重排阶梯。**先减每页条目数，不减页数** —— 每页 4→3→2 条是「少说点」，
+    # 砍页数是「少讲一半」。2026-09-26 实测 run_f308d04cf07a：原来是 (4,·)→(3,·)→(3,只留 3 页)，
+    # 一步就把 9 页砍成 3 页 —— 图全没了，剩下封面 + 两页要点，比坏图更糟。
+    for attempt, (max_items, keep) in enumerate(((4, None), (3, None), (2, None))):
         try:
             built = await asyncio.to_thread(
                 cards_deck.build, spec, cover, digest, figures_dir, deck_dir,
@@ -459,9 +556,32 @@ async def run_poster(ctx) -> None:
     # 图可能分散在两处：论文原图在 intake/images；AI 生成的 hero 在 poster/（千问出图，可选）
     figs_arg = os.pathsep.join([str(intake_dir / "images"), str(out_dir)])
 
+    # 只渲染发布目标要用的画布（2026-09-23）：默认只发小红书 → 不再渲染知乎 / B 站封面 / 会议海报。
+    # 想看某个平台的画布，就把它加进 publish.targets。
+    enabled = enabled_platforms(ctx.run.config)
+    wanted = [p for p in PRESETS_RENDER if PRESET_PLATFORM.get(p[0], "generic") in enabled]
+
+    # 组图能覆盖的小红书旧画布不渲（2026-09-26，默认 PAPERCAST_LEGACY_CANVAS=auto）。
+    # 依据：publish._deck_images 只认 poster/cards/xhs-*.jpg —— 旧画布**从不参与投递**，
+    # 只是登记成产物给人看；而它比组图贵一个数量级（每张画布二分字号 ≤8 轮 × drop 0..3 重试，
+    # 每轮一次全新 chromium）。要留着看就 PAPERCAST_LEGACY_CANVAS=on。
+    deck_on = cards_deck.enabled(getattr(ctx.settings, "poster_deck", "auto"))
+    legacy_mode = str(getattr(ctx.settings, "legacy_canvas", "auto") or "auto").lower()
+    dropped: list[str] = []
+    if legacy_mode == "off":
+        dropped = [n for _p, _o, _w, n in wanted]
+        wanted = []
+    elif legacy_mode != "on" and deck_on and "xhs" in enabled:
+        dropped = [n for p, _o, _w, n in wanted if PRESET_PLATFORM.get(p) == "xhs"]
+        wanted = [p for p in wanted if PRESET_PLATFORM.get(p[0]) != "xhs"]
+    if dropped:
+        ctx.log("info", f"跳过旧版单张画布（{len(dropped)} 张，小红书组图已覆盖投递）："
+                        f"{'、'.join(dropped)}｜要渲染就 PAPERCAST_LEGACY_CANVAS=on")
+    ctx.log("info", f"按发布目标渲染画布：{('、'.join(n for _, _, _, n in wanted)) or '无'}")
+
     reports: list[dict[str, Any]] = []
     preview_html: Optional[str] = None
-    for preset, out_name, which, note in PRESETS_RENDER:
+    for preset, out_name, which, note in wanted:
         if which not in specs:
             continue
         ctx.log("info", f"渲染 {note}（preset={preset}）…")
@@ -491,11 +611,14 @@ async def run_poster(ctx) -> None:
         )
         if preview_html is None:      # 第一张画布（小红书首图）的 HTML 给查看器当预览
             preview_html = out_name
-        ctx.progress(min(0.95, 0.15 + 0.8 * len(reports) / max(1, len(PRESETS_RENDER))))
+        ctx.progress(min(0.95, 0.15 + 0.8 * len(reports) / max(1, len(wanted))))
 
     # 组图（可选）：同一份 spec 再用 guizang 技能重排成小红书 3:4 组图。
-    # 放在画布之后登记产物，是为了让查看器的「第一张 png / 第一个 html」仍是渠道画布（poster-xhs-cover）。
-    await _run_deck(ctx, spec, cover, digest, figs_arg, out_dir)
+    # 只有小红书在发布目标里才跑 —— 它是小红书的实际帖子图，别的平台用不上。
+    if "xhs" in enabled:
+        await _run_deck(ctx, spec, cover, digest, figs_arg, out_dir)
+    else:
+        ctx.log("info", "小红书不在发布目标里，跳过 guizang 组图")
 
     # 查看器（PosterViewer）按 kind==='html' 找预览；以前只登记 PNG，于是界面上永远是「尚未产出」。
     if preview_html:
@@ -507,13 +630,16 @@ async def run_poster(ctx) -> None:
     ok_reports = [r for r in reports if r.get("ok")]
     broken = sorted({b for r in reports for b in (r.get("broken_images") or [])})
     ctx.check("几何闸门", "pass" if reports and len(ok_reports) == len(reports) else ("run" if not reports else "fail"),
-              f"{len(ok_reports)}/{len(reports)} 张画布无溢出" if reports else "没有成功渲染的画布")
+              f"{len(ok_reports)}/{len(reports)} 张画布无溢出" if reports else
+              (f"按配置跳过旧版画布（{legacy_mode}），小红书由组图交付" if dropped else "没有成功渲染的画布"))
     ctx.check("图片引用", "pass" if not broken else "fail",
               "全部引用图都渲染成功" if not broken else f"有 {len(broken)} 张图没渲染出来：{broken[:3]}")
     ctx.check("数字可回溯", "pass" if not stats["bad_numbers"] else "run",
               "spec 里的数字都能在 digest/原文找到" if not stats["bad_numbers"]
               else f"已丢弃含无法回溯数字的内容 {stats['bad_numbers'][:4]}")
-    if not reports:
+    # 「一张都没渲」只有在该渲的时候才是故障：auto 模式下组图接管小红书是**主动跳过**，
+    # 那时组图自己会 fail-closed 记一条（见 _run_deck），不该在这里把整个阶段掀了。
+    if not reports and not dropped:
         raise RuntimeError("poster 一张画布都没渲染出来，检查 ops/shot/render.mjs 与 chrome-headless-shell 是否可用")
 
     ctx.progress(1.0)

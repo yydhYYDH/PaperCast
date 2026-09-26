@@ -272,11 +272,23 @@ def _figure_region(crect, cap, vis, blocks, page_rect, cap_rects=(), *, max_roun
         if abs(nx0 - x0) < 0.5 and abs(nx1 - x1) < 0.5:
             break
         x0, x1 = nx0, nx1
-    # 留白保持原样（图：上边 -4 / 图注底 +2；表：图注顶 -3 / 下边 +4），
-    # 免得"修一类排版"顺手改掉所有已能用的样本的裁剪框
+    # 上下都是「图注在哪头，图就在另一头」：表的图注在**上**（往下扫，bottom 会被推进），
+    # 图的图注在**下**（往上扫，top 会被上推、bottom 原封不动）。
+    #
+    # 2026-09-26 修的真 bug：图的裁剪框下边界写的是 `max(cap["bottom"], bottom)`，
+    # 而图的这一轮扫描**从不更新 bottom** —— 它一直等于图注块的底边，于是**每张抽出来的
+    # 图都把英文图注一起烤进了 PNG**。实测 fig-4：图注块 y 213.4→267.3，
+    # 而 bbox 是 y 82.3→**269.0**，图注整段落在框内。后果是卡片上英文出现两遍
+    # （页面标题一遍、烤进图里一遍）、图被压成窄带（多出来的全是图注文字的面积）。
+    # 图的裁剪框必须收在**图注顶**：crect.y0。
     if is_table:
         clip = pymupdf.Rect(x0, crect.y0 - 3, x1, max(cap["bottom"], bottom) + 4)
-    else:
+    elif crect.y0 > top:                      # 图注顶在图形底之下 = 真的找到图了
+        # 下边界收在图注块**上方 2pt**（不是 +2）。实测 fig-4：图区内容最低 y=185.5，
+        # 图注首行行框 y=213.4→223.5 —— 中间有 28pt 空白。原来写 `crect.y0 + 2`
+        # 会切到 215.4，正好切进图注首行 2pt，卡片上留下一条被削掉上半截的字。
+        clip = pymupdf.Rect(x0, top - 4, x1, crect.y0 - 2)
+    else:                                     # 没扫到图形（hit 为假）：保持旧行为，别给零高框
         clip = pymupdf.Rect(x0, min(crect.y0, top) - 4, x1, max(cap["bottom"], bottom) + 2)
     return clip, hit
 

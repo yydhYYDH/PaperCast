@@ -203,29 +203,52 @@ cd apps/papercast-server
 | 事项 | 做法 |
 | --- | --- |
 | 开关 | `PAPERCAST_POSTER_DECK` = `auto`（默认，**装了技能才跑**）/ `on` / `off`；设置页「解析与渲染」可改；`/api/env` 里有 `deck.{mode,skillInstalled,skillPath,active}` |
+| 旧版画布 | `PAPERCAST_LEGACY_CANVAS` = `auto`（默认）/ `on` / `off`。`auto` = 组图能覆盖投递时**不渲** `poster-xhs-*.png`：旧画布从不参与投递（`publish._deck_images` 只认 `poster/cards/`），却比组图贵一个数量级（`make_poster` 每张二分字号 ≤8 轮 × `drop` 0..3 重试，每次都是一次全新 chromium 启动，小红书单目标最坏 ~80 次换两张没人看的图）。同理组图接管时也跳过 `article/cards` 的 PIL 卡片（同一批图、同一批数字，只是另一个排版） |
 | 技能从哪来 | 只从用户级安装目录**运行时读取**（`~/.agents/skills/guizang-social-card-skill`，可用 `GUIZANG_SKILL_DIR` / `SKILLS_ROOT` 覆盖）。**模板/CSS 不进本仓库**（它是 AGPL-3.0，本仓库 MIT 且公开发布）；本文件只带一层自写覆盖（字体栈、图卡底色、一处上游间距） |
 | 出图 | `ops/shot/render_social_deck.mjs`（我们自己的，逐个 `.poster` 节点截图，`--scale 2`） |
 | 自检 | 技能自带的 `validate-social-deck.mjs`（R1 溢出 / R2 页脚相撞 / R4 最小字号 / R5 四横带密度 / R6 标题行数上限 / R9 标题间距…），结果直接写成阶段闸门「小红书组图（guizang 技能）」 |
-| 装不下怎么办 | `_run_deck` 最多重排 3 次（每页要点 4→3 条、再砍到前 3 页），每次如实写日志；仍不过才记 fail |
+| 装不下怎么办 | `_run_deck` 最多重排 3 次，**只降每页要点数 4→3→2，不砍页数**（每页少说点 ≠ 少讲一半；曾用 `keep_pages=3` 兜底，一步把 9 页砍成 3 页、图全没了），每次如实写日志；仍不过才记 fail |
+| 换图不用重跑 | `scripts/rerender_deck.py <runId> [--latest N]`：改完 `cards_deck` 的排版后，用新代码重出既有 run 的组图 + 同步 `publish/*/export`，不重跑 understand/article、不重调 LLM、不重抓 arXiv（组图的输入只有 `poster.spec*.json` + `digest.json` + `intake/images/`） |
 | fail-closed | 技能没装 / 开关 off → 记一条 `run`「跳过」，**不判失败**，渠道画布照常交付；装配或渲染异常 → 记 fail，但不动已渲染好的画布 |
 | 技能没装时 | 阶段里显示「技能未安装（跑 ./ops/install_skills.sh 装 guizang-social-card-skill）」 |
+
+### 组图怎么连成一条论证（2026-09-26）
+
+组图不是「几页要点 + 几页图」，要能顺着读下来。`poster.spec.json` 因此多了几个字段：
+
+| 字段 | 作用 |
+| --- | --- |
+| `role` | `problem` → `method` → `evidence` → `result` → `detail`，`plan_pages` 按它**稳定排序**（没声明的沿用前一个块的 role；一个都没声明就完全不排序，老 spec 版面不动）。否则训练/消融这类细节会排到结果之后，读起来像「先讲完再补图」 |
+| `figure` / `figureCaption` | 声明**哪个 panel 的哪组要点由这张原图证明**，图卡页**紧跟在该 panel 之后**。没被任何 panel 认领的原图进「更多证据」附录（kicker 写明是补充材料，不冒充论证的一环）。允许与封面 teaser 用同一张，但两个论点不能抢同一张 |
+| `figureNotes` | `{文件名: 一句中文说明}`，**清单里每张图都要给**。图注原文是从 PDF 抽的英文，直接印在卡片上等于让读者看外语 —— 早先实测印出过「Memory-path and hierarchy ablations. Labels show accuracy…」这种截断英文，而图里还烤着一份同样的英文（见下） |
+| `kicker` | 每个 panel 自带 4–8 字分类词。不再兜底成「要点 · 论文里的事实」这种每页都一样的套话 |
+| `subtitle` | 一句「痛点 → 方法 → 结果」，`spec` 与 `cover` **必须同一句**。封面主图框从 16:10 压到 16:9、标题顶档 124→100，正是为了给它腾出 4 行 |
+
+**行内强调**：`文字 **这样** 加粗`、`文字 ==这样==` 加荧光笔底色。每卡 1–2 处。
+先转义再替换、只吐 `<strong>`/`<mark class="hl">` 两个标签（模型给不出可执行 HTML）；
+宽度模型里记号按 0 宽算；≤24 字的强调区间是**不可断的原子**（否则 `==62.33%==` 会被换行拆成
+`==62` + `.33%==`，`inline()` 逐行匹配不上，页面上直接印出字面的记号），
+超过 24 字的整段加粗允许断开，但残留记号一律删掉 —— 宁可丢强调效果也不能让 `==` 上卡。
 
 单独跑（不联网、不调 LLM，用真 run 的 spec/原图）：
 
 ```bash
 apps/papercast-server/.venv/bin/python var/scratch/poster_stage_offline.py var/runs/<runId>/poster
 DECK=off …   # 验证关掉时的行为
+apps/papercast-server/scripts/rerender_deck.py <runId>   # 换图：按当前代码重排既有 run
 ```
 
-### 接入时被真跑抓出来的四个坑（都锁进了 `tests/test_cards_deck.py`）
+### 接入时被真跑抓出来的坑（都锁进了 `tests/test_cards_deck.py`）
 
 | 坑 | 症状 | 解法 |
 | --- | --- | --- |
 | **截字** | 封面标题 13 个字塞不进两行，第一版直接输出「罕见病诊断智…」 | `fit_title`：**先按标点砍从句，砍不动再整档降字号**，永不截半个词（技能 R4 的建议原文就是 "cut copy instead of shrinking type"） |
-| **稀疏页** | 只有 3 条要点时，模板的 `.ledger` 把内容挤在上半页、下半页一大片空 —— **技能的 R5 密度门抓不到**（它量的是"元素占位"不是"墨迹"） | 覆盖层 `.ledger{flex:1}` + 行高下限 118px（M08 配方的下限）、上限 260px |
+| **稀疏页** | 只有 3 条要点时，模板的 `.ledger` 把内容挤在上半页、下半页一大片空 —— **技能的 R5 密度门抓不到**（它量的是"元素占位"不是"墨迹"） | 覆盖层 `.ledger{flex:1}` + 行高下限 118px（M08 配方的下限）；**上限由页面按条数算好后写进 CSS 变量 `--row-max`**（`_row_max_px`，清单净高 950px ÷ 条数，3 条≈316 / 4 条≈237）。别写死：曾写死 260px（3 条时空 200px），试过 330px 又让 4 条顶穿内容区、R2 判「ledger-title 压到页脚」FAIL，触发的减内容重排把 9 页砍成 3 页 |
 | **kicker 重复** | `Nature · VOL 651 · 2026` + `Nature` 拼一起，封面顶行读成两个 Nature | `dedupe_parts()`：互为子串的只留长的那个 |
-| **图卡页下方留白** | 模板的图卡按 16:10 定高，图卡页会空出四分之一页 | 图卡页的画框改成 `flex:1`（去掉 aspect-ratio），图本身仍 `contain` —— 不裁剪、不拉伸，只是画框变大 |
+| **图卡页下方留白** | 模板的图卡按 16:10 定高，图卡页会空出四分之一页 | 图卡页的画框用**原图自己的 `aspect-ratio`** + `margin:auto 0` 居中，图本身仍 `contain`（不裁剪、不拉伸）。不要用 `flex:1` 硬撑：实测 fig-4 是 3.04:1 的宽图，塞进 ~800px 高框里只剩一条窄带、上下各空 190px |
 | **字体依赖** | 换 `HOME` 跑时封面判失败 —— 因为雅黑在 `~/.local/share/fonts`，`HOME` 一变字体就没了，标题量出来的宽度掉到 `h1_pct` 下限以下 | 这其实是**正确**的 fail-closed（没字体的话字是看不见的），但要知道封面闸门依赖本机字体：换机器先装 `fonts-noto-cjk` |
+| **宽度模型低估** | 「模型说装得下、浏览器说装不下」→ 标题被浏览器再折一次，落单一个字母（R6 WARN，而 WARN 不拦发布，坏图照发）。三个来源：**ASCII 宽度**按 0.55em 估（实测 0.672em，低估 18%）、**完全没算 `letter-spacing`**（`.h-xl` 的 .03em，88px 下 10 个汉字的字距就有 26px，而 `AVAIL_PX` 只留了 24px 余量）、**只看行数不判单行宽** | `ASCII_EM = 0.67`（实测校准，宁可高估走降字号）；`line_units()` 把 `TRACK_EM` 按级计入；`fit_title` 的可用性判据是「行数不超上限**且**每行都装得下」（`_fits`） |
+| **图注被烤进 PNG** | 卡片上英文出现两遍：一遍是页面标题（截断的英文图注），一遍是**烤进图里**的同一段文字。根因在 intake：`_figure_region` 对图只往上扫（`up`）、**从不更新 `bottom`**，于是裁剪框下边界取了图注块的底边。实测 fig-4 图注块 y 213.4→267.3、bbox y 82.3→**269.0** | 图的裁剪框下边界收在**图注块上方 2pt**（表的分支本来就对 —— 表注在上、往下扫）。`scripts/reextract_figures.py` 可以只重抽 `images/`、不动其余产物 |
 
 ## 4. 路线 C · 需要 AI 出图的主视觉（待千问 key）
 

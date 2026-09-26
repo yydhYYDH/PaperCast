@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -294,11 +295,50 @@ def _sum(items: list[dict[str, Any]], key: str) -> int:
 
 
 async def metrics(force: bool = False) -> dict[str, Any]:
-    now = time.time()
-    if not force and _METRICS_CACHE["data"] is not None and now - _METRICS_CACHE["at"] < _METRICS_TTL:
+    """运营数据。**single-flight**：并发调用只算一次，其余等同一个结果。
+
+    为什么要这个锁：缓存是「算完才写」（`_METRICS_CACHE.update` 在函数末尾），
+    而 `_scan_published()` 要 rglob 扫全量 var/runs + var/artifacts（本机 1.7GB / 4000+ 文件）。
+    批量并发跑时（一次起 5 条 run），5 条会在同一秒一起走到第 301 行 —— 缓存还是空的，
+    于是 **5 次全盘扫描 + 5 次真实渠道调用**（每次 xhs 都要 MCP 起一次浏览器，
+    而 MCP 的预算是 30 次/10 分钟）。先拿锁、拿到后再查一次缓存，后来者直接吃现成的。
+
+    锁按事件循环重建：模块级 asyncio.Lock 会记住第一个绑定的 loop，测试里每个用例
+    新建 loop 时复用旧锁会直接抛 RuntimeError。
+    """
+    if not force and _metrics_fresh():
         return _METRICS_CACHE["data"]
 
-    seed = _scan_published()
+    async with _metrics_lock():
+        # 排队期间可能已经有人算完了（这才是 single-flight 的意义）
+        if not force and _metrics_fresh():
+            return _METRICS_CACHE["data"]
+        # 扫描是同步阻塞 I/O，丢到线程里，别把事件循环堵住 —— run 的心跳/进度都靠它
+        seed = await asyncio.to_thread(_scan_published)
+        return await _metrics_build(seed)
+
+
+def _metrics_fresh() -> bool:
+    return (_METRICS_CACHE["data"] is not None
+            and time.time() - _METRICS_CACHE["at"] < _METRICS_TTL)
+
+
+_METRICS_LOCK: "asyncio.Lock | None" = None
+_METRICS_LOOP: Any = None
+
+
+def _metrics_lock() -> "asyncio.Lock":
+    global _METRICS_LOCK, _METRICS_LOOP
+    loop = asyncio.get_running_loop()
+    if _METRICS_LOCK is None or _METRICS_LOOP is not loop:
+        _METRICS_LOCK = asyncio.Lock()
+        _METRICS_LOOP = loop
+    return _METRICS_LOCK
+
+
+async def _metrics_build(seed: dict[str, Any]) -> dict[str, Any]:
+    """按扫描结果向各渠道要真实数字。拆出来是为了让 metrics() 的锁范围一目了然。"""
+    now = time.time()
     bili = await _bilibili_items(seed["bilibili"])
     zhihu = await _zhihu_items(seed["zhihu"])
     xhs = await _xhs_account()

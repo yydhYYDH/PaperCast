@@ -167,6 +167,13 @@ class Settings:
     cards_enabled: bool = True
     # 小红书组图（guizang 技能链路）：on | off | auto（auto = 装了技能才跑，见 app/modules/cards_deck.py）
     poster_deck: str = "auto"
+    # 旧版单张画布（app/modules/poster.py 的 poster-xhs-*.png）：
+    #   auto = 组图能覆盖时就别渲（默认）；on = always；off = 一律不渲。
+    # 为什么默认 auto：旧画布**从来不参与投递**（publish._deck_images 只认 poster/cards/），
+    # 却比组图贵一个数量级 —— make_poster 每张画布要二分字号最多 8 轮、外层再按 drop 0..3
+    # 重试（poster_stage._render_with_budget），每次 attempt 都是一次全新 chromium 启动。
+    # 小红书单目标时最坏 ~80 次启动换两张没人看的图。
+    legacy_canvas: str = "auto"
     chrome: str = ""
     cjk_font: str = ""
     max_upload_mb: int = 200
@@ -212,6 +219,8 @@ class Settings:
         s.cards_enabled = pick("PAPERCAST_CARDS", "on").lower() in ("1", "on", "true", "yes")
         deck_mode = pick("PAPERCAST_POSTER_DECK", "auto").lower()
         s.poster_deck = deck_mode if deck_mode in ("on", "off", "auto") else "auto"
+        legacy = pick("PAPERCAST_LEGACY_CANVAS", "auto").lower()
+        s.legacy_canvas = legacy if legacy in ("on", "off", "auto") else "auto"
         s.chrome = pick("PAPERCAST_CHROME", "") or _detect_chrome()
         s.cjk_font = pick("PAPERCAST_CJK_FONT", "") or find_cjk_font()
         s.max_upload_mb = int(pick("MAX_UPLOAD_MB", str(s.max_upload_mb)))
