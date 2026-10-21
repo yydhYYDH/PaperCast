@@ -57,6 +57,9 @@ class Materials:
     run_id: str = ""
     source: str = ""          # 论文来源（arXiv 链接 / 文件名），写进长文与视频简介
     duration_sec: int = 0     # 视频时长（B 站投稿需要）
+    # 定时发布时间（RFC3339 字符串，空 = 立即发布）。只有 supports_schedule 的渠道认它；
+    # 语义是「排期」，仍是不可逆的真实投递，所以同样要 confirmed=True 才生效。
+    schedule_at: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> str:
@@ -156,6 +159,9 @@ class Channel(ABC):
     # 所以"默认发哪个"是**平台口径**，和 video_orientation 一样声明在渠道层。
     # 默认图文：卡片是流水线的常规产物，成片是加项，想发成片就走 /publish/video。
     default_media: str = "images"
+    # 是否支持定时发布（排期）。默认 False：不认 schedule_at 的渠道遇到排期请求要如实拒绝，
+    # 而不是悄悄当成立即发出。目前只有小红书（MCP 的 schedule_at）支持。
+    supports_schedule: bool = False
 
     def __init__(self, settings: Any) -> None:
         self.settings = settings
@@ -270,7 +276,8 @@ class Channel(ABC):
     def compose_body(self, m: Materials) -> str:
         """导出与投递共用的正文拼装。默认在末尾附话题标签。"""
         body = m.body.strip()
-        if m.source:
+        # 非论文源（知乎/长文）不写「—— 论文：…」署名行：正文里已自然交代来源，套论文腔会出戏。
+        if m.source and not m.extra.get("isArticle"):
             body = f"{body}\n\n—— 论文：{m.source}"
         if m.tags:
             body = f"{body}\n\n" + " ".join(f"#{t}" for t in m.tags)
@@ -331,7 +338,13 @@ class HttpChannel(Channel):
 
     health_timeout: float = 8.0
     probe_timeout: float = 45.0
-    publish_timeout: float = 300.0
+    # 一次真实发布的客户端上限。**必须大于**通道服务自己的发布预算，否则后端先到点会断开连接、
+    # 把通道服务正在跑的浏览器操作取消成 context canceled，我们只会拿到一句 ReadTimeout，
+    # 而不是「发布未确认成功」这种能定位问题的结论。
+    # 小红书 MCP：发布预算 360s（apps/xiaohongshu-mcp/xiaohongshu/publish.go 的 publishDeadline）
+    # + 发布后找回笔记地址最长 60s = 420s，这里 480s 留 60s 余量。
+    # 2026-09-23：小红书图文（845 字逐字拟人输入 + 7 张图）实测会顶到 300s，故 300 → 480。
+    publish_timeout: float = 480.0
 
     def remote_path(self, path: Path | str) -> str:
         """递给通道服务前，把**本机素材路径**换成对端读得到的写法。

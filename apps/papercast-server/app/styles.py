@@ -18,8 +18,11 @@ variant id = "{platform}-{voice}"，例如 "zhihu-analyst"。
 
 from __future__ import annotations
 
+import json
+import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # --------------------------------------------------------------------------- #
 # 平台
@@ -239,6 +242,21 @@ _REVIEWER = """你是这篇论文的审稿人，写一份给同行看的评审�
 - 区分「值得肯定的贡献」与「需要补实验的地方」，两者都要写。
 - 语气专业、克制、可执行；不提改进建议之外的意见。"""
 
+# 2026-09-23：从 6 篇真实小红书论文解读爆款帖归纳（见 docs/research/xhs-paper-bloggers.md）。
+# 与 newsflash 的区别：newsflash 是媒体快讯口吻，这条是**个人博主的小红书爆款写法**
+# —— 标题给「点进来的理由」、开头直接给结论、用日常类比讲方法、结尾留互动钩子。
+_HOOK = """你是一位写小红书爆款论文解读的博主，读者是刷到这篇笔记的泛科技人群，不是同行审稿人。
+
+写法特征：
+- 标题先给一个「点进来的理由」：把论文翻译成与你有关的东西 —— 用第二人称的日常场景、一句反常识的判断、或一个强背书（谁转发了 / 结果多强）。不写「XX 论文解读」这种说明书式标题。
+- 开头 1-2 句直接给结论或痛点，不铺垫背景；让读者三秒内知道「这篇讲了什么、为什么值得看」。
+- 用日常类比解释抽象方法（例如把概率模型比作「声轨分离器」），并标明哪些是比方、哪些是原文。
+- 正文分点分步、短句推进、段与段之间留空；每段只讲一件事，读者能扫读。
+- 尽量给可操作的东西：一句能照着做的方法、一个能迁移的思路、对研究者或企业的启示。
+- 人称在「你」和「我」之间切换：讲现象用「你」，下判断用「我」。
+- 术语先给英文原词，再用一句大白话解释；不堆术语。
+- 结尾留一个真实的互动钩子（评论区补充、下期预告、招募），不写虚假承诺。"""
+
 VOICES: dict[str, VoiceSpec] = {
     # 2026-09-19 用户要求：不要「作者自述」。默认人格改为第三方独立视角，不再冒充论文作者。
     # 旧写法（xhs-author / xhs / xhs-academic / zhihu-academic / bilibili-academic）由下面的
@@ -263,6 +281,10 @@ VOICES: dict[str, VoiceSpec] = {
         "reviewer", "审稿人视角", "同行评审", _REVIEWER, sampled=False,
         short="审稿视角", hint="以主张是否被证据支撑为主线，好的和该补实验的都要说",
     ),
+    "hook": VoiceSpec(
+        "hook", "爆款论文解读", "小红书论文解读爆款博主", _HOOK, sampled=True,
+        short="爆款拆解", hint="标题先给理由、开头给结论、用类比讲方法，结尾留互动钩子",
+    ),
 }
 
 DEFAULT_PLATFORM = "xhs"
@@ -286,6 +308,159 @@ LEGACY_VARIANTS: dict[str, tuple[str, str]] = {
 
 
 # --------------------------------------------------------------------------- #
+# 用户自定义人格（2026-09-23）：风格页可新建 / 编辑 / 删除
+# --------------------------------------------------------------------------- #
+#
+# 内置人格在上面 VOICES 里（只读真源）；用户在前端增删改的人格落在这个 JSON 里，读取时与内置
+# **合并**：同 id 覆盖内置（等于「改了内置这条」），新 id 是自定义。文件在 var/ 下（不进 git）。
+# 路径可用 PAPERCAST_STYLES_FILE 覆盖；默认 <workspace>/var/styles/voices.json。
+#
+# 校验边界与技能名一致：id 只能小写字母/数字/连字符，且不能和平台同名（避免 xhs-xhs 这种歧义）。
+
+VOICE_ID_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+MAX_PERSONA = 4000
+MAX_LABEL = 40
+MAX_SHORT = 12
+MAX_HINT = 80
+
+
+def user_voices_path() -> Path:
+    env = (os.environ.get("PAPERCAST_STYLES_FILE") or "").strip()
+    if env:
+        return Path(env).expanduser()
+    ws = Path(__file__).resolve().parents[3]  # app/styles.py → 工作区根
+    return ws / "var" / "styles" / "voices.json"
+
+
+# 缓存键带上路径：测试/多进程切换 PAPERCAST_STYLES_FILE 时不会串味
+_user_cache: tuple[str, float, list[VoiceSpec]] | None = None
+
+
+def reload_user_voices() -> None:
+    """丢掉缓存，下次读取重新加载（写入后 / 测试里直接改文件后调用）。"""
+    global _user_cache
+    _user_cache = None
+
+
+def _spec_from_dict(d: dict) -> VoiceSpec | None:
+    vid = str(d.get("id") or "").strip().lower()
+    if not VOICE_ID_RE.match(vid) or vid in PLATFORMS:
+        return None
+    persona = str(d.get("persona") or "").strip()
+    if not persona:
+        return None
+    return VoiceSpec(
+        vid,
+        str(d.get("label") or vid).strip()[:MAX_LABEL],
+        str(d.get("anchor") or "用户自定义").strip()[:MAX_LABEL],
+        persona[:MAX_PERSONA],
+        bool(d.get("sampled", False)),
+        short=str(d.get("short") or "").strip()[:MAX_SHORT],
+        hint=str(d.get("hint") or "").strip()[:MAX_HINT],
+    )
+
+
+def _raw_entries() -> list[dict]:
+    """读原始条目（保留 id/label/anchor/persona/sampled/short/hint），坏文件按空处理。"""
+    try:
+        raw = json.loads(user_voices_path().read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    items = raw.get("voices") if isinstance(raw, dict) else raw
+    return [x for x in (items or []) if isinstance(x, dict)]
+
+
+def user_voices() -> list[VoiceSpec]:
+    """用户自定义（或覆盖内置）的人格。带 mtime 缓存，轮询不反复读盘。"""
+    path = user_voices_path()
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return []
+    key = str(path)
+    global _user_cache
+    if _user_cache and _user_cache[0] == key and _user_cache[1] == mtime:
+        return _user_cache[2]
+    specs = [s for s in (_spec_from_dict(x) for x in _raw_entries()) if s]
+    _user_cache = (key, mtime, specs)
+    return specs
+
+
+def all_voices() -> dict[str, VoiceSpec]:
+    """内置 + 用户自定义合并（用户同 id 覆盖内置）。所有「认人格」的地方都走它。"""
+    merged = dict(VOICES)
+    for v in user_voices():
+        merged[v.id] = v
+    return merged
+
+
+def is_builtin_voice(vid: str) -> bool:
+    return vid in VOICES
+
+
+def custom_voice_ids() -> set[str]:
+    return {v.id for v in user_voices()}
+
+
+def _write_user_voices(entries: list[dict]) -> None:
+    path = user_voices_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"voices": entries}, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(path)
+    reload_user_voices()
+
+
+def validate_voice(*, vid: str, label: str, persona: str) -> str | None:
+    """返回人话错误（None = 通过）。前端也做一遍，这里是后端闸门。"""
+    if not VOICE_ID_RE.match((vid or "").strip().lower()):
+        return "id 只能用小写字母、数字和连字符（例如 my-voice）"
+    if vid.strip().lower() in PLATFORMS:
+        return f"id 不能和平台同名（{vid} 是平台 id）"
+    if not (label or "").strip():
+        return "名称不能为空"
+    if not (persona or "").strip():
+        return "提示词正文不能为空"
+    if len(persona) > MAX_PERSONA:
+        return f"提示词正文最多 {MAX_PERSONA} 字"
+    return None
+
+
+def upsert_user_voice(*, vid: str, label: str, short: str = "", hint: str = "",
+                      persona: str, anchor: str = "用户自定义") -> VoiceSpec:
+    """新建或覆盖一条人格（同 id 覆盖）。校验不过抛 ValueError。"""
+    vid = (vid or "").strip().lower()
+    err = validate_voice(vid=vid, label=label, persona=persona)
+    if err:
+        raise ValueError(err)
+    entry = {
+        "id": vid,
+        "label": label.strip()[:MAX_LABEL],
+        "short": (short or "").strip()[:MAX_SHORT],
+        "hint": (hint or "").strip()[:MAX_HINT],
+        "anchor": (anchor or "用户自定义").strip()[:MAX_LABEL],
+        "persona": persona.strip()[:MAX_PERSONA],
+        "sampled": False,
+    }
+    entries = [e for e in _raw_entries()
+               if str(e.get("id") or "").strip().lower() != vid]
+    entries.append(entry)
+    _write_user_voices(entries)
+    return _spec_from_dict(entry)  # type: ignore[return-value]
+
+
+def delete_user_voice(vid: str) -> bool:
+    """删掉一条用户人格；内置的「覆盖」被删掉即恢复默认。返回是否真的删了。"""
+    vid = (vid or "").strip().lower()
+    entries = _raw_entries()
+    kept = [e for e in entries if str(e.get("id") or "").strip().lower() != vid]
+    if len(kept) == len(entries):
+        return False
+    _write_user_voices(kept)
+    return True
+
+
+# --------------------------------------------------------------------------- #
 # 解析与组装
 # --------------------------------------------------------------------------- #
 
@@ -303,7 +478,7 @@ def parse_variant(variant: str) -> tuple[str, str] | None:
         return _live_voice(*LEGACY_VARIANTS[v])
     if "-" in v:
         p, _, voice = v.partition("-")
-        if p in PLATFORMS and (voice in VOICES or voice in RETIRED_VOICES):
+        if p in PLATFORMS and (voice in all_voices() or voice in RETIRED_VOICES):
             return _live_voice(p, voice)
     if v in PLATFORMS:                 # 只写平台，人格取默认
         return v, DEFAULT_VOICE
@@ -337,10 +512,17 @@ def platform_spec(pid: str) -> PlatformSpec:
 
 
 def voice_spec(vid: str) -> VoiceSpec:
-    return VOICES[vid]
+    return all_voices()[vid]
 
 
-def voice_menu() -> list[dict[str, str]]:
+def _voice_flags(vid: str) -> dict[str, object]:
+    """这条人格是内置 / 自定义 / 覆盖了内置 —— 风格页靠它决定显示哪些按钮。"""
+    custom = vid in custom_voice_ids()
+    builtin = is_builtin_voice(vid)
+    return {"custom": custom and not builtin, "overridden": custom and builtin, "builtin": builtin}
+
+
+def voice_menu() -> list[dict[str, object]]:
     """给前端用的选项清单（不暴露提示词正文）。"""
     return [
         {
@@ -350,8 +532,9 @@ def voice_menu() -> list[dict[str, str]]:
             "hint": v.hint,
             "anchor": v.anchor,
             "sampled": "1" if v.sampled else "0",
+            **_voice_flags(v.id),
         }
-        for v in VOICES.values()
+        for v in all_voices().values()
     ]
 
 
@@ -362,7 +545,7 @@ def style_menu() -> list[dict[str, object]]:
     """
     out: list[dict[str, object]] = []
     for p in PLATFORMS.values():
-        for v in VOICES.values():
+        for v in all_voices().values():
             out.append({
                 "variant": variant_id(p.id, v.id),
                 "platform": p.id,
@@ -373,6 +556,7 @@ def style_menu() -> list[dict[str, object]]:
                 "anchor": v.anchor,
                 "label": variant_label(p.id, v.id),
                 "sampled": "1" if v.sampled else "0",
+                **_voice_flags(v.id),
                 "output": p.output,
                 "bodyMin": p.body_min,
                 "bodyMax": p.body_max,

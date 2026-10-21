@@ -11,6 +11,7 @@ import type {
   PlatformQrcode,
   RunConfig,
   RunDrafts,
+  RunImages,
   RunPublishRequest,
   RunPublishResult,
   SourceInput,
@@ -263,6 +264,10 @@ export interface StyleOption {
   titleWeightMax: number | null
   titleCharsMax: number | null
   cards: boolean
+  /** 用户自定义 / 覆盖了内置 / 是内置（风格页据此决定显示哪些按钮） */
+  custom?: boolean
+  overridden?: boolean
+  builtin?: boolean
 }
 
 /** 一条 HF Daily Paper（GET /api/hf-daily） */
@@ -289,6 +294,40 @@ export interface HfDailyResult {
   /** true = 抓不到新的，回的是旧缓存（界面要如实说） */
   stale: boolean
   error: string
+}
+
+/** 一条人格的完整信息（含提示词正文，编辑风格时用） */
+export interface VoiceDetail {
+  id: string
+  label: string
+  short: string
+  hint: string
+  anchor: string
+  sampled: string
+  persona: string
+  custom: boolean
+  overridden: boolean
+  builtin: boolean
+}
+
+export interface VoicePayload {
+  id?: string
+  label: string
+  short?: string
+  hint?: string
+  persona: string
+}
+
+export interface VoiceUpdatePayload {
+  label?: string
+  short?: string
+  hint?: string
+  persona?: string
+}
+
+export interface VoiceMutationResult {
+  message: string
+  voice: VoiceDetail
 }
 
 export interface StyleMenu {
@@ -329,6 +368,10 @@ export interface PipelineApi {
   publishRunWork(runId: string, body: RunPublishRequest): Promise<RunPublishResult>
   /** 把作品发成成片（小红书视频笔记 / B 站投稿）：形态选错代价大，所以单独一个端点 */
   publishRunVideo(runId: string, body: RunPublishRequest): Promise<RunPublishResult>
+  /** 这次运行可用的配图与当前选中的那几张（手动增删配图用） */
+  listRunImages(runId: string): Promise<RunImages>
+  /** 存人工选的一套配图；传空数组 = 恢复自动选图顺序 */
+  saveRunImages(runId: string, images: string[]): Promise<RunImages>
 
   /* ---------- 对话 ---------- */
   /** 一问一答：回答只依据该运行已落盘的事实源（见后端 app/chat_api.py） */
@@ -351,11 +394,18 @@ export interface PipelineApi {
   skill(name: string): Promise<SkillDetail>
   /** 文章风格清单：平台 × 讲述者人格（风格页用它渲染「小红书 · 专业科普」这类条目） */
   styles(): Promise<StyleMenu>
+  /** 一条人格的完整信息（含提示词正文） */
+  voiceDetail(id: string): Promise<VoiceDetail>
+  /** 新建一条自定义人格（id 留空则由后端生成） */
+  createVoice(body: VoicePayload): Promise<VoiceMutationResult>
+  /** 改一条人格：内置会被存成「覆盖」，自定义直接改 */
+  updateVoice(id: string, body: VoiceUpdatePayload): Promise<VoiceMutationResult>
+  /** 删一条自定义人格；内置的「覆盖」删掉 = 恢复默认 */
+  deleteVoice(id: string): Promise<{ message: string }>
 
   /* ---------- 每日论文 ---------- */
   /** HuggingFace Daily Papers：date 留空取最新；sort='trending' 取趋势榜；force 绕过缓存重新抓 */
   hfDaily(date?: string, sort?: string, force?: boolean): Promise<HfDailyResult>
-
 
   /* ---------- 运营维护 ---------- */
   /** 本机五个服务的真实状态（端口 / pid / 健康 / 日志） */

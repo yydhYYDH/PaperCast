@@ -7,12 +7,16 @@ const props = defineProps<{ run: PaperRun }>()
 
 const stage = computed(() => props.run.stages.find((s) => s.id === 'poster'))
 const html = computed(() => stage.value?.artifacts.find((a) => a.kind === 'html'))
-const png = computed(() => stage.value?.artifacts.find((a) => a.id.endsWith('png')))
+// 按**路径后缀**找 PNG（artifact.id 是 poster-1 这种，以前用 id.endsWith('png') 永远匹配不到，
+// 于是「打开 PNG」点了没反应 —— 2026-09-23 修）。
+const png = computed(() => stage.value?.artifacts.find((a) => a.kind === 'image' && /\.png$/i.test(a.path)))
 const spec = computed(() => props.run.config.poster)
 const zoom = ref(1)
 const mode = ref<'fit' | 'actual'>('fit')
 
 const url = computed(() => assetUrl(html.value?.url))
+const htmlName = computed(() => html.value?.path.split('/').pop() || 'poster.html')
+const pngName = computed(() => png.value?.path.split('/').pop() || 'poster.png')
 
 function openPng() {
   if (png.value?.url) window.open(assetUrl(png.value.url), '_blank')
@@ -24,7 +28,7 @@ function openPng() {
     <div v-if="!html" class="empty">Poster 阶段尚未产出</div>
     <template v-else>
       <div class="toolbar">
-        <span class="chip accent mono">poster.html</span>
+        <span class="chip accent mono">{{ htmlName }}</span>
         <span class="chip mono">{{ spec.size }}</span>
         <span class="chip">{{ spec.venue }}</span>
         <span class="chip mono">theme: {{ spec.theme }} · {{ spec.lang }}</span>
@@ -33,7 +37,7 @@ function openPng() {
           <button :class="{ on: mode === 'fit' }" @click="mode = 'fit'">适配</button>
           <button :class="{ on: mode === 'actual' }" @click="mode = 'actual'">原始尺寸</button>
         </div>
-        <button class="btn sm" :disabled="!!png?.meta?.pending" @click="openPng">打开 PNG</button>
+        <button class="btn sm" :disabled="!png?.url" @click="openPng">打开 PNG</button>
       </div>
 
       <div class="split">
@@ -55,12 +59,13 @@ function openPng() {
           <div class="divider" />
           <div class="label">产物</div>
           <div class="row wrap gap">
-            <span class="chip mono">poster.html</span>
-            <span class="chip mono">{{ png?.meta?.pending ? 'poster.png 待渲染' : 'poster.png（1080×1440）' }}</span>
-            <span class="chip mono">outline.json</span>
+            <span class="chip mono">{{ htmlName }}</span>
+            <span class="chip mono">{{ png ? pngName : 'PNG 待渲染' }}</span>
+            <span class="chip mono">poster.spec.json</span>
           </div>
           <p class="panel-sub note">
-            PNG 导出依赖后端 Playwright 渲染（本机未装 chromium，演示模式下保持待渲染状态）。
+            小红书帖子实际发出的是「组图」那一套（poster/cards/output/xhs-*.jpg），
+            这里展示的是 poster 阶段渲染的渠道画布与它的 HTML 原文。
           </p>
         </aside>
       </div>

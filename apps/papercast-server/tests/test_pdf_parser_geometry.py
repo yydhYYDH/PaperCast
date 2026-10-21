@@ -68,3 +68,49 @@ def test_figure_without_detected_graphic_keeps_a_usable_box(monkeypatch):
     clip, hit = pp._figure_region(cap["rect"], cap, [], [], page_rect, [])
     assert clip.height > 0, f"给出了空框：{clip}"
     assert clip.y1 > clip.y0
+
+
+# --------------------------------------------------------------------------- #
+# 表格区域检测（2026-10-02：World Observer 的 Table 1/2 被裁成 45pt 竖条）
+# --------------------------------------------------------------------------- #
+
+def test_merge_table_boxes_glues_wrapped_header_fragments():
+    """跨多表头被 find_tables 切碎的同一张表要并回整张；隔得远的另一张表不能并进来。
+
+    真实数据（World Observer p9）：Table 1 被切成 3 块（198/198/108 三条），
+    Table 2 在 56pt 之外 —— 前 3 块要并成 [108, 132.9, 504, 223.2]，Table 2 独立。
+    """
+    fragments = [
+        pymupdf.Rect(198.2, 132.9, 419.0, 148.3),
+        pymupdf.Rect(198.2, 156.0, 419.0, 169.1),
+        pymupdf.Rect(108.0, 176.8, 504.0, 223.2),
+        pymupdf.Rect(108.0, 279.3, 504.0, 354.4),
+    ]
+    merged = pp._merge_table_boxes(fragments)
+    boxes = sorted([tuple(round(v, 1) for v in r) for r in merged])
+    assert boxes == [(108.0, 132.9, 504.0, 223.2), (108.0, 279.3, 504.0, 354.4)]
+
+
+def _table_cap(bottom: float) -> dict:
+    return {"rect": pymupdf.Rect(108, bottom - 10, 141, bottom), "bottom": bottom,
+            "kind": "table", "number": "1", "text": "Table 1: …", "ext": None,
+            "block": {"rect": pymupdf.Rect(108, bottom - 43, 504, bottom), "lines": [], "maxline": 90}}
+
+
+def test_match_table_region_picks_the_table_below_the_caption():
+    page_rect = pymupdf.Rect(0, 0, 612, 792)
+    cap = _table_cap(bottom=134.0)
+    regions = [pymupdf.Rect(108, 132.9, 504, 223.2), pymupdf.Rect(108, 279.3, 504, 354.4)]
+    got = pp._match_table_region(regions, cap, page_rect)
+    assert got is not None
+    # 顶边收到表注底，不能把表注文字烤进 PNG
+    assert got.y0 >= 134.0
+    assert got.y1 >= 223.2
+
+
+def test_match_table_region_ignores_narrow_or_far_boxes():
+    page_rect = pymupdf.Rect(0, 0, 612, 792)
+    cap = _table_cap(bottom=134.0)
+    # 一条窄竖边（旧 bug 的产物）+ 一张离得很远的表：都不该被选中
+    regions = [pymupdf.Rect(102, 132.9, 147, 151.4), pymupdf.Rect(108, 300.0, 504, 400.0)]
+    assert pp._match_table_region(regions, cap, page_rect) is None

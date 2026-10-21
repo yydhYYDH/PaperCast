@@ -31,7 +31,7 @@ const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
 
 /* ---------------------------------------------------------------- 回执与标题 */
 
-const extras = ref<Extras>({ receipts: {}, titles: {} })
+const extras = ref<Extras>({ receipts: {}, titles: {}, affiliations: {} })
 const loading = ref(true)
 const copyId = ref('')
 let loadedKey = ''
@@ -39,6 +39,18 @@ let loadedKey = ''
 function artifactUrl(run: PaperRun, stageId: string, re: RegExp): string {
   const art = (run.stages.find((s) => s.id === stageId)?.artifacts ?? []).find((a) => re.test(a.path))
   return art?.url ? assetUrl(art.url) : ''
+}
+
+/**
+ * 没有预览 url 的产物（poster.spec.json 是 preview=false）也要读得到：从产物路径
+ * `.papercast/runs/<id>/<rel>` 里剥出 <rel>，拼 /artifacts/<id>/<rel> 由后端静态目录放出来。
+ */
+function runFileUrl(run: PaperRun, stageId: string, re: RegExp): string {
+  const art = (run.stages.find((s) => s.id === stageId)?.artifacts ?? []).find((a) => re.test(a.path))
+  if (!art) return ''
+  if (art.url) return assetUrl(art.url)
+  const rel = art.path.replace(/^\.papercast\/runs\/[^/]+\//, '')
+  return assetUrl('/artifacts/' + run.id + '/' + rel)
 }
 
 /**
@@ -50,8 +62,22 @@ function artifactUrl(run: PaperRun, stageId: string, re: RegExp): string {
 async function loadExtras(runs: PaperRun[]) {
   const receipts: Record<string, RunReceipts | null> = {}
   const titles: Record<string, string> = {}
+  const affiliations: Record<string, string> = {}
   const channelReceipts: Record<string, Record<string, ReceiptNote[]>> = {}
   await Promise.all(runs.map(async (run) => {
+    // 单位不是运行字段，而是 poster 阶段从论文首页抄下来、写进 poster.spec.json 的。
+    // 读不到（没跑 poster / spec 里没写）就留空，卡片上少一行，不编。
+    const specUrl = runFileUrl(run, 'poster', /poster\/poster\.spec\.json$/)
+    if (specUrl) {
+      try {
+        const res = await fetch(specUrl)
+        if (res.ok) {
+          const spec = (await res.json()) as { affiliation?: unknown }
+          const aff = typeof spec?.affiliation === 'string' ? spec.affiliation.trim() : ''
+          if (aff) affiliations[run.id] = aff
+        }
+      } catch (e) { /* 单位读不到就不显示 */ }
+    }
     // 渠道明细回执：publish/<渠道>/receipt.json（本轮投递）与 publish/direct/<渠道>/receipt.json（作品库直投）
     const arts = run.stages.find((s) => s.id === 'publish')?.artifacts ?? []
     const perChannel = arts.filter((a) => /publish\/(direct\/)?[a-z]+\/receipt\.json$/i.test(a.path) && a.url)
@@ -88,7 +114,7 @@ async function loadExtras(runs: PaperRun[]) {
       if (res.ok) titles[run.id] = (await res.text()).trim()
     } catch (e) { /* 标题读不到就用论文标题兜底 */ }
   }))
-  extras.value = { receipts, titles, channelReceipts }
+  extras.value = { receipts, titles, channelReceipts, affiliations }
   loading.value = false
 }
 
@@ -306,6 +332,20 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
               <span v-if="w.stats.length && when(w)" class="dot-sep">·</span>
               <span v-if="when(w)">{{ when(w) }}</span>
             </p>
+            <!-- 来源论文的团队信息：作者、单位、arXiv PDF。读不到就不占位。 -->
+            <p v-if="w.authorsText || w.affiliation || w.pdfUrl" class="work-src">
+              <a
+                v-if="w.pdfUrl"
+                class="src-pdf"
+                :href="w.pdfUrl"
+                target="_blank"
+                rel="noreferrer"
+                title="打开 arXiv PDF"
+                @click.stop
+              >PDF</a>
+              <span v-if="w.authorsText" class="src-authors">{{ w.authorsText }}</span>
+              <span v-if="w.affiliation" class="src-affil">{{ w.affiliation }}</span>
+            </p>
             <div class="work-foot">
               <span class="chip tiny" :class="chipOf(w).cls"><i class="dot" />{{ chipOf(w).label }}</span>
               <span class="grow" />
@@ -443,6 +483,19 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
                   </ul>
                 </div>
 
+                <div v-if="current.authors.length || current.affiliation || current.paperUrl" class="side-block">
+                  <div class="label">来源论文</div>
+                  <ul class="kv">
+                    <li v-if="current.authorsText"><span>作者</span><b>{{ current.authorsText }}</b></li>
+                    <li v-if="current.affiliation"><span>单位</span><b>{{ current.affiliation }}</b></li>
+                  </ul>
+                  <div class="acts">
+                    <a v-if="current.pdfUrl" class="btn sm" :href="current.pdfUrl" target="_blank" rel="noreferrer">arXiv PDF</a>
+                    <a v-if="current.paperUrl" class="btn sm" :href="current.paperUrl" target="_blank" rel="noreferrer">摘要页</a>
+                  </div>
+                  <p v-if="current.authors.length > 3" class="side-note">共 {{ current.authors.length }} 位作者：{{ current.authors.join('、') }}</p>
+                </div>
+
                 <div class="side-block">
                   <div class="label">这一件</div>
                   <ul class="kv">
@@ -560,6 +613,16 @@ const TITLE_FROM: Record<Work['titleFrom'], string> = {
 }
 .work-meta { font-size: 11.5px; color: var(--small-ink); display: flex; flex-wrap: wrap; gap: 5px; align-items: baseline; }
 .dot-sep { color: var(--ink-4); }
+/* 来源论文：作者与单位是「谁做的」，arXiv PDF 是「原文在哪」——一行放下，超出各自省略 */
+.work-src { font-size: 11.5px; color: var(--small-ink); line-height: 1.5; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.src-pdf {
+  flex: none; font-size: 10.5px; font-weight: 600; letter-spacing: 0.02em;
+  color: var(--accent); border: 1px solid currentColor; border-radius: 4px;
+  padding: 0 5px; text-decoration: none;
+}
+.src-pdf:hover { background: var(--accent); color: #fff; }
+.src-authors { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-affil { flex-basis: 100%; color: var(--ink-4); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .work-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 .work-kind { font-size: 11px; color: var(--small-ink); }
 

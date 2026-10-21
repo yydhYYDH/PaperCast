@@ -1,14 +1,21 @@
 """arXiv 通道：元数据 + PDF + 源码包。
 
 只打官方 API（export.arxiv.org / arxiv.org），不抓 HTML 页面（易被反爬、结构漂移）。
+
+出口策略：优先**直连**（忽略环境里的 http(s)_proxy，用本机 IP），直连失败再回退到环境代理。
+arXiv 按出口 IP 限流，本机家宽 IP 通常比共享代理机房 IP 宽松得多；ARXIV_DIRECT=0 可关掉直连。
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
+import random
 import re
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Optional
 
@@ -29,8 +36,9 @@ ID_RE = re.compile(
 # 原先的实现只发一次请求就 raise_for_status()，于是偶发限流 = 整个 run 必然失败
 # （历史：arxiv 入口 4 次尝试，2 次死在这条）。可重试的状态码与网络类错误都重试。
 RETRYABLE_STATUS = frozenset({406, 408, 425, 429, 500, 502, 503, 504})
-ATTEMPTS = 4
-BASE_DELAY = 0.7
+ATTEMPTS = 5
+BASE_DELAY = 1.2
+MAX_DELAY = 30.0
 API_INTERVAL = 3.1
 _API_LOCK: Optional[asyncio.Lock] = None
 _API_LOCK_LOOP: Optional[asyncio.AbstractEventLoop] = None
@@ -38,12 +46,26 @@ _LAST_API_REQUEST = 0.0
 # arXiv 的 API 使用条款要求带上能识别调用方的 User-Agent（默认的 python-httpx 不达标）
 UA = "PaperCast/0.1 (arXiv intake; +https://github.com/yydhYYDH/PaperCast)"
 
+# 直连优先：默认忽略环境代理（trust_env=False），用本机 IP 直连 arXiv；连不上再回退代理。
+# ARXIV_DIRECT=0 / false / no / off 可强制走回环境代理。
+DIRECT_FIRST = os.environ.get("ARXIV_DIRECT", "1").strip().lower() not in {"0", "false", "no", "off"}
+
 
 def _headers() -> dict[str, str]:
     return {
         "User-Agent": UA,
         "Accept": "application/atom+xml, application/xml;q=0.9, */*;q=0.8",
     }
+
+
+def _new_client(timeout: float, *, trust_env: bool) -> httpx.AsyncClient:
+    """trust_env=False → 忽略 http(s)_proxy，直连；True → 走环境代理。"""
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=trust_env)
+
+
+def _client_order() -> list[bool]:
+    """尝试顺序的 trust_env 取值：先直连（False），失败再走代理（True）。"""
+    return [True] if not DIRECT_FIRST else [False, True]
 
 
 def _api_lock() -> asyncio.Lock:
@@ -64,14 +86,43 @@ async def _wait_for_api_slot() -> None:
     _LAST_API_REQUEST = time.monotonic()
 
 
+def _retry_after_seconds(resp: httpx.Response) -> Optional[float]:
+    """解析 Retry-After 头（秒数或 HTTP 日期）。arXiv 限流时会带这个。"""
+    raw = (resp.headers.get("Retry-After") or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return float(raw)
+    try:
+        dt = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        return None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return max(0.0, (dt - datetime.now(dt.tzinfo)).total_seconds())
+
+
+def _backoff_delay(attempt: int, resp: Optional[httpx.Response] = None) -> float:
+    """指数退避 + jitter；有 Retry-After 就服从它（封顶 MAX_DELAY）。"""
+    if resp is not None:
+        retry_after = _retry_after_seconds(resp)
+        if retry_after is not None:
+            return min(retry_after, MAX_DELAY) + random.uniform(0.0, 1.0)
+    delay = min(BASE_DELAY * (2**attempt), MAX_DELAY)
+    return delay + random.uniform(0.0, delay * 0.25)
+
+
 async def _get(client: httpx.AsyncClient, url: str, **kw) -> httpx.Response:
-    """带重试的 GET：可重试状态码 / 网络错 → 指数退避重试，仍失败才抛。
+    """带重试的 GET：可重试状态码 / 网络错 → 退避重试，仍失败才抛。
 
     最后仍失败时把「试了几次」写进异常文本 —— 否则又变成今天这种
     「406 一句话」，看不出是被限流还是参数写错。
     """
     last: Exception | None = None
     for i in range(ATTEMPTS):
+        resp: Optional[httpx.Response] = None
         try:
             async with _api_lock():
                 await _wait_for_api_slot()
@@ -87,7 +138,20 @@ async def _get(client: httpx.AsyncClient, url: str, **kw) -> httpx.Response:
                 response=resp,
             )
         if i < ATTEMPTS - 1:
-            await asyncio.sleep(BASE_DELAY * (2**i))
+            await asyncio.sleep(_backoff_delay(i, resp))
+    assert last is not None
+    raise last
+
+
+async def _get_with_fallback(url: str, *, timeout: float, **kw) -> httpx.Response:
+    """直连优先、失败回退代理的 GET。"""
+    last: Exception | None = None
+    for trust_env in _client_order():
+        async with _new_client(timeout, trust_env=trust_env) as client:
+            try:
+                return await _get(client, url, **kw)
+            except (httpx.TransportError, httpx.HTTPStatusError) as e:
+                last = e
     assert last is not None
     raise last
 
@@ -96,6 +160,7 @@ async def _stream_to(client: httpx.AsyncClient, url: str, dest: Path) -> None:
     """把 URL 流式写进文件，带与 _get 同样的重试；每次重试都截断重写。"""
     last: Exception | None = None
     for i in range(ATTEMPTS):
+        resp: Optional[httpx.Response] = None
         try:
             async with _api_lock():
                 await _wait_for_api_slot()
@@ -115,7 +180,21 @@ async def _stream_to(client: httpx.AsyncClient, url: str, dest: Path) -> None:
         except httpx.TransportError as e:
             last = e
         if i < ATTEMPTS - 1:
-            await asyncio.sleep(BASE_DELAY * (2**i))
+            await asyncio.sleep(_backoff_delay(i, resp))
+    assert last is not None
+    raise last
+
+
+async def _stream_with_fallback(url: str, dest: Path, *, timeout: float) -> None:
+    """直连优先、失败回退代理的流式下载。"""
+    last: Exception | None = None
+    for trust_env in _client_order():
+        async with _new_client(timeout, trust_env=trust_env) as client:
+            try:
+                await _stream_to(client, url, dest)
+                return
+            except (httpx.TransportError, httpx.HTTPStatusError) as e:
+                last = e
     assert last is not None
     raise last
 
@@ -144,10 +223,9 @@ def _text(node, path: str) -> str:
 
 async def fetch_metadata(arxiv_id: str, *, timeout: float = 30.0) -> dict:
     """取标题 / 作者 / 摘要 / 日期 / 主分类。"""
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as cx:
-        resp = await _get(cx, API, params={"id_list": arxiv_id})
-        resp.raise_for_status()
-        root = ET.fromstring(resp.text)
+    resp = await _get_with_fallback(API, timeout=timeout, params={"id_list": arxiv_id})
+    resp.raise_for_status()
+    root = ET.fromstring(resp.text)
     entry = root.find(f"{ATOM}entry")
     if entry is None:
         raise RuntimeError(f"arXiv 未返回该论文：{arxiv_id}")
@@ -181,8 +259,7 @@ async def download_pdf(arxiv_id: str, dest: Path, *, version: str = "", timeout:
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://arxiv.org/pdf/{arxiv_id}{version}"
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as cx:
-        await _stream_to(cx, url, dest)
+    await _stream_with_fallback(url, dest, timeout=timeout)
     if dest.stat().st_size < 8000 or dest.read_bytes()[:4] != b"%PDF":
         raise RuntimeError(f"arXiv 返回的不是有效 PDF：{url}")
     return dest
@@ -194,10 +271,9 @@ async def download_source(arxiv_id: str, dest: Path, *, timeout: float = 120.0) 
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://arxiv.org/e-print/{arxiv_id}"
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as cx:
-            resp = await _get(cx, url)
-            resp.raise_for_status()
-            dest.write_bytes(resp.content)
+        resp = await _get_with_fallback(url, timeout=timeout)
+        resp.raise_for_status()
+        dest.write_bytes(resp.content)
         if dest.stat().st_size < 200:
             dest.unlink(missing_ok=True)
             return None

@@ -10,11 +10,16 @@
 | 上传的 PDF | `pdf` | `pdf_parser` | 主通道，保真度最好 |
 | arXiv id / URL | `arxiv` | `arxiv` → `pdf_parser`（+ 源码包） | 先下载 PDF 走 PDF 通道；同时下源码包做章节结构补强 |
 | LaTeX 工程（zip 或目录） | `latex` | `latex_parser`（有 PDF 则回退 PDF 通道） | 本机没有 LaTeX 引擎，见「边界」 |
+| 知乎文章 URL | `zhihu`（或 `url`） | `ops/zhihu_fetch.py`（Playwright 抓取） | 非论文：直接拿正文+图片，不走 PDF 解析；实测 `zhuanlan.zhihu.com/p/...` |
 
 `SourceInput.value` 的归一化规则：
 
 - arXiv：`2510.05096`、`arXiv:2510.05096`、`https://arxiv.org/abs/2510.05096`、`https://arxiv.org/pdf/2510.05096v2` 全部接受，
   统一解析成 `{arxivId, version?}`。
+- 知乎：接受文章 URL（`https://zhuanlan.zhihu.com/p/<id>`）或裸 id；`kind=url` 目前也只支持知乎域名。
+  需要登录 cookie（`var/secrets/zhihu/cookies.json`）与 `var/toolchains/zhihu-mcp-venv`，抓取脚本自管理。
+  抓取产物（`article.md` + 下载好的 `images/`）会被搬进 run 的 intake 目录，并把正文里的远程图片引用改写成本地 `images/` 路径，
+  因此 M2 之后与 PDF 通道完全一致。注意：知乎不是论文，digest 的「贡献/方法/数值可回溯」等论文式校验可能不适用（会记为 fail 但不阻塞）。
 - LaTeX：接受 `.zip` 压缩包或已解包目录路径；入口 `.tex` 取 `main.tex`，否则取第一个含 `\documentclass` 的文件。
 - PDF：`POST /api/uploads`（multipart）落盘后，把返回的 `uploadId` 作为 `value`。
 

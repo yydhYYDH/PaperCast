@@ -15,6 +15,15 @@
 | `imagegen.sh` | **文生图入口**：调 `baoyu-image-gen` 的官方 API 后端（默认 dashscope/qwen-image-2.0-pro）。密钥放 `var/secrets/imagegen.env`；内置 `npm_config_cache` 指向 `var/`（沙箱下 `~/.npm` 只读，否则 `npx` 必挂） |
 | `sync_upstream.sh` | 按 `docs/research/upstream-repos.md` 的登记表复现/核对 `reference/upstream/`（`--list` 只核对，默认补齐缺失；幂等、非破坏） |
 | `skillsearch/` | 上游技能调研脚本（`clone.sh` 克隆 11 个参考仓库、`inspect/deep2/readmes` 提取 README 结构） |
+| `zhihu_fetch.py` | **知乎文章 → 正文+图片**：`./ops/zhihu_fetch.py <url> [-o OUT] [--no-download] [--json]`。用 Playwright + `var/secrets/zhihu/cookies.json` 抓取（直连 403），产出 `article.md` + 下载好的 `images/` + `meta.json`，默认落 `var/state/zhihu-fetch/<id>/`。自管理解释器（自动用 `var/toolchains/zhihu-mcp-venv` 重跑）。后端 intake 的 `kind=zhihu/url` 就是调它 |
+| `hf_daily_job.sh` | **每日 HF 论文 → 小红书定时发布**入口：先幂等确保 `backend`/`mcp` 在跑，再交给 `hf_daily_job.py`。systemd timer 调它，也可手动跑（`--dry-run` / `--force` / `--check`） |
+| `hf_daily_job.py` | 逻辑本体：取 HF daily upvotes 前 N（默认 5）→ 按 `var/state/hf-daily-job/seen.json` 去重 → 建 run 生成小红书图文（有界并发 `HF_CONCURRENCY`，默认 2）→ 自动放行 publish 闸门（`draft`，只生成）→ 读 `publish/xiaohongshu/export/` → 调小红书 MCP `/api/v1/publish` 带 `schedule_at` **排期发布**。当天成功打 `<日期>.done` 卡，单篇失败不拖垮整批 |
+| `systemd/` | `papercast-hf-daily.service` + `.timer` 模板（`@WS@` 占位，安装时替换）。timer 每天 12:00，**`Persistent=true` 是实现"关机错过、开机补跑"的关键** |
+| `install_hf_daily_timer.sh` | 安装/卸载 systemd user timer（`--uninstall`）。需 user systemd（`systemctl --user`）可用 |
+| `install_hf_daily_cron.sh` | Linux cron 方案：写两行 user crontab —— `0 12 * * *` 每天跑 + `@reboot` 开机补跑；脚本内部有"到点才跑 + 当天打卡"，早于 12:00 的触发会自行跳过。前提是 cron 守护进程在跑且开机自启 |
+| `install_hf_daily_windows_task.sh` | **本机（WSL2 旧式 init，无 systemd、cron 不跑）实际使用的方案**：注册 Windows 计划任务 `PaperCast-HF-Daily`（每天 12:00 调 `wsl.exe` → `hf_daily_job.sh`）+ 登录自启 `hf_daily.vbs`（Startup 文件夹，隐藏窗口，每次登录补跑）。`--uninstall` 可卸 |
+
+作业可调环境变量：`HF_DAILY_TOP`（默认 5）、`HF_PUBLISH_AT`（排期起点，默认 `18:00`）、`HF_PUBLISH_GAP_MIN`（每篇间隔分钟，默认 15）、`HF_CONCURRENCY`（并发生成数，默认 2）、`HF_RUN_TIMEOUT_SEC`（单篇超时，默认 1800）。
 
 ## 约定
 

@@ -8,7 +8,7 @@ export type StageStatus = 'pending' | 'running' | 'waiting' | 'done' | 'failed' 
 
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed'
 
-export type SourceKind = 'arxiv' | 'pdf' | 'latex'
+export type SourceKind = 'arxiv' | 'pdf' | 'latex' | 'zhihu' | 'url' | 'github'
 
 export type ArtifactKind =
   | 'markdown'
@@ -314,6 +314,8 @@ export interface RunDraft {
   ready: boolean
   /** 后端有没有拣到可投的文案（false 时下面几项都不存在） */
   hasDraft: boolean
+  /** 这个渠道支不支持定时发布（目前小红书支持）：界面靠它决定要不要亮出「定时发布」 */
+  schedulable?: boolean
   /** 素材本身适不适配这个平台（小红书标题超重、B 站缺视频…） */
   suitable: boolean
   /** 一句人话：适配说明，或「为什么投不了」 */
@@ -341,6 +343,29 @@ export interface RunDrafts {
   channels: RunDraft[]
 }
 
+/** 一张可选的配图（作品库发布面板里手动增删用）：组图 / 文章卡片 / 论文原图 */
+export interface RunImageCandidate {
+  /** run 目录内的相对路径，也是 selected.json 里存的值 */
+  path: string
+  name: string
+  /** deck=小红书组图 / card=文章卡片 / figure=论文原图 / table=表格 / selected=上次人工选定 */
+  kind: string
+  label: string
+  url: string
+  /** 当前是否被选中（会随图文投出去） */
+  chosen: boolean
+}
+
+/** 这次运行可用的配图与当前选中的那几张（选图是运行级的，各渠道共用） */
+export interface RunImages {
+  runId: string
+  /** 当前选中的相对路径，顺序即投递顺序 */
+  selected: string[]
+  candidates: RunImageCandidate[]
+  /** 是否有人工选定（true 时投递用这套，忽略自动顺序） */
+  hasSelection: boolean
+}
+
 export interface RunPublishRequest {
   channelId: string
   /** false = 只落草稿（无副作用）；true = 真投递（不可逆，必须过人工确认） */
@@ -350,6 +375,8 @@ export interface RunPublishRequest {
   title?: string
   content?: string
   tags?: string[]
+  /** 定时发布（RFC3339，留空 = 立即发布）。仍要 confirmed=true；只有支持排期的渠道认它。 */
+  scheduleAt?: string
 }
 
 export type RunPublishStatus = 'published' | 'failed' | 'blocked' | 'draft'

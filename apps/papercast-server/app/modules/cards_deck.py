@@ -162,6 +162,54 @@ def plain(text: Any) -> str:
     return _MARKUP_ONLY_RE.sub("", str(text if text is not None else ""))
 
 
+#: 图片里永远不会出现链接：选题时 spec.venue 常带「Project page: https://…」这类来源，
+#: 印到卡片上既丑又没意义（平台也不让外链可点）。裸链接与「标签: 链接」两种都清掉。
+# URL 字符集只到 RFC3986 的 ASCII 安全字符为止：URL 里不会有中文，
+# 否则正则会从「https://…plus」一路吞到「（本页列…」把正文也吃掉（2026-10-09 实测）。
+_URL_CHARS = r"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]"
+_TLDS = r"com|org|io|net|ai|edu|cn|me|dev|co|app|xyz|info|gov|top|site|tech|tv|cc"
+# 带协议/ www 的，或**裸域名**（OuroWorld 的 kicker 就是「PROJECT PAGE: OUROWORLD.USERWEI.COM」，
+# 没协议没 www，只认前两种会漏，2026-10-10 实测）。
+_URL_CORE = (
+    r"(?:(?:https?://|www\.)" + _URL_CHARS + r"+"
+    r"|(?:[A-Za-z0-9-]+\.)+(?:" + _TLDS + r")(?:/[^\s，。；、）)】\]]*)?)"
+)
+_URL_RE = re.compile(_URL_CORE, re.I)
+_LABELED_URL_RE = re.compile(
+    r"(?i)[·\-—|]?\s*(?:project\s*page|project|page|link|url|website|homepage|demo|address)"
+    r"\s*[:：]?\s*" + _URL_CORE
+)
+#: 「Project page / Code」这种**纯链接标签**（去掉链接后剩下的孤儿）：整段只由这些词
+#: 和 / | · 分隔时丢掉。按 `·` 分词后逐词判，避免误伤「arXiv preprint」里的 preprint。
+_LINK_LABEL_WORD = r"(?:project\s*page|page|code|link|url|website|homepage|demo|address|github|project|paper|pdf)"
+_LINK_LABEL_ONLY_RE = re.compile(r"(?i)^" + _LINK_LABEL_WORD + r"(?:\s*[/|]\s*" + _LINK_LABEL_WORD + r")*$")
+
+
+def _drop_link_labels(text: str) -> str:
+    parts = [p.strip() for p in text.split("·")]
+    kept = [p for p in parts if p and not _LINK_LABEL_ONLY_RE.match(p)]
+    return " · ".join(kept)
+
+
+def strip_links(text: Any) -> str:
+    """把要印进图片的文字里的链接去掉（含「Project page: https://…」这种带标签的）。"""
+    s = _LABELED_URL_RE.sub("", str(text if text is not None else ""))
+    s = _URL_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s)
+    s = _drop_link_labels(s)
+    return s.strip(" \t·-—|,，;；")
+
+def _strip_links_deep(obj: Any) -> Any:
+    """递归清洗页面计划里的所有字符串 —— 图片文本一律不含链接。"""
+    if isinstance(obj, str):
+        return strip_links(obj)
+    if isinstance(obj, list):
+        return [_strip_links_deep(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _strip_links_deep(v) for k, v in obj.items()}
+    return obj
+
+
 def inline(text: Any) -> str:
     """转义后把 **粗体** / ==底色== 换成固定标签。
 
@@ -348,19 +396,25 @@ def fit_title(text: str, kind: str = "xl", *, max_lines: Optional[int] = None) -
 
 
 def dedupe_parts(*parts: Any) -> list[str]:
-    """`Nature · VOL 651 · 2026` 与 `Nature` 拼在一起会读成两个 Nature —— 互为子串的只留长的那个。"""
+    """封面顶栏的几段先拆到「·」的最小词，再按子串去重。
+
+    只按整段比子串会漏：kicker 是「arXiv 2610.05966 · ICML 2026」、venue 是
+    「ICML 2026 (ONEPO 扩展版)」时两段互不包含，拼出来就是
+    「… · ICML 2026 · ICML 2026 (ONEPO 扩展版) · …」（2026-10-07 实测 HuatuoGPT-3）。
+    词级规则：新词已被某个旧词包含就丢掉；旧词被新词包含就用更具体的那个替换掉旧的。
+    """
     out: list[str] = []
     for raw in parts:
-        p = str(raw or "").strip(" ·")
-        if not p:
-            continue
-        low = p.lower()
-        if any(low in o.lower() or o.lower() in low for o in out):
-            if any(len(low) > len(o) for o in out) and not any(low in o.lower() for o in out):
+        for token in str(raw or "").split("·"):
+            p = token.strip()
+            if not p:
+                continue
+            low = p.lower()
+            if any(low in o.lower() for o in out):
+                continue
+            if any(o.lower() in low for o in out):
                 out = [o for o in out if o.lower() not in low]
-                out.append(p)
-            continue
-        out.append(p)
+            out.append(p)
     return out
 
 
@@ -960,6 +1014,11 @@ def plan_pages(spec: dict[str, Any], cover: Optional[dict[str, Any]], digest: di
     `extra_figures` 是 build() 用 pick_figure_pages 备好的补充图卡（已过滤、已去重）。
     放在这里而不是在函数内部去读文件，是为了保住「纯函数、不碰文件系统」这条约定。
     """
+    # 图片里永不出现链接：**先清输入**再做任何推导 —— 否则 URL 会被「从要点截标题」
+    # 先劈成「详见 https」+「//arxiv.org/…」两段，之后再清就拼不回来了（2026-10-09 实测）。
+    spec = _strip_links_deep(spec)
+    cover = _strip_links_deep(cover) if cover else cover
+    digest = _strip_links_deep(digest)
     pages: list[dict[str, Any]] = []
     cv = cover or {}
     # LLM 为每张图写的中文说明（spec.figureNotes）。图卡页优先用它 —— PDF 抽出来的
@@ -985,6 +1044,8 @@ def plan_pages(spec: dict[str, Any], cover: Optional[dict[str, Any]], digest: di
         "teaser": teaser,
         "chips": (cv.get("chips") or spec.get("chips") or [])[:3],
         "venue": spec.get("venue") or "",
+        # 论文头部截图（标题 + 作者 + 单位）的可选嵌图；没有就照旧不嵌。
+        "titleBlock": cv.get("titleBlock") or spec.get("titleBlock") or {},
     })
 
     block_no = 0
@@ -1069,13 +1130,19 @@ def plan_pages(spec: dict[str, Any], cover: Optional[dict[str, Any]], digest: di
         mid = pages[1:len(pages) - len(tail)]
         keep = MAX_PAGES - len(head) - len(tail)
         pages = head + mid[:max(0, keep)] + tail
+    # 图片里永不出现链接：集中清洗一次，覆盖封面/要点/图卡/收尾所有文本字段。
+    pages = _strip_links_deep(pages)
     return pages
 
 
 def build_html(pages: list[dict[str, Any]], figures_dir: Path, out_dir: Path, *,
-               theme: str = DEFAULT_THEME, template: Path, note: str = "") -> dict[str, Any]:
+               theme: str = DEFAULT_THEME, template: Path, note: str = "",
+               brand: str = "PaperCast 论文速读") -> dict[str, Any]:
     """把页面计划写成 index.html（模板来自技能安装目录，CSS 不落仓库）。"""
     theme = theme if theme in THEMES else DEFAULT_THEME
+    # note（收尾页的出处，形如「venue · 标题」）不走页面计划，单独在这里清一次链接：
+    # venue 常是「Project page: https://…」，不清就会印到收尾页上（2026-10-09 实测）。
+    note = strip_links(note)
     tpl = Path(template).read_text(encoding="utf-8")
     # 主题是白名单常量，但仍走替换而不是拼接 —— 将来手滑传了别的字符串也注入不进 CSS
     tpl = re.sub(r'(<html\b[^>]*\bdata-theme=")[^"]*(")', rf"\g<1>{theme}\g<2>", tpl, count=1)
@@ -1094,6 +1161,12 @@ def build_html(pages: list[dict[str, Any]], figures_dir: Path, out_dir: Path, *,
     /* 论文图表按「不裁剪、不拉伸」用 fit-contain，模板的 --paper-2 底色会留灰边；
        图表是证据，直接浮在纸面上更干净。 */
     .frame-img.fit-contain { background: transparent; }
+    /* 首图里嵌的「论文头部截图」（标题 + 作者 + 单位）：白底 + 细边 + 内边距，
+       让它一眼看出是**论文原页的截图**（可核对出处），而不是排版出来的字。
+       max-height 是安全阀：作者动辄上百人的论文（如 DSeC）截图会很高，不限高会把
+       封面撑穿（实测），限到 240px 后即使超宽比也放得下。 */
+    .frame-img.tb-shot { background: #fff; border: 1px solid var(--line);
+                         border-radius: 8px; padding: 14px 20px; max-height: 240px; }
     /* 上游模板的 .pipeline-v .step-title 间距 8px < 它自己 QA 的 16px 下限（R9 会 WARN）。 */
     .pipeline-v .step-title { margin-bottom: 18px; }
     /* 要点只有 3 条时，模板的 .ledger 会把内容挤在上半页、下半页留一大片空
@@ -1150,19 +1223,36 @@ def build_html(pages: list[dict[str, Any]], figures_dir: Path, out_dir: Path, *,
     n = len(pages)
     for i, pg in enumerate(pages, start=1):
         pid = f"xhs-{i:02d}"
-        strip = [f"{i:02d} / {n:02d}", "—", "PaperCast 论文速读"]
+        strip = [f"{i:02d} / {n:02d}", "—", brand]
         if pg["kind"] == "cover":
+            # 论文头部截图（标题 + 作者 + 单位）可选嵌在 kicker 与中文大标题之间：
+            # 读者一眼能核对该图出自论文原页，而不是排版出来的标题。
+            tb = pg.get("titleBlock") or {}
+            tb_src = _fig_src(tb, figures_dir)
+            tb_html = ""
+            if tb_src:
+                trel = _copy_asset(tb_src, assets_dir)
+                used += 1
+                tar = _img_aspect(tb_src)
+                tstyle = f"aspect-ratio:{tar[0]}/{tar[1]}" if tar else ""
+                tb_html = (
+                    f'        <figure class="frame-img tb-shot fit-contain" style="{tstyle}">\n'
+                    f'          <img src="{_esc(trel)}" alt="{_esc(pg["title"])} 论文标题与作者单位">\n'
+                    "        </figure>\n"
+                )
             fig_html = ""
+            # 嵌了头部截图就腾地方：teaser 从 16:9 收到 21:9，且不再放 chips 行。
+            ratio = "21x9" if tb_html else COVER_FIG_RATIO
             src = _fig_src(pg.get("teaser") or {}, figures_dir)
             if src:
                 rel = _copy_asset(src, assets_dir)
                 used += 1
                 fig_html = (
-                    f'        <figure class="frame-img r-{COVER_FIG_RATIO} fit-contain">\n'
+                    f'        <figure class="frame-img r-{ratio} fit-contain">\n'
                     f'          <img src="{_esc(rel)}" alt="{_esc(pg["title"])}">\n'
                     "        </figure>\n"
                 )
-            if pg.get("chips"):
+            if pg.get("chips") and not tb_html:
                 fig_html += (
                     '        <div class="row gap-2">'
                     + "".join(f'<span class="label">{_esc(c)}</span>' for c in pg["chips"])
@@ -1178,11 +1268,12 @@ def build_html(pages: list[dict[str, Any]], figures_dir: Path, out_dir: Path, *,
                 fig_html += (f'        <p class="lead" style="font-size:{lead_size}px">'
                              f'{lead_html}</p>\n')
             size, lines = fit_title(pg["title"], "display")
-            head_kicker = " · ".join(dedupe_parts(pg.get("kicker"), pg.get("venue"), "PaperCast 论文速读"))
+            head_kicker = " · ".join(dedupe_parts(pg.get("kicker"), pg.get("venue"), brand))
             body = (
                 f'        <p class="kicker">{_esc(head_kicker)}</p>\n'
-                f'        <h1 class="h-display" style="font-size:{size}px">'
+                + f'        <h1 class="h-display" style="font-size:{size}px">'
                 + "<br>".join(inline(l) for l in lines) + "</h1>\n"
+                + tb_html
                 + fig_html
             )
             sections.append(_page(pid=pid, kicker="", title=None, title_kind="xl", body_html=body,
@@ -1280,7 +1371,8 @@ def build_html(pages: list[dict[str, Any]], figures_dir: Path, out_dir: Path, *,
 def build(spec: dict[str, Any], cover: Optional[dict[str, Any]], digest: dict[str, Any],
           figures_dir: Path | str, out_dir: Path | str, *, theme: str = DEFAULT_THEME,
           max_items: int = MAX_ITEMS_PER_PAGE, keep_pages: Optional[int] = None,
-          max_figures: int = MAX_FIGURE_PAGES, note: str = "") -> dict[str, Any]:
+          max_figures: int = MAX_FIGURE_PAGES, note: str = "",
+          brand: str = "PaperCast 论文速读") -> dict[str, Any]:
     """完整装配：spec → 页面计划 → index.html（+ assets/ + deck.plan.json）。"""
     sd = skill_dir()
     if not sd:
@@ -1306,7 +1398,7 @@ def build(spec: dict[str, Any], cover: Optional[dict[str, Any]], digest: dict[st
     if keep_pages:
         pages = pages[:keep_pages]
     info = build_html(pages, figs, out_dir, theme=theme,
-                      template=sd / TEMPLATE_REL, note=note)
+                      template=sd / TEMPLATE_REL, note=note, brand=brand)
     (out_dir / "deck.plan.json").write_text(
         json.dumps({"theme": theme, "pages": pages, "note": note}, ensure_ascii=False, indent=1),
         encoding="utf-8",

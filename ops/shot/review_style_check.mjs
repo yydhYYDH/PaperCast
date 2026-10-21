@@ -1,12 +1,11 @@
-// Agent 审核（前端流程第七步）+ 个性化风格层 核验
+// 个性化风格层 核验 +「Agent 审核已下线」回归
 //
 // 断言的是「计算出来的东西」，不是「某人说改过了」：
-//   1. 右侧名单多出第七行「审核」，且写着真实的检查项数量；
-//   2. 对话里有一条 #m-review，结论句就是人工审核时看到的那一句
-//      （同一句 rev.line，两处一个来源 —— 闸门分支见文件末尾的说明）；
-//   3. 风格页列出的是后端从本机只读目录里读到的技能，展开能看到 SKILL.md 原文，
+//   1. **Agent 审核那一步确实没了**（2026-09-23 用户要求）：右侧名单不再有「审核」行、
+//      对话里不再有 #m-review、闸门上方不再有 .gate-review 那句汇总；
+//   2. 风格页列出的是后端从本机只读目录里读到的技能，展开能看到 SKILL.md 原文，
 //      换风格会落 localStorage 并在输入框那一行显示出来；
-//   4. 控制台 0 错误。
+//   3. 控制台 0 错误。
 import { chromium } from 'playwright'
 import { existsSync, readdirSync } from 'node:fs'
 function findShell() {
@@ -28,15 +27,14 @@ await page.waitForTimeout(3000)
 
 const review = await page.evaluate(() => {
   const rows = [...document.querySelectorAll('.roster li')].map((li) => li.innerText.replace(/\s+/g, ' ').trim())
-  const msg = document.querySelector('#m-review')
   return {
     rosterRows: rows,
+    // 这几项都应为 false：审核那一步已经下线
     hasReviewRow: rows.some((r) => r.startsWith('审核')),
-    reviewVerdict: (msg?.innerText ?? '').replace(/\s+/g, ' ').trim().slice(0, 90),
-    sentenceInFlow: /Agent 审核(已经通过|没通过|：)/.test((msg?.innerText ?? '')),
-    reviewChips: [...document.querySelectorAll('.checks .chk')].map((c) => c.innerText.trim()).slice(0, 6),
+    hasReviewMessage: !!document.querySelector('#m-review'),
+    hasReviewChips: !!document.querySelector('.checks .chk'),
+    hasGateReviewLine: !!document.querySelector('.gate-review'),
     gatePresent: !!document.querySelector('.gate'),
-    gateLine: document.querySelector('.gate-review')?.innerText.replace(/\s+/g, ' ').trim() ?? null,
   }
 })
 await page.screenshot({ path: '/home/yydh/hack/docs/evidence/review-flow.png' })
@@ -70,5 +68,6 @@ const composerLine = await page.evaluate(
   () => [...document.querySelectorAll('.hint')].map((p) => p.innerText.replace(/\s+/g, ' ').trim()).find((t) => t.startsWith('风格')) ?? null,
 )
 console.log(JSON.stringify({ review, stylePage, skillBody, toast, stored, composerLine, errors }, null, 1))
-console.log(review.gatePresent ? '[闸门分支] 本轮真有闸门，上面的 gateLine 就是对它取的。' : '[闸门分支] 本轮没有停在闸门的 run，因此 gateLine 为 null；闸门上方那句与上面 reviewVerdict 是同一个 rev.line（review.ts 计算一次，两处渲染）。')
+const reviewGone = !review.hasReviewRow && !review.hasReviewMessage && !review.hasReviewChips && !review.hasGateReviewLine
+console.log(reviewGone ? '[审核下线] 通过：名单无「审核」行、无 #m-review、无检查项、闸门上方无汇总句。' : '[审核下线] 失败：仍能看到审核那一步的痕迹。')
 await browser.close()

@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.llm import LLMError
 from app.modules import poster_stage as ps
 
 FIGURES = [
@@ -231,6 +232,19 @@ def test_available_figures_reads_disk_and_merges_meta(tmp_path):
     assert figs[1]["caption"] == "" and figs[1]["kind"] == ""
 
 
+def test_available_figures_includes_jpg_and_webp(tmp_path):
+    """知乎等源抓下来的是 jpg/webp，不能只认 png（否则"原图 0 张"、卡片渲染不出来）。"""
+    intake = tmp_path / "intake"
+    (intake / "images").mkdir(parents=True)
+    (intake / "images" / "img00.jpg").write_bytes(b"jpg")
+    (intake / "images" / "img01.webp").write_bytes(b"webp")
+    (intake / "images" / "fig-1.png").write_bytes(b"png")
+    (intake / "figures.json").write_text(json.dumps([{"file": "images/img00.jpg", "caption": "原图"}]))
+    files = [f["file"] for f in ps._available_figures(intake)]
+    assert files == ["fig-1.png", "img00.jpg", "img01.webp"]
+    assert next(f for f in ps._available_figures(intake) if f["file"] == "img00.jpg")["caption"] == "原图"
+
+
 def test_available_figures_tolerates_legacy_dict_and_broken_json(tmp_path):
     intake = tmp_path / "intake"
     (intake / "images").mkdir(parents=True)
@@ -281,6 +295,24 @@ def test_write_spec_retries_once_then_succeeds(fake_ctx, make_run):
     # 第二次请求带着上一次的错误原因
     second_prompt = llm.chat_json.await_args_list[1].args[1]
     assert "上一次的输出有问题" in second_prompt
+
+
+def test_write_spec_retries_when_llm_returns_bad_json(fake_ctx, make_run):
+    """模型偶发吐坏 JSON 时，要带上错误再要一次，而不是直接掀掉 poster 阶段。
+
+    2026-10-07 实测 HuatuoGPT-3：LLM_BAD_JSON 从 chat_json 抛出，旧实现没包进 try，
+    第一次坏 JSON 就整段失败；同一份 prompt 重发其实是好的。
+    """
+    llm = AsyncMock()
+    llm.chat_json = AsyncMock(side_effect=[
+        LLMError("LLM_BAD_JSON", "模型输出不是合法 JSON：{\"spec\": {\"title\": \"半截"),
+        {"spec": _spec()},
+    ])
+    ctx = fake_ctx(run=make_run(), llm=llm)
+    spec, _, _ = asyncio.run(ps._write_spec(ctx, DIGEST, FIGURES, "正文"))
+    assert llm.chat_json.await_count == 2
+    assert spec["title"] == "论文海报"
+    assert "上一次的输出有问题" in llm.chat_json.await_args_list[1].args[1]
 
 
 def test_write_spec_gives_up_after_two_attempts(fake_ctx, make_run):

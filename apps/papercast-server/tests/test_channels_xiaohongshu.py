@@ -62,3 +62,30 @@ def test_missing_note_fields_stay_empty_not_faked() -> None:
     d = asyncio.run(_channel({"status": "发布完成"}).publish(_materials(), confirmed=True))
     assert d.status == "published"
     assert (d.remote_id, d.url) == ("", "")
+
+
+def _channel_offline() -> XiaohongshuChannel:
+    return XiaohongshuChannel(types.SimpleNamespace(xhs_mcp_base="http://127.0.0.1:18060"))
+
+
+def test_body_plus_tags_over_limit_is_blocked() -> None:
+    """正文 + 话题一起算，超过小红书 1000 上限要在 preflight 就判不适配。
+
+    2026-10-09 实测：正文 1007 + 10 个话题，网页版 length-error 报 1065 > 1000，
+    票被驳回 —— 这个检查必须在闸门前做，而不是等真发到 MCP。
+    """
+    ch = _channel_offline()
+    # 1000 + len("一个话题")+1 = 1005 > 995（1000 - 5 余量）
+    m = Materials(title="标题", body="字" * 1000, tags=["一个话题"],
+                  images=[Path("/tmp/p1.jpg")], run_id="run_test")
+    ok, reason = ch.supports(m)
+    assert not ok and "正文含话题" in reason
+
+
+def test_body_plus_tags_within_limit_passes() -> None:
+    ch = _channel_offline()
+    # 900 + len("一个话题")+1 = 905 ≤ 995（1000 - 5 余量）
+    m = Materials(title="标题", body="字" * 900, tags=["一个话题"],
+                  images=[Path("/tmp/p1.jpg")], run_id="run_test")
+    ok, reason = ch.supports(m)
+    assert ok and "正文含话题 905 字" in reason

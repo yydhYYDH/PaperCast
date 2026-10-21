@@ -30,13 +30,13 @@ export function exampleSource(): SourceInput {
 
 /** 工作台默认配置：面板初值与「一键跑示例」共用，避免两处漂移 */
 export const EXAMPLE_RUN_CONFIG: RunConfig = {
-  // 示例跑一遍就把「中文两版 + 英文 thread」都做出来：英文那份的落点是 X（见后端 channels/x.py）
-  // 人格 id = 「平台-人格」（后端 app/styles.py）：默认第三方独立视角；旧的 xhs-author 已下线
-  article: { variants: ['xhs-independent', 'en-analyst'] },
-  poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'en' },
-  video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '16:9', narration: '中文' },
-  // X 是 material-only 渠道：素材包照做，但不接投递、不会真发；没有英文 thread 时它会如实跳过
-  publish: { targets: ['xhs', 'zhihu', 'x'], autoPublish: false },
+  // 默认只产出小红书（2026-09-23 用户要求）：不再默认生成知乎 / B 站 / 英文的内容。
+  // 人格 id = 「平台-人格」（后端 app/styles.py）：默认第三方独立视角；旧的 xhs-author 已下线。
+  // 想多平台就把平台加进 publish.targets（后端会据此补文案变体、画布与视频）。
+  article: { variants: ['xhs-independent'] },
+  poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'zh' },
+  video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '9:16', narration: '中文' },
+  publish: { targets: ['xhs'], autoPublish: false },
 }
 
 /** 深拷贝一份：store.submit 会改这份配置，别把常量本身交出去 */

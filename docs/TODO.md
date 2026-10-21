@@ -69,7 +69,7 @@
 | ID | 任务 | P | 说明 | 状态 |
 | --- | --- | --- | --- | --- |
 | B1 | **小红书真实投递**（非 draft）+ 回执落盘 | P0 | draft 已验证；真实发布需闸门放行，且保留 `publish/export/` 兜底 | ⬜ |
-| B2 | 本机定时收集新论文（cron） | P2 | 只收集 + 生成，**不自动发布**（远端不接入） | ⬜ |
+| B2 | 本机定时收集新论文（cron） | P2 | ✅ **完成（2026-10-02）**：`ops/hf_daily_job.py` 取 HF daily upvotes 前 5 → `ops/hf_daily_job.sh` 确保服务 → systemd user timer 每天 12:00（`Persistent=true`，关机开机补跑）。去重台账 `var/state/hf-daily-job/seen.json`，当天打卡 `<date>.done`。**范围变更（用户 2026-10-02 拍板）**：由"只生成不发布"改为经 MCP `schedule_at` **定时发布**（实测写进创作者后台「定时发布」，见 `笔记管理`）。安装：`./ops/install_hf_daily_timer.sh` | ✅ |
 | B3 | `poster` 阶段是否实现 | — | 本轮维持 `skipped`，需用户确认是否进 R2 | ❓ |
 | B4 | 远端部署 | ❌ | 本轮明确不做（`docs/05-deployment.md` 保留为 R2 预案） | ❌ |
 

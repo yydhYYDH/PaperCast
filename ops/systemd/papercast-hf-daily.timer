@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily 12:00 trigger for PaperCast HF Daily Papers job
+
+[Timer]
+# 每天 12:00 触发。Persistent=true 是"关机补偿"的关键：
+# 若到点时机器关机/休眠，systemd 会记住这次未触发，开机后补跑一次。
+OnCalendar=*-*-* 12:00:00
+Persistent=true
+AccuracySec=1min
+Unit=papercast-hf-daily.service
+
+[Install]
+WantedBy=timers.target

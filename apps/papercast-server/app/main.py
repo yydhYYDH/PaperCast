@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel
 
 from . import direct_publish as direct_publish_mod
+from . import media_select as media_select_mod
 from . import ops as ops_mod
 from . import platforms as platforms_mod
 from .modules import cards_deck
@@ -85,6 +86,9 @@ async def create_run(req: CreateRunRequest) -> PaperRun:
             raise HTTPException(status_code=400, detail=f"上传不存在或已过期：{src.value}")
     if src.kind == "arxiv" and not src.value.strip():
         raise HTTPException(status_code=400, detail="arXiv 标识为空")
+    if src.kind in ("zhihu", "url"):
+        if not src.value.strip().startswith("http"):
+            raise HTTPException(status_code=400, detail="zhihu/url 源需要一条 http(s) 链接（如 https://zhuanlan.zhihu.com/p/xxx）")
 
     title = (src.title or "").strip()
     if not title:
@@ -313,6 +317,15 @@ class RunPublishBody(BaseModel):
     title: Optional[str] = None
     content: Optional[str] = None
     tags: Optional[list[str]] = None
+    #: 定时发布（可选）：RFC3339，如 2026-10-17T18:00:00+08:00。留空 = 立即发布。
+    #: 只有支持排期的渠道（目前小红书）认它，且仍需 confirmed=true —— 排期同样是真实投递。
+    scheduleAt: Optional[str] = None
+
+
+class RunImagesBody(BaseModel):
+    """作品配图的人工增删：`images` 为空 = 恢复自动选图顺序（删掉 poster/selected.json）。"""
+
+    images: Optional[list[str]] = None
 
 
 def _draft_payload(body: PlatformDraftBody) -> dict[str, Any]:
@@ -363,6 +376,29 @@ async def run_drafts(run_id: str) -> dict[str, Any]:
     return await direct_publish_mod.list_drafts(store, run_id)
 
 
+@app.get("/api/runs/{run_id}/images")
+async def run_images(run_id: str) -> dict[str, Any]:
+    """这次运行可用的配图（组图 / 卡片 / 论文原图）与当前选中的那几张。
+
+    选图是**运行级**的（一套图，各渠道共用），写进 `poster/selected.json`，
+    投递时优先于任何自动顺序（见 modules/publish.py 的 _pick_media）。
+    """
+    if store.get(run_id) is None:
+        raise HTTPException(status_code=404, detail=f"没有这次运行：{run_id}")
+    return media_select_mod.list_media(run_id, store.dir(run_id))
+
+
+@app.put("/api/runs/{run_id}/images")
+async def save_run_images(run_id: str, body: RunImagesBody) -> dict[str, Any]:
+    """存人工选的一套配图；`images` 为空 = 恢复自动顺序。路径越界/图片不存在返回 400。"""
+    if store.get(run_id) is None:
+        raise HTTPException(status_code=404, detail=f"没有这次运行：{run_id}")
+    try:
+        return media_select_mod.save_media(run_id, store.dir(run_id), body.images)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
 @app.post("/api/runs/{run_id}/publish")
 async def run_publish_work(run_id: str, body: RunPublishBody) -> dict[str, Any]:
     """**把作品投到一个渠道**：`confirmed=false` 只落 export/（无副作用），`true` 才真投递。
@@ -377,6 +413,7 @@ async def run_publish_work(run_id: str, body: RunPublishBody) -> dict[str, Any]:
         confirmed=bool(body.confirmed),
         overrides=body.model_dump(exclude_unset=True, include={"title", "content", "tags"}),
         confirm_account=body.confirmAccount or "",
+        schedule_at=body.scheduleAt or "",
     )
 
 
@@ -394,6 +431,7 @@ async def run_publish_work_video(run_id: str, body: RunPublishBody) -> dict[str,
         overrides=body.model_dump(exclude_unset=True, include={"title", "content", "tags"}),
         confirm_account=body.confirmAccount or "",
         media="video",
+        schedule_at=body.scheduleAt or "",
     )
 
 

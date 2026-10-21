@@ -41,13 +41,49 @@ def test_stage_id_literal_covers_stage_order():
     assert set(get_args(models.StageId)) == set(models.STAGE_ORDER)
 
 
-def test_new_run_builds_all_six_stages_pending(make_run):
+def test_new_run_defaults_skip_video_when_bilibili_not_targeted(make_run):
+    """默认只发小红书 → 不跑视频合成，video 阶段如实标 skipped（其余 5 个 pending）。"""
     run = make_run()
     assert [s.id for s in run.stages] == models.STAGE_ORDER
-    assert [s.status for s in run.stages] == ["pending"] * 6
+    assert [s.status for s in run.stages] == ["pending", "pending", "pending", "pending", "skipped", "pending"]
     assert run.status == "queued"
     assert run.id.startswith("run_")
     assert run.createdAt > 0
+
+
+def test_new_run_runs_video_when_bilibili_is_targeted(make_run):
+    """把 B 站加进发布目标，视频阶段就照常跑（默认关闭不是永久关闭）。"""
+    run = make_run(publish={"targets": ["bilibili"]})
+    assert [s.status for s in run.stages][models.STAGE_ORDER.index("video")] == "pending"
+
+
+def test_align_variants_drops_platforms_outside_targets(make_run):
+    """默认只发小红书时，历史遗留的知乎/英文变体必须被去掉（2026-09-23）。
+
+    前端风格页勾选的变体存在 localStorage，会跟着每次提交一起发过来；只收口 targets
+    会出现「targets=[xiaohongshu] 却还在写知乎长文」，所以这里也要裁。
+    """
+    run = make_run(article={"variants": ["xhs-peer", "zhihu-newsflash", "en"]})
+    assert run.config.article.variants == ["xhs-peer"]
+
+
+def test_align_variants_keeps_platforms_that_are_targeted(make_run):
+    run = make_run(article={"variants": ["xhs-peer", "zhihu-newsflash"]},
+                   publish={"targets": ["xiaohongshu", "zhihu"]})
+    assert run.config.article.variants == ["xhs-peer", "zhihu-newsflash"]
+
+
+def test_align_variants_fills_missing_target_variant(make_run):
+    """目标平台一个变体都没有时，补一个该平台默认人格的（老的「只补」行为保留）。"""
+    run = make_run(article={"variants": []}, publish={"targets": ["zhihu"]})
+    assert run.config.article.variants == ["zhihu"]
+
+
+def test_align_variants_no_targets_means_no_pruning(make_run):
+    """targets 留空 = 用全部渠道，此时不做任何裁剪。"""
+    run = make_run(article={"variants": ["xhs-peer", "zhihu-newsflash"]},
+                   publish={"targets": []})
+    assert run.config.article.variants == ["xhs-peer", "zhihu-newsflash"]
 
 
 def test_article_variant_platform_literal_matches_styles_platforms():
@@ -85,10 +121,11 @@ def test_run_config_defaults_match_frontend_contract():
     assert cfg.poster.size == "36x48" and cfg.poster.lang == "zh"
     assert cfg.video.aspect == "9:16" and cfg.video.durationSec == 180
     assert cfg.publish.autoPublish is False
-    assert cfg.publish.targets == ["xiaohongshu", "zhihu", "bilibili"]
+    # 默认只发小红书（2026-09-23）：不再默认产出/投递知乎与 B 站
+    assert cfg.publish.targets == ["xiaohongshu"]
 
 
 def test_stage_status_and_run_status_vocabulary():
     assert set(get_args(models.StageStatus)) == {"pending", "running", "waiting", "done", "failed", "skipped"}
     assert set(get_args(models.RunStatus)) == {"queued", "running", "waiting", "done", "failed"}
-    assert set(get_args(models.SourceKind)) == {"arxiv", "pdf", "latex"}
+    assert set(get_args(models.SourceKind)) == {"arxiv", "pdf", "latex", "zhihu", "url", "github"}

@@ -16,7 +16,7 @@ import { defineStore } from 'pinia'
 import { api } from '../api'
 import { useRunsStore } from './runs'
 import { useUiStore } from './ui'
-import type { RunDraft, RunDrafts, RunPublishResult } from '../types'
+import type { RunDraft, RunDrafts, RunImages, RunPublishResult } from '../types'
 
 /** 一个渠道上界面改过的字段；只送非空项，后端没收到就用自己的那份 */
 export interface DraftEdit {
@@ -68,8 +68,8 @@ export const usePublishStore = defineStore('publish', {
     data: null as RunDrafts | null,
     loading: false,
     error: '',
-    /** '' | 'draft' | 'publish' —— 正在做什么，用来禁按钮 */
-    busy: '' as '' | 'draft' | 'publish' | 'video',
+    /** '' | 'draft' | 'publish' | 'video' | 'schedule' —— 正在做什么，用来禁按钮 */
+    busy: '' as '' | 'draft' | 'publish' | 'video' | 'schedule',
     /** 投递是从头等到尾的一次请求（渠道那边在开浏览器、填稿、逐张传图），这里如实数秒给人看 */
     elapsed: 0,
     _since: 0,
@@ -81,6 +81,12 @@ export const usePublishStore = defineStore('publish', {
     _loadedFor: '',
     /** 界面改过的文案，按渠道存：切来切去不会把编辑丢掉 */
     edits: {} as Record<string, DraftEdit>,
+    /** 可增删的配图（运行级：一套图各渠道共用），读 /api/runs/:id/images */
+    images: null as RunImages | null,
+    /** 配图是否在存（禁按钮用） */
+    imagesSaving: false,
+    /** 存图出错时的原话 */
+    imagesError: '',
   }),
 
   getters: {
@@ -122,7 +128,8 @@ export const usePublishStore = defineStore('publish', {
       this.result = null
       this.error = ''
       if (this._loadedFor !== runId) this.data = null   // 换了一条运行才清掉旧的
-      await this.load()
+      this.images = null
+      await Promise.all([this.load(), this.loadImages()])
     },
 
     close() {
@@ -175,6 +182,75 @@ export const usePublishStore = defineStore('publish', {
     resetEdit() {
       const d = pickDraft(this.data, this.channelId)
       if (d) delete this.edits[d.channelId]
+    },
+
+    /** 读可选配图与当前选择。与草稿分开读（这个不探测渠道，很快）。 */
+    async loadImages() {
+      if (!this.runId) return
+      this.imagesError = ''
+      try {
+        this.images = await api.listRunImages(this.runId)
+      } catch (e) {
+        this.images = null
+        this.imagesError = (e as Error).message
+      }
+    },
+
+    /** 勾 / 去一张配图：写后端 poster/selected.json，并把草稿里的张数就地更新 */
+    async toggleImage(path: string) {
+      const imgs = this.images
+      if (!imgs || this.imagesSaving) return
+      const next = imgs.selected.includes(path)
+        ? imgs.selected.filter((p) => p !== path)
+        : [...imgs.selected, path]
+      await this.saveImages(next)
+    },
+
+    /** 恢复自动选图顺序（后端删掉 selected.json） */
+    async resetImages() {
+      if (!this.images || this.imagesSaving) return
+      await this.saveImages([])
+    },
+
+    /** 存一套选图；`paths` 为空 = 恢复自动顺序。 */
+    async saveImages(paths: string[]) {
+      if (this.imagesSaving) return
+      const ui = useUiStore()
+      this.imagesSaving = true
+      this.imagesError = ''
+      try {
+        this.images = await api.saveRunImages(this.runId, paths)
+        this.applyImagesToDrafts()
+        ui.toast(
+          paths.length ? `配图已更新：这次投 ${paths.length} 张` : '已恢复自动选图',
+          'info',
+        )
+      } catch (e) {
+        this.imagesError = (e as Error).message
+        ui.toast(`配图没改成：${this.imagesError}`, 'err')
+      } finally {
+        this.imagesSaving = false
+      }
+    },
+
+    /**
+     * 把新的选图就地写进草稿里的 images/cover，不重新探测渠道。
+     * 选图是运行级的（各渠道共用同一套图），所以每个渠道都换成这一套。
+     */
+    applyImagesToDrafts() {
+      const imgs = this.images
+      if (!imgs || !this.data) return
+      const byPath = new Map(imgs.candidates.map((c) => [c.path, c]))
+      const media = imgs.selected.map((path) => {
+        const c = byPath.get(path)
+        return { path, name: c?.name || path.split('/').pop() || path, url: c?.url || '' }
+      })
+      for (const ch of this.data.channels) {
+        if (!ch.hasDraft) continue
+        ch.images = media
+        if (media.length) ch.cover = media[0]
+        else if (ch.cover) ch.cover = null
+      }
     },
 
     /** 有改动才带 overrides；标签用空格/逗号分隔，去掉前导 # */
@@ -269,6 +345,49 @@ export const usePublishStore = defineStore('publish', {
       } finally {
         if (this._tick !== undefined) { window.clearInterval(this._tick); this._tick = undefined }
         this.elapsed = 0
+        this.busy = ''
+      }
+    },
+
+    /**
+     * 定时发布：**同样是不可逆的真实投递**（只是排到未来某个点自动发），所以与 deliver 一样
+     * 先过人工确认，再把 scheduleAt 交给后端。`scheduleAt` 是 datetime-local 的值（本地时间）。
+     */
+    async schedule(scheduleAt: string) {
+      const d = pickDraft(this.data, this.channelId)
+      if (!d || this.busy) return
+      const ui = useUiStore()
+      const runs = useRunsStore()
+      const when = scheduleAt.replace('T', ' ')
+      const who = d.account ? `当前账号：${d.account}。` : ''
+      const ok = await ui.askConfirm({
+        title: `把这篇作品排到 ${when} 发到${d.name}？`,
+        text: `${who}到点后${d.name}会自动发布，属于真实投递，发出后不可撤销。排期时间需在 1 小时之后、14 天以内。`,
+        okLabel: '确认排期',
+        cancelLabel: '再想想',
+        tone: 'warn',
+      })
+      if (!ok) return
+
+      this.busy = 'schedule'
+      this.error = ''
+      try {
+        const res = await api.publishRunWork(this.runId, {
+          channelId: d.channelId,
+          confirmed: true,
+          confirmAccount: d.account || undefined,
+          // datetime-local 是本地时间，转成带时区的 ISO 交给后端（再转给 MCP）
+          scheduleAt: new Date(scheduleAt).toISOString(),
+          ...this.overrides(),
+        })
+        this.result = res
+        if (res.status === 'blocked' || res.status === 'failed') this.report(res, d.name)
+        else ui.toast(`${d.name}已排期到 ${when}，到点自动发布（回执已存）`, 'info', 9000)
+        await runs.refresh(true)
+      } catch (e) {
+        this.error = (e as Error).message
+        ui.toast(`排期失败：${this.error}`, 'err')
+      } finally {
         this.busy = ''
       }
     },

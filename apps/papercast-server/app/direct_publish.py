@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -42,10 +43,36 @@ from .modules.publish import (
 #: 必须分开 —— 否则作品库直投会把 M3 的回执覆盖掉，「这次到底是谁投的」就查不清了。
 DIRECT_DIR = "direct"
 
+#: 正在投递的 (run_id, 渠道规范 id)。同一个 run+渠道只允许一个在途发布：重复点「确认发布」
+#: 会让同一账号同时开两个发布页，既互相干扰、拖慢彼此，也徒增风控风险（2026-09-23 实测：
+#: 一次运行的小红书直投被触发了两次且时间重叠，两次都卡在同一处超时）。
+#: 只在事件循环线程里读写，检查与写入之间没有 await，所以不需要额外的锁。
+_in_flight: set[tuple[str, str]] = set()
+
 
 def _err(status: int, code: str, message: str, details: Any = None) -> platforms_mod.PlatformError:
     """统一用平台层的错误形状 { error: { code, message } }（main.py 已有它的处理器）。"""
     return platforms_mod.PlatformError(status, code, message, details)
+
+
+def _normalize_schedule(value: str) -> tuple[str, str]:
+    """校验并归一化排期时间（RFC3339）。返回 (iso, 错误原因)；错误原因非空表示不合法。
+
+    范围限制与小红书 MCP 对齐（service.go）：**1 小时 ~ 14 天**。无时区的输入按本机时区补全。
+    """
+    raw = (value or "").strip()
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return "", f"定时时间格式无法识别：{raw!r}（要 ISO8601，例如 2026-10-17T18:00:00+08:00）"
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    now = datetime.now(dt.tzinfo)
+    if dt < now + timedelta(hours=1):
+        return "", "定时发布最早要在 1 小时之后（小红书 MCP 的限制）"
+    if dt > now + timedelta(days=14):
+        return "", "定时发布最晚不能超过 14 天（小红书 MCP 的限制）"
+    return dt.isoformat(), ""
 
 
 def _load(store: Any, run_id: str, *, allow_missing_article: bool = False) -> tuple[Any, Path]:
@@ -165,6 +192,8 @@ def _draft(run_id: str, run_dir: Path, channel: Channel, state: Preflight,
         "transport": channel.transport,
         "state": state.state,
         "account": state.account,
+        # 这个渠道支不支持定时发布：界面靠它决定要不要亮出「定时发布」这个动作
+        "schedulable": bool(getattr(channel, "supports_schedule", False)),
         "detail": state.detail,
         "hint": state.hint,
         "ready": state.ready,
@@ -312,6 +341,8 @@ def _receipt(channel: Channel, state: Preflight, materials: Materials, delivery:
         # 这条回执是「作品库直投」写的，不是 M3 流水线写的 —— 界面上要能分得清
         "via": "work-library",
     }
+    if materials.schedule_at:
+        out["scheduleAt"] = materials.schedule_at
     for src, dst in (("url", "url"), ("remote_id", "remoteId"), ("account", "account")):
         value = getattr(delivery, src, "")
         if value:
@@ -452,7 +483,39 @@ async def publish_work(store: Any, run_id: str, channel_id: str, *,
                        overrides: Optional[dict[str, Any]] = None,
                        confirm_account: str = "",
                        media: str = "",
+                       schedule_at: str = "",
                        channels: Optional[Iterable[Channel]] = None) -> dict[str, Any]:
+    """把这次运行的作品投到一个渠道（或只落草稿）。
+
+    先解析渠道拿到规范 id，再抢这个 run+渠道的投递名额：**在途时直接 409**，
+    不重复起第二个浏览器（防重复提交，见 `_in_flight`）。其余逻辑见 `_publish_work`。
+    """
+    pool = list(channels) if channels is not None else registry.build_all(settings)
+    channel = _pick(pool, channel_id)
+    if channel is None:
+        raise _err(404, "CHANNEL_NOT_FOUND",
+                   f"未知渠道：{channel_id}（可用：{', '.join(c.id for c in pool)}）")
+
+    key = (run_id, channel.id)
+    if key in _in_flight:
+        raise _err(409, "PUBLISH_IN_FLIGHT",
+                   f"{channel.name} 正在投递这一件，请等这次结束再操作（不要重复点）")
+    _in_flight.add(key)
+    try:
+        return await _publish_work(store, run_id, channel_id, confirmed=confirmed,
+                                   overrides=overrides, confirm_account=confirm_account,
+                                   media=media, schedule_at=schedule_at, channels=pool)
+    finally:
+        _in_flight.discard(key)
+
+
+async def _publish_work(store: Any, run_id: str, channel_id: str, *,
+                        confirmed: bool = False,
+                        overrides: Optional[dict[str, Any]] = None,
+                        confirm_account: str = "",
+                        media: str = "",
+                        schedule_at: str = "",
+                        channels: Optional[Iterable[Channel]] = None) -> dict[str, Any]:
     """把这次运行的作品投到一个渠道（或只落草稿）。
 
     - `confirmed=False`：**只落 export/**，一个发布接口都不调 → status="draft"；
@@ -515,6 +578,22 @@ async def publish_work(store: Any, run_id: str, channel_id: str, *,
                                 raw={"note": channel.why} if is_material_only(channel) else {}),
                        export, "draft", warnings, note="；".join(notes))
 
+    # ---- 定时发布：先把时间口径校验清楚，再交给渠道 ----
+    # 不认排期的渠道、格式不对、超范围都如实拒绝（blocked），不悄悄当成立即发出。
+    schedule_note = ""
+    if schedule_at:
+        if not getattr(channel, "supports_schedule", False):
+            return {"channelId": channel.id, "status": "blocked", "warnings": warnings,
+                    "error": {"code": "SCHEDULE_UNSUPPORTED",
+                              "message": f"{channel.name}不支持定时发布，请改用「确认发布」立即发"},
+                    "receipt": None}
+        iso, why = _normalize_schedule(schedule_at)
+        if why:
+            return {"channelId": channel.id, "status": "blocked", "warnings": warnings,
+                    "error": {"code": "SCHEDULE_INVALID", "message": why}, "receipt": None}
+        materials.schedule_at = iso
+        schedule_note = f"已排期 {iso}（到点由{channel.name}自动发布）"
+
     # ---- 2. 只有「真投递」才做严格判定：素材适配 → 渠道就绪 → 账号对得上 ----
     # 形态先判：它比「素材适配」更具体 —— "要发视频但没成片"比"素材不适配"更能说明问题。
     if media_problem:
@@ -539,4 +618,5 @@ async def publish_work(store: Any, run_id: str, channel_id: str, *,
     except Exception as exc:
         delivery = Delivery(channel=channel.id, status="failed",
                             error={"code": "CHANNEL_CRASHED", "message": f"{type(exc).__name__}: {str(exc)[:200]}"})
-    return _result(store, run_id, run, channel, state, materials, delivery, export, "continue", warnings)
+    return _result(store, run_id, run, channel, state, materials, delivery, export, "continue", warnings,
+                   note=schedule_note)

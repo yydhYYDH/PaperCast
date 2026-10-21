@@ -1,0 +1,15 @@
+[Unit]
+Description=PaperCast HF Daily Papers -> Xiaohongshu scheduled posts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# @WS@ 由 ops/install_hf_daily_timer.sh 替换成本仓库绝对路径。
+WorkingDirectory=@WS@
+ExecStart=@WS@/ops/hf_daily_job.sh
+Environment=PAPERCAST_BASE=http://127.0.0.1:8000
+Environment=XHS_MCP_BASE=http://127.0.0.1:18060
+# 5 篇论文逐篇生成，LLM 慢时可能 20-30 分钟，给足预算。
+TimeoutStartSec=5400
+Nice=10

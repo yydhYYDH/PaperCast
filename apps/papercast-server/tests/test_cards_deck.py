@@ -306,9 +306,13 @@ def test_uniform_fit_gives_every_item_the_same_size():
 
 def test_kicker_parts_dedupe():
     assert cd.dedupe_parts("Nature · Vol 651 · 2026", "Nature", "PaperCast 论文速读") == \
-        ["Nature · Vol 651 · 2026", "PaperCast 论文速读"]
+        ["Nature", "Vol 651", "2026", "PaperCast 论文速读"]
     assert cd.dedupe_parts("arXiv", "") == ["arXiv"]
     assert cd.dedupe_parts("", None, "  ") == []
+    # 两段互不包含、却含同一个词时也要去重：kicker 里已有 ICML 2026，venue 又以它开头，
+    # 整段比子串漏掉，拼出来 ICML 2026 印了两遍（2026-10-07 实测 HuatuoGPT-3 封面）。
+    assert cd.dedupe_parts("arXiv 2610.05966 · ICML 2026", "ICML 2026 (ONEPO 扩展版)") == \
+        ["arXiv 2610.05966", "ICML 2026 (ONEPO 扩展版)"]
 
 
 # ---------------------------------------------------------------- 论证顺序
@@ -699,3 +703,30 @@ def test_caption_fallback_cuts_at_a_sentence_not_mid_word():
 def test_caption_fallback_keeps_more_sentences_when_they_fit():
     short = "Figure 1: a group chat is not a flat message stream."
     assert cd._caption_title(short) == "Figure 1: a group chat is not a flat message stream."
+
+
+def test_strip_links_never_leaves_urls():
+    # 「标签: 链接」→ 连标签一起去，只留年份
+    assert cd.strip_links("Project page: https://zihan-su.github.io/x · 2026") == "2026"
+    # 裸链接
+    assert cd.strip_links("见 https://arxiv.org/abs/2610.10429 原文") == "见 原文"
+    # URL 不能贪婪吞掉紧跟其后的中文（2026-10-09 实测：吞成了「…plus（本页列」）
+    assert cd.strip_links("https://a.b/c（本页列 1/3 条）") == "（本页列 1/3 条）"
+    # 没协议没 www 的裸域名也要清（OuroWorld 的「PROJECT PAGE: OUROWORLD.USERWEI.COM」）
+    assert cd.strip_links("arXiv 2610.12461 · PROJECT PAGE: OUROWORLD.USERWEI.COM · 2026") == "arXiv 2610.12461 · 2026"
+    # 去掉链接后残留的纯「链接标签」整段丢掉，但别误伤 arXiv preprint
+    assert cd.strip_links("arXiv 2609.33253 · Project page / Code · 2026") == "arXiv 2609.33253 · 2026"
+    assert cd.strip_links("arXiv preprint · 2026") == "arXiv preprint · 2026"
+
+
+def test_plan_pages_never_contains_links():
+    """图片里永不出现链接：封面 venue 与要点正文里的 URL 都要被清掉。"""
+    spec = {
+        "title": "写上下文与去噪共用参数会互相抵消",
+        "subtitle": "一句话总结",
+        "venue": "Project page: https://zihan-su.github.io/self-gradient-forcing-plus · 2026",
+        "columns": [[{"kind": "panel", "title": "问题",
+                      "items": ["详见 https://arxiv.org/abs/2610.10429 与原文"]}]],
+    }
+    pages = cd.plan_pages(spec, None, {})
+    assert "http" not in json.dumps(pages, ensure_ascii=False)

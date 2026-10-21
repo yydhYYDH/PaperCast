@@ -26,6 +26,9 @@ from ..models import enabled_platforms
 from . import cards_deck
 from . import poster as renderer
 
+#: intake 阶段裁好的「标题 + 作者 + 单位」截图文件名（首图出处用）。不是论文原图，见下。
+TITLEBLOCK_NAME = "titleblock.png"
+
 SPEC_SYSTEM = """你是学术传播的视觉设计编辑。给你一篇论文的事实源（digest）和它可用的原图，
 你要输出一份**版面描述 JSON**（spec），交给确定性的排版器渲染成海报与信息图。
 
@@ -194,6 +197,14 @@ def _spec_text(spec: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def attach_titleblock(cover: Optional[dict[str, Any]], intake_dir: Path) -> dict[str, Any]:
+    """封面附加「标题/作者/单位」截图（intake 阶段裁好的 titleblock.png，存在才嵌）。"""
+    out = dict(cover or {})
+    if (Path(intake_dir) / "images" / TITLEBLOCK_NAME).is_file():
+        out["titleBlock"] = {"file": TITLEBLOCK_NAME}
+    return out
+
+
 def _available_figures(intake_dir: Path) -> list[dict[str, Any]]:
     """列 intake 里真实存在的图（figures.json 是解析产物，以磁盘为准）。"""
     out: list[dict[str, Any]] = []
@@ -212,7 +223,12 @@ def _available_figures(intake_dir: Path) -> list[dict[str, Any]]:
                 meta[Path(f["file"]).name] = f
     img_dir = intake_dir / "images"
     if img_dir.is_dir():
-        for p in sorted(img_dir.glob("*.png")):
+        # 不能只认 png：知乎等源抓下来的原图是 jpg（webp 也一并收）。
+        files = sorted({p for ext in ("*.png", "*.jpg", "*.jpeg", "*.webp") for p in img_dir.glob(ext)})
+        for p in files:
+            # titleblock.png 是首图专用的「标题/作者/单位」截图，不是论文原图，别让模型把它当配图。
+            if p.name == TITLEBLOCK_NAME:
+                continue
             m = meta.get(p.name, {})
             out.append({
                 "file": p.name,
@@ -345,8 +361,13 @@ async def _write_spec(ctx, digest: dict[str, Any], figures: list[dict[str, Any]]
     last_err = ""
     for attempt in (1, 2):
         ask = user if attempt == 1 else user + f"\n\n上一次的输出有问题：{last_err}\n请修正后重新输出完整 JSON。"
-        raw = await ctx.llm.chat_json(SPEC_SYSTEM, ask, max_tokens=8000)
+        # LLM 调用也放进 try：模型偶发吐坏 JSON（LLM_BAD_JSON）时，旧实现直接掀掉整个 poster
+        # 阶段，连「带上错误再要一次」的机会都没有（2026-10-07 实测 HuatuoGPT-3）。
         try:
+            # 8000 不够：deepseek-v4.1-flash 是 reasoning 模型，写这份「spec + cover」JSON 前
+            # 光思维链就 ~8k token，留给正文的预算被挤空 —— 输出要么为空，要么在 JSON 中间被
+            # 截断成非法 JSON（2026-10-02 实测，两篇论文都卡在这里）。
+            raw = await ctx.llm.chat_json(SPEC_SYSTEM, ask, max_tokens=16000)
             spec_src = raw.get("spec") if isinstance(raw.get("spec"), dict) else raw
             cover_src = raw.get("cover") if isinstance(raw.get("cover"), dict) else {}
             spec, stats = _sanitize(spec_src, figures, haystack)
@@ -469,6 +490,9 @@ async def _run_deck(ctx, spec: dict[str, Any], cover: Optional[dict[str, Any]], 
     deck_dir = out_dir / "cards"
     figures_dir = figs_arg.split(os.pathsep)[0]
     note = f"{spec.get('venue') or ''} · {spec.get('title') or ''}".strip(" ·")
+    # 非论文源（知乎/长文）组图页脚不要写「论文速读」。
+    is_article = getattr(getattr(getattr(ctx, "run", None), "source", None), "kind", "") in ("zhihu", "url")
+    brand = "PaperCast 文章速读" if is_article else "PaperCast 论文速读"
     ctx.log("info", f"用 guizang 技能重排小红书组图（技能：{cards_deck.skill_dir()}）…")
 
     last: dict[str, Any] = {}
@@ -479,7 +503,7 @@ async def _run_deck(ctx, spec: dict[str, Any], cover: Optional[dict[str, Any]], 
         try:
             built = await asyncio.to_thread(
                 cards_deck.build, spec, cover, digest, figures_dir, deck_dir,
-                max_items=max_items, keep_pages=keep, note=note,
+                max_items=max_items, keep_pages=keep, note=note, brand=brand,
             )
             rep = await asyncio.to_thread(cards_deck.render, deck_dir, scale=1)
             chk = await asyncio.to_thread(cards_deck.validate, deck_dir)
@@ -543,6 +567,11 @@ async def run_poster(ctx) -> None:
     spec, cover, stats = await _write_spec(ctx, digest, figures, content)
     if stats["dropped"]:
         ctx.log("warn", f"收敛 spec：丢弃 {len(stats['dropped'])} 处（{stats['dropped'][:2]}）")
+
+    # 首图出处截图：intake 阶段裁好的 titleblock.png（存在才嵌，不依赖模型）。
+    if (intake_dir / "images" / TITLEBLOCK_NAME).is_file():
+        cover = attach_titleblock(cover, intake_dir)
+        ctx.log("info", "首图将嵌入标题/作者/单位截图")
 
     out_dir = ctx.work
     src_spec = out_dir / "poster.spec.json"

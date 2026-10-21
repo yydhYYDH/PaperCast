@@ -69,6 +69,72 @@ def note_user(title: str, digest_json: str, figures: list[dict], content_md: str
 
 
 # --------------------------------------------------------------------------- #
+# 非论文源（知乎/长文）→ 小红书传播：单独的"传播事实源"与写作规则
+# --------------------------------------------------------------------------- #
+
+ARTICLE_DIGEST_SYSTEM = """你是中文新媒体选题编辑，负责把一篇长文提炼成"适合小红书传播"的事实源。
+
+这不是学术论文，不要抽"贡献/方法/实验/结果"那一套。你要提炼的是**传播要素**：
+读者是谁、这篇为什么值得看、能拿来做标题和正文的观点、原文里的金句与硬数字、以及哪几张原图最抓人。
+
+铁律（违反即失败）：
+1. 只依据给定原文作答，不引入外部知识、不做推测性补充。
+2. keyFacts 的 value 必须是原文里出现的原话或数字，不能编造或估算；原文没给具体数字就写「原文未给具体数字」。
+3. figurePicks 只能从给定图片清单里选，不能自造 id。
+4. 可以提炼、概括、换个说法，但事实与观点归属不能变。
+
+只输出 JSON，不要解释文字或 markdown 围栏。JSON 结构：
+{
+  "guide": "面向小红书读者的导读，1-2 句，说清讲的是什么、为什么值得看",
+  "audience": "一句话点出目标读者",
+  "hookPoints": ["3-6 个可直接做标题/正文的传播点，每条一句话，来自原文"],
+  "keyFacts": [{"label": "事实/数字的小标题", "value": "原文原话或数字", "note": "出处"}],
+  "quotes": ["0-3 条最有传播力的原文金句"],
+  "keywords": ["3-8 个中文话题词"],
+  "figurePicks": ["按传播价值排序的图片 id，最多 6 个"],
+  "stagesNote": "一句话说明本次提炼的来源与取舍"
+}"""
+
+
+def article_digest_user(title: str, source: str, figures: list[dict], content_md: str, brief: str = "") -> str:
+    fig_lines = "\n".join(
+        f"- {f['id']}（{f['width']}×{f['height']}）：{f.get('caption', '')[:160]}" for f in figures[:40]
+    ) or "（未抓到图片）"
+    return (
+        f"文章标题：{title}\n来源：{source or '未知'}\n\n"
+        f"可用图片清单：\n{fig_lines}\n\n"
+        f"文章正文（Markdown，可能被截断）：\n<<<ARTICLE\n{content_md}\nARTICLE>>>"
+        + brief_block(brief, stage="理解层：决定传播事实源侧重哪些部分（不影响事实本身）")
+    )
+
+
+ARTICLE_FACT_RULES = """改写铁律（所有平台都必须遵守，违反即失败）：
+1. 只依据给定的传播事实源（digest.json）与原文，不引入外部知识、不做推测性补充。
+2. 原文没给的数字或结论，不要补；可以说「原文没细说」。
+3. 可以改写、提炼、口语化，但事实与观点归属不能变；区分「原文观点」与「你的判断」，
+   自己的判断要显式标注（如「我的看法是」）。
+4. 图片编号只能取自给定清单，不得自造。"""
+
+
+# 非论文源不套用论文人格（避免人称/措辞带论文腔）
+ARTICLE_PERSONA = (
+    "你是一位把科技/知识长文改写成小红书爆款内容的编辑，"
+    "擅长把复杂的东西讲得让人想点开、看得懂、愿意评论。"
+)
+
+# 科技干货 + 观点的传播写法（用户 2026-10-03 选定）
+ARTICLE_XHS_STYLE = """【任务：把这篇科技/知识长文改写成小红书爆款图文（科技干货 + 观点）】
+- 标题要有钩子：用悬念、反差、利益点或数字，5-8 个候选，都按小红书计重 ≤38。
+- 正文结构：第一句必须抓人（不要铺垫）；中段拆成 3-4 个要点（可用「1/2/3」「先说…再说…」这类口语短句分行），
+  术语要给一句大白话解释；最后给一句你自己的判断或提醒，并引导评论互动。
+- 全程口语化、短句、有节奏；禁止出现「论文」「本文」「摘要」「方法」「实验」「结论」这类措辞，
+  也不要写「—— 论文：标题」这类署名/引用行；需要交代来源时用「来源：知乎」一带而过。
+- cards 按传播节奏排：首图当封面（挑最有冲击力的原图/数据图），后面依次展开要点；
+  figureId 只能从清单里选。
+- 少用 emoji、引号、破折号。"""
+
+
+# --------------------------------------------------------------------------- #
 # 文章生成：人格语气 + 平台硬约束 + 事实源铁律
 # --------------------------------------------------------------------------- #
 
@@ -101,11 +167,23 @@ def brief_block(brief: str, *, stage: str) -> str:
     )
 
 
-def article_system(platform: str, voice: str) -> str:
-    """拼装文章生成提示词。约束优先级：事实源 > 平台硬约束 > 人格语气。"""
+def article_system(platform: str, voice: str, *, article_mode: bool = False) -> str:
+    """拼装文章生成提示词。约束优先级：事实源 > 平台硬约束 > 人格语气。
+
+    article_mode=True 用于知乎/长文这类非论文源：换成传播写法与「改写但不编造」的规则。
+    """
     p = styles.platform_spec(platform)
     v = styles.voice_spec(voice)
     rules = "\n".join(f"{i}. {r}" for i, r in enumerate(p.rules, 1))
+    if article_mode:
+        return (
+            f"{ARTICLE_PERSONA}\n\n"
+            f"【语言】正文与标题一律用{p.language}写作。\n\n"
+            f"{ARTICLE_XHS_STYLE}\n\n"
+            f"【平台硬约束 · {p.label}（不得放宽，违反会被程序判错）】\n{rules}\n\n"
+            f"【输出格式】\n{p.template}\n\n"
+            f"{ARTICLE_FACT_RULES}"
+        )
     return (
         f"{v.persona}\n\n"
         f"【语言】正文与标题一律用{p.language}写作（人格描述里的语言只是语气说明，不改变本条）。\n\n"
@@ -115,8 +193,20 @@ def article_system(platform: str, voice: str) -> str:
     )
 
 
-def article_user(title: str, digest_json: str, figures: list[dict], brief: str = "") -> str:
+def article_user(
+    title: str, digest_json: str, figures: list[dict], brief: str = "",
+    *, article_mode: bool = False, content_md: str = "", source: str = "",
+) -> str:
     fig_lines = "\n".join(f"- {f['id']}：{f['caption'][:200]}" for f in figures[:30]) or "（无可用图）"
+    if article_mode:
+        return (
+            f"文章：{title}\n来源：{source or '未知'}\n\n"
+            f"传播事实源（digest.json，唯一允许的信息来源；其中 contributions=传播要点、"
+            f"method=内容主线/金句、results=可引用的事实与数字）：\n{digest_json}\n\n"
+            f"可用图片清单：\n{fig_lines}\n\n"
+            f"原文（Markdown，可能被截断，用于核对细节）：\n<<<ARTICLE\n{content_md}\nARTICLE>>>"
+            + brief_block(brief, stage="文案：体裁、篇幅、侧重与语气")
+        )
     return (
         f"论文：{title}\n\n事实源（digest.json，唯一允许的信息来源）：\n{digest_json}\n\n"
         f"可用图表清单：\n{fig_lines}"

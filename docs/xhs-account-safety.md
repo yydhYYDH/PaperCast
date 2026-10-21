@@ -52,7 +52,19 @@
 XHS_BUDGET_MAX             窗口内允许的浏览器会话数，<=0 表示不限流（默认 30）
 XHS_BUDGET_WINDOW_SECONDS  窗口长度（默认 600）
 XHS_STATUS_TTL_SECONDS     login/status 缓存时长，<=0 表示不缓存（默认 300）
+XHS_PUBLISH_HEADED         发布流程是否用有头浏览器（默认关，见下）
 ```
+
+**发布流程的有头模式**（2026-09-23 加）：想让投递过程**看得见**，给 MCP 进程设
+`XHS_PUBLISH_HEADED=1`（等价于启动参数 `-publish-headed`）再重启 MCP：
+
+```bash
+XHS_PUBLISH_HEADED=1 ./ops/stop_all.sh mcp && XHS_PUBLISH_HEADED=1 ./ops/start_all.sh mcp
+```
+
+只影响 `/api/v1/publish` 与 `/api/v1/publish_video` 这两条发布路径（走 `newBrowserForPublish`）；
+登录态探测、互动等其它动作仍然无头 —— 那些会被轮询，开有头只会刷屏。默认关：没有显示器的
+服务器上开有头会直接起不来。有头与否只是启动参数，账号侧的指纹/seed/代理设置完全不变。
 
 **实测效果**（2026-09-19 01:10，MCP 运行 15.5 分钟、43 次调用）：
 

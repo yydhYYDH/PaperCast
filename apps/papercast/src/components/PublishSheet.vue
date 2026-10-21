@@ -58,9 +58,22 @@ async function doLogin() {
   await pub.load()
 }
 
-/** 只显示前 6 张配图：发布面板不是图库，真实张数写在旁边 */
-const shots = computed(() => (draft.value?.images ?? []).slice(0, 6))
+/** 草稿自带的配图张数（读不到选图数据时的兜底） */
 const shotTotal = computed(() => draft.value?.images?.length ?? 0)
+
+/* ---------------- 配图手动增删（写 poster/selected.json，各渠道共用一套） ---------------- */
+/** 当前会投出去的图（按投递顺序）；读不到选图数据时退回草稿自带的那几张 */
+const chosen = computed(() => {
+  const im = pub.images
+  if (!im) return (draft.value?.images ?? []).map((m) => ({ ...m, kind: '', label: '' }))
+  const by = new Map(im.candidates.map((c) => [c.path, c]))
+  return im.selected.map((p) => by.get(p) ?? { path: p, name: p.split('/').pop() || p, kind: '', label: '', url: '' })
+})
+/** 还没选、可以加进来的图。默认收起，点「添加配图」才展开。 */
+const addable = computed(() => (pub.images?.candidates ?? []).filter((c) => !c.chosen))
+const chosenCount = computed(() => (pub.images ? pub.images.selected.length : shotTotal.value))
+const pickerOpen = ref(false)
+const KIND_WORD: Record<string, string> = { deck: '组图', card: '卡片', figure: '原图', table: '表格', selected: '已选' }
 
 /** 主按钮发的形态：渠道说了算（小红书图文、B 站成片），界面不自己猜 */
 const defaultIsVideo = computed(() => draft.value?.defaultMedia === 'video')
@@ -70,6 +83,33 @@ const canPostVideo = computed(() => {
   const d = draft.value
   return Boolean(d?.video) && (d?.capabilities ?? []).includes('video') && !defaultIsVideo.value
 })
+
+/** 定时发布：只有渠道支持排期、且这一版确实投得出去时才给这个动作 */
+const canSchedule = computed(() => pub.canPublish && Boolean(draft.value?.schedulable))
+
+/* ---------------- 定时发布：datetime-local 取值与范围 ---------------- */
+function localInput(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+const scheduleOpen = ref(false)
+const scheduleAt = ref('')
+const scheduleMin = computed(() => localInput(new Date(Date.now() + 60 * 60 * 1000)))
+const scheduleMax = computed(() => localInput(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)))
+
+function toggleSchedule() {
+  // 默认给 2 小时后（MCP 要求至少 1 小时后），省得人自己算
+  if (!scheduleOpen.value && !scheduleAt.value) {
+    scheduleAt.value = localInput(new Date(Date.now() + 2 * 60 * 60 * 1000))
+  }
+  scheduleOpen.value = !scheduleOpen.value
+}
+
+async function confirmSchedule() {
+  if (!scheduleAt.value) return
+  await pub.schedule(scheduleAt.value)
+  scheduleOpen.value = false
+}
 
 const statusChip = computed(() => {
   const d = draft.value
@@ -82,9 +122,12 @@ const statusChip = computed(() => {
 
 /** 回执卡：把后端结果原样摆出来（成功给链接、失败给原因、草稿给文件数） */
 const result = computed(() => pub.result)
+const scheduledAt = computed(() =>
+  (result.value?.receipt as Record<string, unknown> | null | undefined)?.scheduleAt as string | undefined)
 const resultTitle = computed(() => {
   const r = result.value
   if (!r) return ''
+  if (r.status === 'published' && scheduledAt.value) return '已排期（到点自动发布）'
   return r.status === 'published' ? '已发布'
     : r.status === 'draft' ? '只存了草稿（没有投递）'
     : r.status === 'blocked' ? '没有投出去'
@@ -202,18 +245,61 @@ watch(() => [pub.open, pub.channelId], () => {
                 @input="pub.edit('tags', ($event.target as HTMLInputElement).value)"
               />
 
-              <div v-if="shots.length" class="media">
+              <div v-if="chosen.length || pub.images" class="media">
                 <div class="row spread">
                   <span class="lbl">配图</span>
                   <span class="panel-sub">
-                    {{ shotTotal }} 张{{ defaultIsVideo ? '，发成片时用不上' : '，随图文一起投' }}
+                    {{ chosenCount }} 张{{ defaultIsVideo ? '，发成片时用不上' : '，随图文一起投' }}
+                    <template v-if="pub.images?.hasSelection"> · 已人工选过</template>
                   </span>
                 </div>
-                <div class="shots">
-                  <a v-for="m in shots" :key="m.path" :href="assetUrl(m.url)" target="_blank" rel="noreferrer" :title="'看原图 ' + m.name">
-                    <img :src="assetUrl(m.url)" :alt="m.name" loading="lazy" />
-                  </a>
+                <!-- 已选：每张右上角一个「×」直接去掉；只有一张时不允许再删（图文至少一张） -->
+                <div v-if="chosen.length" class="shots editable">
+                  <div v-for="m in chosen" :key="m.path" class="shot-cell">
+                    <a :href="assetUrl(m.url)" target="_blank" rel="noreferrer" :title="'看原图 ' + m.name">
+                      <img :src="assetUrl(m.url)" :alt="m.name" loading="lazy" />
+                    </a>
+                    <button
+                      class="shot-del"
+                      type="button"
+                      :disabled="pub.imagesSaving || chosen.length <= 1"
+                      :title="chosen.length <= 1 ? '图文至少要留一张图' : '去掉这张'"
+                      @click="pub.toggleImage(m.path)"
+                    >×</button>
+                  </div>
                 </div>
+                <p v-else class="panel-sub">一张都没选：发图文会被后端拦下，至少留一张。</p>
+
+                <div class="row wrap gap">
+                  <button class="btn ghost sm" type="button" @click="pickerOpen = !pickerOpen">
+                    {{ pickerOpen ? '收起可选图' : '添加配图…' }}
+                  </button>
+                  <button
+                    v-if="pub.images?.hasSelection"
+                    class="btn ghost sm"
+                    type="button"
+                    :disabled="pub.imagesSaving"
+                    @click="pub.resetImages()"
+                  >恢复自动选图</button>
+                  <span v-if="pub.imagesSaving" class="panel-sub">正在保存选图…</span>
+                </div>
+
+                <div v-if="pickerOpen" class="picker">
+                  <button
+                    v-for="c in addable"
+                    :key="c.path"
+                    class="pick"
+                    type="button"
+                    :disabled="pub.imagesSaving"
+                    :title="(c.label || c.name) + '（点击加入）'"
+                    @click="pub.toggleImage(c.path)"
+                  >
+                    <img :src="assetUrl(c.url)" :alt="c.name" loading="lazy" />
+                    <span class="pick-kind">{{ KIND_WORD[c.kind] || c.kind }}</span>
+                  </button>
+                  <p v-if="!addable.length" class="panel-sub">没有更多可选图了（组图 / 卡片 / 论文原图都在上面）。</p>
+                </div>
+                <p v-if="pub.imagesError" class="panel-sub err">{{ pub.imagesError }}</p>
               </div>
               <div v-if="draft.video" class="media">
                 <span class="lbl">成片</span>
@@ -237,12 +323,35 @@ watch(() => [pub.open, pub.channelId], () => {
                     <button v-if="canPostVideo" class="btn" :disabled="pub.busy !== ''" @click="pub.deliver('video')">
                       {{ pub.busy === 'video' ? '正在投递…' : '发布视频' }}
                     </button>
+                    <button v-if="canSchedule" class="btn" :disabled="pub.busy !== ''" @click="toggleSchedule">
+                      {{ scheduleOpen ? '收起定时' : '定时发布' }}
+                    </button>
                     <button class="btn" :disabled="pub.busy !== ''" @click="pub.saveDraft">
                       {{ pub.busy === 'draft' ? '正在存…' : '仅存草稿' }}
                     </button>
                     <button class="btn ghost" :disabled="pub.busy !== '' || !Object.keys(pub.edits[draft.channelId] ?? {}).length" @click="pub.resetEdit">
                       撤销改动
                     </button>
+                  </div>
+
+                  <!-- 定时发布：排到未来某个点由渠道自动发；同样是真实投递，走人工确认 -->
+                  <div v-if="scheduleOpen && canSchedule" class="sched">
+                    <label class="lbl" for="pub-schedule">定时发布时间（至少 1 小时后，最多 14 天）</label>
+                    <div class="row wrap gap">
+                      <input
+                        id="pub-schedule"
+                        v-model="scheduleAt"
+                        class="field sched-field"
+                        type="datetime-local"
+                        :min="scheduleMin"
+                        :max="scheduleMax"
+                        :disabled="pub.busy !== ''"
+                      />
+                      <button class="btn primary" :disabled="pub.busy !== '' || !scheduleAt" @click="confirmSchedule">
+                        {{ pub.busy === 'schedule' ? '正在排期…' : '确认排期' }}
+                      </button>
+                    </div>
+                    <p class="panel-sub">到点后由{{ draft.name }}自动发布；排期同样是真实投递，发出后不可撤销。</p>
                   </div>
 
                   <!-- 投递要等一阵子（渠道那边在开浏览器、填稿、逐张传图），这里如实报「已经等了多久」，
@@ -284,6 +393,7 @@ watch(() => [pub.open, pub.channelId], () => {
                   链接：<a class="link" :href="result.url" target="_blank" rel="noreferrer">{{ result.url }}</a>
                 </p>
                 <p v-else-if="result.remoteId" class="panel-sub">平台侧编号：{{ result.remoteId }}</p>
+                <p v-if="scheduledAt" class="panel-sub">排期时间：{{ scheduledAt.replace('T', ' ') }}</p>
                 <p v-if="result.error?.message" class="panel-sub">{{ result.error.message }}</p>
                 <!-- 「存成草稿」很容易被读成「发出去了」：后端那句 note 必须原样带出来 -->
                 <p v-if="result.note" class="panel-sub">{{ result.note }}</p>
@@ -369,6 +479,32 @@ watch(() => [pub.open, pub.channelId], () => {
 .shots a { display: block; border: 1px solid var(--hairline); border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-2); }
 .shots img { display: block; width: 64px; height: 84px; object-fit: cover; }
 
+/* 可增删的配图：每张右上角一个「×」；可选图默认收起，展开后是缩略图网格 */
+.shot-cell { position: relative; }
+.shot-del {
+  position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0;
+  display: flex; align-items: center; justify-content: center; line-height: 1;
+  font-size: 13px; color: #fff; background: var(--ink-3); border: 1px solid var(--surface);
+  border-radius: 50%; cursor: pointer;
+}
+.shot-del:hover:not(:disabled) { background: var(--tone-red-fg, #a12d2d); }
+.shot-del:disabled { opacity: 0.35; cursor: not-allowed; }
+.picker {
+  display: flex; gap: 8px; flex-wrap: wrap; padding: 8px;
+  border: 1px dashed var(--hairline); border-radius: var(--radius-sm); background: var(--surface-2);
+}
+.pick {
+  position: relative; padding: 0; border: 1px solid var(--hairline); border-radius: var(--radius-sm);
+  overflow: hidden; background: var(--surface); cursor: pointer; line-height: 0;
+}
+.pick:hover:not(:disabled) { border-color: var(--accent); }
+.pick:disabled { opacity: 0.5; cursor: not-allowed; }
+.pick img { display: block; width: 56px; height: 74px; object-fit: cover; }
+.pick-kind {
+  position: absolute; left: 0; bottom: 0; right: 0; line-height: 1.6;
+  font-size: 10px; color: #fff; background: rgba(17, 17, 17, 0.5); text-align: center;
+}
+
 .gate {
   margin-top: 14px; padding: 13px 15px;
   border: 1px solid var(--hairline); border-radius: var(--radius);
@@ -393,6 +529,14 @@ watch(() => [pub.open, pub.channelId], () => {
 .wait-hint { font-size: 12.5px; line-height: 1.7; color: var(--small-ink, #6b6963); }
 @media (prefers-reduced-motion: reduce) { .wait-dot { animation: none; } }
 @media (max-width: 720px) { .waiting { gap: 6px; } .wait-hint { font-size: 13px; } }
+
+/* 定时发布：时间选择器与「确认排期」 */
+.sched {
+  margin-top: 4px; padding-top: 10px; border-top: 1px dashed var(--hairline);
+  display: flex; flex-direction: column; gap: 7px;
+}
+.sched .lbl { margin-top: 0; }
+.sched-field { width: auto; min-width: 210px; }
 
 .receipt {
   margin-top: 12px; padding: 13px 15px;

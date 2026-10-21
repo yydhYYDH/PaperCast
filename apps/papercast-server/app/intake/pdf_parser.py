@@ -293,6 +293,75 @@ def _figure_region(crect, cap, vis, blocks, page_rect, cap_rects=(), *, max_roun
     return clip, hit
 
 
+def _merge_table_boxes(rects, *, merge_gap: float = 30.0) -> list:
+    """把同一张表的碎块并成一个 bbox：横向有实质重叠、纵向间隙小于 merge_gap 就合并。
+
+    `find_tables()` 会把跨多表头的列切成几块（World Observer 的 Table 1 返回 3 块），
+    逐块裁只会得到表头的一条窄带；合并后才是一整张表。
+    """
+    rects = [pymupdf.Rect(r) for r in rects]
+    changed = True
+    while changed:
+        changed = False
+        out: list = []
+        for r in rects:
+            hit = -1
+            for i, o in enumerate(out):
+                xov = min(r.x1, o.x1) - max(r.x0, o.x0)
+                minw = min(r.width, o.width)
+                vgap = max(r.y0, o.y0) - min(r.y1, o.y1)
+                if xov > 0.5 * minw and vgap < merge_gap:
+                    hit = i
+                    break
+            if hit >= 0:
+                # 必须按索引回写：Rect 的 `|=` 返回新对象并重绑局部名，out 里的旧对象不会变
+                out[hit] = out[hit] | r
+                changed = True
+            else:
+                out.append(pymupdf.Rect(r))
+        rects = out
+    return rects
+
+
+def _table_regions(page, *, merge_gap: float = 30.0) -> list:
+    """页面上的表格区域：PyMuPDF 的版面表检测结果，再合并碎块。
+
+    为什么要它：图注驱动的那套对**表格**不可靠（2026-10-02 实测 World Observer 的 Table 1）——
+    表注首行只有 "Table 1:" 这么宽，`_band` 往下扫到第一行长文本数据行就当成正文段落停下，
+    裁剪框只剩 45pt 宽的一条竖边，投出去/排进卡片就是一段乱码表格。
+    """
+    try:
+        tabs = page.find_tables().tables
+    except Exception:
+        return []
+    return _merge_table_boxes([pymupdf.Rect(t.bbox) for t in tabs], merge_gap=merge_gap)
+
+
+def _match_table_region(regions, cap, page_rect) -> Optional["pymupdf.Rect"]:
+    """给表注挑它正下方那张表的区域：顶边贴表注底、横向与表注块有实质重叠。
+
+    取「最靠上」的候选，避免把后面同一页的下一张表并进来。
+    """
+    cb = cap["block"]["rect"]
+    best = None
+    for r in regions:
+        if r.y0 < cap["bottom"] - 8 or r.y0 - cap["bottom"] > 140:
+            continue
+        if r.height > page_rect.height * 0.95:
+            continue
+        xov = min(r.x1, cb.x1) - max(r.x0, cb.x0)
+        # 既要跟表注块有实质重叠，整张表也得占住表注宽度的相当一部分 ——
+        # 否则一条窄竖边也会「重叠」而被误当成整张表（旧 bug 的产物）。
+        if xov < 0.5 * min(r.width, cb.width) or xov < 0.35 * cb.width:
+            continue
+        if best is None or r.y0 < best.y0:
+            best = r
+    if best is None:
+        return None
+    # 顶边收到表注底，免得把表注文字带上；四周各留一点边距
+    return pymupdf.Rect(best.x0 - 2, max(best.y0, cap["bottom"]), best.x1 + 2, best.y1 + 3)
+
+
 def _best_raster(page, clip):
     """区域里是否有可直抽的位图（占区域 65% 以上）。返回 (xref, bbox)。"""
     best = None
@@ -311,6 +380,23 @@ def _best_raster(page, clip):
     if best is None:
         return None
     return best[0], best[1]
+
+
+def _looks_near_black(path) -> bool:
+    """抽出来的图是不是「几乎全黑」。
+
+    带 SMask/蒙版的内嵌图，`doc.extract_image` 的裸流常是全黑 —— 直接印到卡片上就是一块
+    黑砖（2026-10-10 实测 OuroWorld 的 teaser）。命中就改按页面区域渲染，渲染仍全黑则丢弃。
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(path) as im:
+            px = list(im.convert("RGB").resize((64, 64)).getdata())
+        dark = sum(1 for r, g, b in px if r < 16 and g < 16 and b < 16)
+        return dark >= 0.98 * len(px)
+    except Exception:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -417,10 +503,16 @@ def parse_pdf(
             continue
         caps = _find_captions(blocks)
         cap_rects = [c["rect"] for c in caps]
+        # 只在有表注时才算表格区域（find_tables 有开销）；没有检测到就退回图注驱动
+        table_regions = _table_regions(page) if any(c["kind"] == "table" for c in caps) else []
         for cap in caps:
             crect = cap["rect"]
             is_table = cap["kind"] == "table"
-            clip, hit = _figure_region(crect, cap, vis, blocks, page.rect, cap_rects)
+            table_rect = _match_table_region(table_regions, cap, page.rect) if is_table else None
+            if table_rect is not None:
+                clip, hit = table_rect, True
+            else:
+                clip, hit = _figure_region(crect, cap, vis, blocks, page.rect, cap_rects)
             height = clip.height
             if not hit or height < 40 or height > page.rect.height * 0.95:
                 result.warnings.append(
@@ -452,6 +544,14 @@ def parse_pdf(
             if source == "render":
                 pix = page.get_pixmap(clip=clip, matrix=pymupdf.Matrix(zoom, zoom))
                 pix.save(str(target))
+            if source == "raster" and _looks_near_black(target):
+                # 裸抽到全黑（带 SMask/蒙版）→ 改按页面区域渲染；仍全黑就丢弃这张。
+                page.get_pixmap(clip=clip, matrix=pymupdf.Matrix(zoom, zoom)).save(str(target))
+                source = "render"
+                if _looks_near_black(target):
+                    target.unlink(missing_ok=True)
+                    result.warnings.append(f"p{pno + 1} 的 {fid} 抽取结果为纯黑，已丢弃")
+                    continue
             with pymupdf.open(target) as im:
                 w, h = im[0].rect.width, im[0].rect.height
             result.figures.append(
@@ -487,9 +587,16 @@ def parse_pdf(
                 img = doc.extract_image(xref)
             except Exception:
                 continue
-            extra += 1
             fname = f"img-p{pno + 1}-{i + 1}.png"
-            (images_dir / fname).write_bytes(img["image"])
+            target = images_dir / fname
+            target.write_bytes(img["image"])
+            if _looks_near_black(target):
+                # 裸流全黑（带 SMask/蒙版）→ 改按页面区域渲染；仍全黑就丢弃，别印黑砖。
+                page.get_pixmap(clip=r, matrix=pymupdf.Matrix(zoom, zoom)).save(str(target))
+                if _looks_near_black(target):
+                    target.unlink(missing_ok=True)
+                    continue
+            extra += 1
             taken_xrefs.add(xref)
             result.figures.append(
                 Figure(

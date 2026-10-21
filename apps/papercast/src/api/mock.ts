@@ -16,6 +16,10 @@ import type {
   SkillDetail,
   SkillInfo,
   StyleMenu,
+  VoiceDetail,
+  VoiceMutationResult,
+  VoicePayload,
+  VoiceUpdatePayload,
   HfDailyResult,
   UploadResult,
 } from './types'
@@ -138,6 +142,37 @@ const MOCK_HF_DAILY: HfDailyResult = {
   ],
 }
 
+/* 模拟器里的自定义人格（内存里增删改，刷新即失）：只为让风格页的编辑流程离线也能点通 */
+const mockCustomVoices: VoiceDetail[] = []
+
+function mockStyleMenu(): StyleMenu {
+  const voices = [
+    ...MOCK_VOICES.map((v) => ({ ...v, custom: false, overridden: false, builtin: true })),
+    ...mockCustomVoices.map((v) => ({
+      id: v.id, label: v.label, short: v.short, hint: v.hint,
+      custom: true, overridden: false, builtin: false,
+    })),
+  ]
+  const styles = MOCK_PLATFORMS.flatMap((p) =>
+    voices.map((v) => {
+      const base = MOCK_STYLE_MENU.styles.find((s) => s.platform === p.id)!
+      return {
+        ...base,
+        variant: p.id + '-' + v.id,
+        voice: v.id,
+        short: v.short || v.label,
+        hint: v.hint,
+        label: p.label + ' × ' + v.label,
+        sampled: '0',
+        custom: (v as { custom?: boolean }).custom ?? false,
+        overridden: false,
+        builtin: (v as { builtin?: boolean }).builtin ?? false,
+      }
+    }),
+  )
+  return { ...MOCK_STYLE_MENU, voices, styles }
+}
+
 import type {
   Artifact,
   ArtifactKind,
@@ -157,6 +192,8 @@ import type {
   RunConfig,
   RunDraft,
   RunDrafts,
+  RunImageCandidate,
+  RunImages,
   RunPublishRequest,
   RunPublishResult,
   Stage,
@@ -233,15 +270,7 @@ const LOGS: Record<StageId, Script> = {
 }
 
 const GATES: Partial<Record<StageId, Stage['gate']>> = {
-  understand: {
-    id: 'digest',
-    label: '确认论文理解层',
-    detail: '下游文章 / Poster / 视频都基于这份事实源，请确认贡献点与关键数据无误。',
-    options: [
-      { id: 'continue', label: '确认并继续' },
-      { id: 'revise', label: '补充要点后重跑', hint: '回到理解层，追加人工批注再生成' },
-    ],
-  },
+  // 理解层不再有人工闸门（2026-09-23）；海报规格闸门是历史 mock，真实流水线里没有。
   poster: {
     id: 'poster-spec',
     label: '海报规格确认',
@@ -255,9 +284,9 @@ const GATES: Partial<Record<StageId, Stage['gate']>> = {
   publish: {
     id: 'publish-gate',
     label: '发布前人工闸门',
-    detail: '选中的渠道将真实投递：小红书走 xiaohongshu-mcp、知乎走 zhihu-publisher、B 站走 biliup。',
+    // 流水线不再提供「确认发布」：这一轮只落草稿，真投递走作品库直投（2026-09-23）
+    detail: '这一轮只落草稿，不向任何平台投递。要真的发出去，去作品库点「发布这一件」。',
     options: [
-      { id: 'continue', label: '确认发布' },
       { id: 'draft', label: '仅存草稿' },
       { id: 'skip', label: '本轮不发布' },
     ],
@@ -432,10 +461,11 @@ const DEMO_CHANNELS: PlatformChannel[] = [
 const DEFAULT_CONFIG: RunConfig = {
   // 人格 id 是「平台-人格」（见后端 app/styles.py 的 VOICES）：默认第三方独立视角，
   // 不再有 author（已下线，后端 RETIRED_VOICES 会把它映射到 independent）
-  article: { variants: ['xhs-independent', 'zhihu-analyst', 'en-analyst'] },
-  poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'en' },
-  video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '16:9', narration: '中文' },
-  publish: { targets: ['xhs', 'zhihu', 'x'], autoPublish: false },
+  // 默认只产出小红书（2026-09-23）：与后端 PublishConfig.targets 的默认值保持一致
+  article: { variants: ['xhs-independent'] },
+  poster: { size: '36×48 in', venue: 'NeurIPS 2025', theme: 'default', lang: 'zh' },
+  video: { durationSec: 300, voice: 'zh-CN-XiaoxiaoNeural', aspect: '9:16', narration: '中文' },
+  publish: { targets: ['xhs'], autoPublish: false },
 }
 
 let seq = 0
@@ -748,6 +778,26 @@ export class MockPipelineApi implements PipelineApi {
     return { ...res, receipt }
   }
 
+  /** 演示模式的配图增删：用草稿封面拼一组同形状的候选，真后端读的是 run 里的真实图片。 */
+  async listRunImages(runId: string): Promise<RunImages> {
+    const draft = await this.listRunDrafts(runId)
+    const cover = draft.channels[0]?.cover
+    const candidates: RunImageCandidate[] = cover ? [
+      { path: cover.path, name: cover.name, kind: 'deck', label: '演示配图', url: cover.url, chosen: true },
+      { path: cover.path + '.alt', name: 'alt.png', kind: 'figure', label: '演示备用图', url: cover.url, chosen: false },
+    ] : []
+    return { runId, selected: candidates.filter((c) => c.chosen).map((c) => c.path), candidates, hasSelection: false }
+  }
+
+  async saveRunImages(runId: string, images: string[]): Promise<RunImages> {
+    const base = await this.listRunImages(runId)
+    const set = new Set(images)
+    return {
+      ...base, selected: images, hasSelection: images.length > 0,
+      candidates: base.candidates.map((c) => ({ ...c, chosen: set.has(c.path) })),
+    }
+  }
+
   /**
    * 模拟器不连后端，给一份与后端 SPEC 同形状的假配置：字段名、分组、kind 都对齐，
    * 这样「设置 → 模型与 API」在 mock 模式下也能完整渲染（值仅供示意，写入会抛错）。
@@ -799,7 +849,55 @@ export class MockPipelineApi implements PipelineApi {
 
   async styles(): Promise<StyleMenu> {
     await new Promise((r) => setTimeout(r, 120))
-    return MOCK_STYLE_MENU
+    return mockStyleMenu()
+  }
+
+  async voiceDetail(id: string): Promise<VoiceDetail> {
+    const custom = mockCustomVoices.find((v) => v.id === id)
+    if (custom) return custom
+    const builtin = MOCK_VOICES.find((v) => v.id === id)
+    if (!builtin) throw new Error(`模拟器里没有风格「${id}」`)
+    return {
+      ...builtin, anchor: '', sampled: '0',
+      persona: `（模拟器）接上真后端才读得到「${builtin.label}」的提示词正文。`,
+      custom: false, overridden: false, builtin: true,
+    }
+  }
+
+  async createVoice(body: VoicePayload): Promise<VoiceMutationResult> {
+    const id = (body.id || body.label).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'voice-' + Date.now().toString(36)
+    if (mockCustomVoices.some((v) => v.id === id) || MOCK_VOICES.some((v) => v.id === id)) {
+      throw new Error(`id「${id}」已经存在`)
+    }
+    const v: VoiceDetail = {
+      id, label: body.label, short: body.short || body.label, hint: body.hint || '',
+      anchor: '用户自定义', sampled: '0', persona: body.persona,
+      custom: true, overridden: false, builtin: false,
+    }
+    mockCustomVoices.push(v)
+    return { message: `风格「${v.short}」已保存`, voice: v }
+  }
+
+  async updateVoice(id: string, body: VoiceUpdatePayload): Promise<VoiceMutationResult> {
+    const idx = mockCustomVoices.findIndex((v) => v.id === id)
+    if (idx < 0) throw new Error('模拟器里只能改自定义风格（内置的接真后端再改）')
+    const cur = mockCustomVoices[idx]
+    const v: VoiceDetail = {
+      ...cur,
+      label: body.label ?? cur.label,
+      short: body.short ?? cur.short,
+      hint: body.hint ?? cur.hint,
+      persona: body.persona ?? cur.persona,
+    }
+    mockCustomVoices[idx] = v
+    return { message: `风格「${v.short}」已更新`, voice: v }
+  }
+
+  async deleteVoice(id: string): Promise<{ message: string }> {
+    const idx = mockCustomVoices.findIndex((v) => v.id === id)
+    if (idx < 0) throw new Error('模拟器里只能删自定义风格（内置的接真后端再删）')
+    mockCustomVoices.splice(idx, 1)
+    return { message: `自定义风格「${id}」已删除` }
   }
 
   async hfDaily(date = '', sort = '', force = false): Promise<HfDailyResult> {

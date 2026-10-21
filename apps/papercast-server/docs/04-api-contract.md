@@ -38,6 +38,8 @@ curl -X POST http://127.0.0.1:8000/api/runs -H 'Content-Type: application/json' 
 ```
 
 `.zip` 走 `kind: "latex"`，`SourceInput.value` 同样填 `uploadId`。
+`kind: "zhihu"`（`value` 填知乎文章 URL，如 `https://zhuanlan.zhihu.com/p/2089744357020770674`）
+走浏览器抓取正文+图片，产物与 PDF 通道同形状；详见 `01-module-intake.md`。
 
 ### `GET /artifacts/<runId>/<path>` — 产物静态服务
 
@@ -207,12 +209,14 @@ HTTP 状态码：400 参数错 / 404 不存在 / 409 状态冲突（对已放行
 
 ### 发布阶段的渠道语义
 
-- `RunConfig.publish.targets`（默认 `["xiaohongshu","zhihu","bilibili"]`）决定 M3 投哪些渠道，
-  别名 `xhs` 也认；**未知/停用的渠道不静默丢弃**，会写成 `stage.checks` 里的 `渠道：<id> = fail`。
+- `RunConfig.publish.targets`（**默认 `["xiaohongshu"]`**，2026-09-23 起只发小红书）决定
+  M3 投哪些渠道，别名 `xhs` 也认；**未知/停用的渠道不静默丢弃**，会写成 `stage.checks` 里的
+  `渠道：<id> = fail`。它同时决定**产出哪些平台的文案/画布/视频**（见 `models.enabled_platforms`）。
 - 渠道级进展都在 `stage.checks`：`素材适配：<渠道>`、`渠道状态：<渠道>`、`可投递渠道`、`发布结果`。
 - 产物：`publish/<渠道>/export/`（素材包，闸门之前就落盘）、`publish/<渠道>/receipt.json`、
   `publish/receipts.json`（总表，含 `published/failed/blocked`）、`publish/xhs_receipt.json`（兼容别名）。
-- 闸门 `publish-gate` 选项：`continue`（只向就绪渠道投递）/ `draft`（只准备）/ `skip`（本轮不发）。
+- 闸门 `publish-gate` 选项：`draft`（只准备，默认）/ `skip`（本轮不发）。
+  **流水线不再提供 `continue`**；真实投递走作品库直投 `POST /api/runs/{id}/publish[/video]`。
 
 完整规格（新增平台四步、B 站选型、失败隔离的验收方式）见 `08-channels.md`。
 

@@ -11,6 +11,7 @@ import type {
   PlatformPublishResult,
   PlatformQrcode,
   RunDrafts,
+  RunImages,
   RunPublishRequest,
   RunPublishResult,
   StageId,
@@ -23,6 +24,10 @@ import type {
   SkillDetail,
   SkillInfo,
   StyleMenu,
+  VoiceDetail,
+  VoicePayload,
+  VoiceUpdatePayload,
+  VoiceMutationResult,
   HfDailyResult,
   DraftBody,
   DraftResult,
@@ -174,6 +179,19 @@ export class HttpPipelineApi implements PipelineApi {
     })
   }
 
+  /* ---------- 配图增删（写 poster/selected.json，投递时优先于自动顺序） ---------- */
+
+  listRunImages(runId: string) {
+    return this.json<RunImages>(`/api/runs/${runId}/images`)
+  }
+
+  saveRunImages(runId: string, images: string[]) {
+    return this.json<RunImages>(`/api/runs/${runId}/images`, {
+      method: 'PUT',
+      body: JSON.stringify({ images }),
+    })
+  }
+
   /* ---------- 对话 ---------- */
 
   chat(body: ChatRequest) {
@@ -199,6 +217,30 @@ export class HttpPipelineApi implements PipelineApi {
 
   styles() {
     return this.json<StyleMenu>('/api/styles')
+  }
+
+  voiceDetail(id: string) {
+    return this.json<VoiceDetail>('/api/styles/voices/' + encodeURIComponent(id))
+  }
+
+  createVoice(body: VoicePayload) {
+    return this.json<VoiceMutationResult>('/api/styles/voices', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  }
+
+  updateVoice(id: string, body: VoiceUpdatePayload) {
+    return this.json<VoiceMutationResult>('/api/styles/voices/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    })
+  }
+
+  deleteVoice(id: string) {
+    return this.json<{ message: string }>('/api/styles/voices/' + encodeURIComponent(id), {
+      method: 'DELETE',
+    })
   }
 
   hfDaily(date = '', sort = '', force = false) {

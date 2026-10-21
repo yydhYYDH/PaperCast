@@ -40,3 +40,16 @@ def test_publish_gate_declares_draft_default_and_no_blacklist():
     assert 'default="draft"' in src
     assert 'chosen not in ("draft", "skip")' not in src
     assert "_is_confirmed(chosen)" in src
+
+
+def test_publish_gate_no_longer_offers_confirm_publish():
+    """发布闸门不再提供「确认发布」（2026-09-23）：真投递只走作品库直投。"""
+    src = (Path(__file__).resolve().parents[1] / "app" / "modules" / "publish.py").read_text(encoding="utf-8")
+    assert '("continue", "确认发布"' not in src
+    assert '("draft", "仅存草稿"' in src
+
+
+def test_understand_stage_has_no_human_gate():
+    """理解层不再停下来等人工确认（2026-09-23）：digest 生成完直接往下走。"""
+    src = (Path(__file__).resolve().parents[1] / "app" / "modules" / "generate.py").read_text(encoding="utf-8")
+    assert "ctx.gate(" not in src

@@ -13,6 +13,7 @@ const platforms = usePlatformsStore()
 
 const TITLES: Record<ViewId, string> = {
   workbench: '工作台',
+  daily: '每日论文',
   runs: '运行记录',
   library: '作品库',
   platforms: '平台账号',

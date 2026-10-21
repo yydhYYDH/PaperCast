@@ -2,6 +2,7 @@
 
 平台规则留在 adapter 里（不散到编排层）：
 - 标题计重 ≤ 38（与 M2 的 title_weight 同一套算法）；
+- 正文（**含话题**）≤ 1000 字；话题会被网页版计入正文，所以「正文 + 每个 #话题」一起算；
 - 图文笔记 1~18 张图；视频笔记走 publish_video；
 - cookie 认进程 cwd（apps/xiaohongshu-mcp/cookies.json），所以 MCP 必须在该目录启动。
 """
@@ -15,6 +16,17 @@ from .base import Delivery, HttpChannel, Materials, Preflight
 
 TITLE_WEIGHT_LIMIT = 38
 MAX_IMAGES = 18
+#: 正文（含话题）字符上限。小红书网页版 div.length-error 实测为 1000，且**把话题算进正文**。
+#: 本地按 len(body) + Σ(len(tag)+1)（`#` 也算一字符）估算，与站点计数有 ±2 的漂移，
+#: 所以再留一个余量：宁可 preflight 判 fail 让用户先精简，也不要等真发布被站点打回
+#: （2026-10-09 实测：正文 1007 + 10 个话题 = 站点计数 1065 > 1000，票被驳回）。
+BODY_CHAR_LIMIT = 1000
+BODY_CHAR_MARGIN = 5
+
+
+def body_char_weight(body: str, tags: list[str]) -> int:
+    """估算小红书正文长度：正文 + 每个话题的 `#名字`。"""
+    return len(body or "") + sum(len(t) + 1 for t in (tags or []))
 
 
 class XiaohongshuChannel(HttpChannel):
@@ -33,6 +45,8 @@ class XiaohongshuChannel(HttpChannel):
     transport = "mcp-http"
     why = "图文/视频笔记：MCP 开无头浏览器操作网页版，扫码登录"
     restart_hint = "./ops/start_all.sh mcp"
+    # MCP 的 /api/v1/publish 支持 schedule_at（ISO8601，1 小时~14 天内）→ 支持定时发布。
+    supports_schedule = True
 
     @property
     def base_url(self) -> str:
@@ -52,7 +66,13 @@ class XiaohongshuChannel(HttpChannel):
         weight = title_weight(m.title)
         if weight > TITLE_WEIGHT_LIMIT:
             return False, f"标题计重 {weight} > {TITLE_WEIGHT_LIMIT}（小红书上限，先缩短标题）"
-        return True, f"图文笔记（{len(m.images)} 张图 / 标题计重 {weight}）"
+        bweight = body_char_weight(m.body, m.tags)
+        if bweight > BODY_CHAR_LIMIT - BODY_CHAR_MARGIN:
+            return False, (
+                f"正文含话题约 {bweight} 字 > {BODY_CHAR_LIMIT}（小红书上限：正文 + 每个 #话题 一起算，"
+                f"先精简正文或减少话题）"
+            )
+        return True, f"图文笔记（{len(m.images)} 张图 / 标题计重 {weight} / 正文含话题 {bweight} 字）"
 
     async def preflight(self) -> Preflight:
         reachable, detail, _ = await self.health()
@@ -97,6 +117,9 @@ class XiaohongshuChannel(HttpChannel):
                 "images": [self.remote_path(p) for p in m.images],
                 "tags": m.tags, "is_original": True,
             }
+        # 定时发布：MCP 收 RFC3339 的 schedule_at（1 小时~14 天内）；为空就是立即发布。
+        if m.schedule_at:
+            body["schedule_at"] = m.schedule_at
         try:
             status, data = await self._request("POST", path, timeout=self.publish_timeout, json=body)
         except Exception as exc:

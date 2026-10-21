@@ -234,7 +234,7 @@ if [ "$WITH_MCP" = 1 ]; then
     die "缺 Go（需要 >= 1.24）：https://go.dev/dl/ 装好后重跑，或把工具链解压到 var/toolchains/go"
   fi
   "$WS/ops/build_mcp.sh" || die "编译失败（看上面的输出；docs/INSTALL.md §5.2）"
-  ok "ops/bin/ 已产出：xiaohongshu-mcp / -auth / xiaohongshu-login（+ 两个 Windows .exe）"
+  ok "ops/bin/ 已产出：xiaohongshu-mcp / -auth / xiaohongshu-login（Windows 版已废弃，见 build_mcp.sh）"
   printf '   · 首次运行 MCP 会自动下载内置 Chromium（约 150MB）到 var/cache/xiaohongshu-mcp/browser/\n'
 fi
 

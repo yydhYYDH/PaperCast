@@ -41,30 +41,29 @@ publish/
 
 ## 3. 闸门
 
-与前端 mock 完全一致的三个选项：
+**流水线里的 `publish` 阶段不再提供「确认发布」**（2026-09-23 用户要求）：只有两个选项，
+真实投递一律走作品库直投（`POST /api/runs/{id}/publish[/video]`，带 `confirmed` + 账号二次校验）。
 
 ```jsonc
 { "id": "publish-gate", "label": "发布前人工闸门",
-  "detail": "选中的渠道将真实投递：小红书走 xiaohongshu-mcp。",
+  "detail": "这一轮只落草稿，不向任何平台投递。",
   "options": [
-    { "id": "continue", "label": "确认发布" },
-    { "id": "draft",    "label": "仅存草稿" },
-    { "id": "skip",     "label": "本轮不发布" }
+    { "id": "draft", "label": "仅存草稿" },
+    { "id": "skip",  "label": "本轮不发布" }
   ] }
 ```
 
 | 选项 | 行为 |
 | --- | --- |
-| `continue` | 调 MCP 真实发布；成功后写回执 + 记录 noteId/链接 |
-| `draft` | 不调发布接口，只把 `export/` 备好，回执 `status: "draft"` |
+| `draft` | 不调发布接口，只把 `export/` 备好，回执 `status: "draft"`（默认） |
 | `skip` | 什么都不做，回执 `status: "skipped"`，阶段标 `skipped` |
 
-`config.publish.autoPublish` 默认 `false`。**即使设为 true，也只跳过「点击确认」这一步，
-不跳过闸门本身** —— 阶段仍然会 `waiting`，避免出现「没人看过就发出去了」的运行。
+`_is_confirmed()` 仍是白名单（只有 `"continue"` 算真投递），但流水线已不再产生这个选择 ——
+即使闸门被误放行，也不会真的发出请求。
 
-自动化的调用方也要守同一条线：`scripts/smoke_test.sh` 对发布闸门的默认动作是 **`draft`**，
-只有显式 `PUBLISH=1` 才会回 `continue`。这条安全默认是踩过坑之后补上的 ——
-第一版冒烟脚本对所有闸门一律回 `continue`，结果验证运行把一篇测试帖真的发到了账号上。
+自动化的调用方也要守同一条线：`scripts/smoke_test.sh` 对发布闸门的默认动作是 **`draft`**。
+这条安全默认是踩过坑之后补上的 —— 第一版冒烟脚本对所有闸门一律回 `continue`，
+结果验证运行把一篇测试帖真的发到了账号上。
 
 ## 4. 失败与回执
 

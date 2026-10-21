@@ -49,6 +49,15 @@ export interface Work {
   link: string
   /** 最多三个数字，别的细节收进详情 */
   stats: string[]
+  /** 来源论文的团队信息（作者 / 单位 / arXiv 链接）—— 都读真实产物，读不到就留空 */
+  authors: string[]
+  /** 作者一行话：最多三个名字，多余的收成「等 N 人」 */
+  authorsText: string
+  affiliation: string
+  /** arXiv 摘要页；非 arXiv 来源为空串 */
+  paperUrl: string
+  /** arXiv PDF 直链；非 arXiv 来源为空串 */
+  pdfUrl: string
   at: number
   /** 这个渠道投过的每条回执（新的在前）—— 详情里逐条摆出来，「已发布」背后是哪一次、有没有失败过都看得见 */
   receipts: ReceiptNote[]
@@ -114,6 +123,21 @@ function words(run: PaperRun): number {
   return Number.isFinite(n) ? n : 0
 }
 
+/** 作者一行话：最多 max 个名字，多余的收成「等 N 人」，不把一长串名字铺满卡片 */
+export function authorLine(authors: string[] | undefined, max = 3): string {
+  const list = (authors ?? []).map((a) => (a || '').trim()).filter(Boolean)
+  if (!list.length) return ''
+  if (list.length <= max) return list.join('、')
+  return list.slice(0, max).join('、') + ' 等 ' + list.length + ' 人'
+}
+
+/** arXiv 来源才给链接：摘要页 + PDF 直链；上传的 PDF / LaTeX 没有可点的外部链接 */
+function arxivLinks(run: PaperRun): { paperUrl: string; pdfUrl: string } {
+  const id = run.source.kind === 'arxiv' ? (run.source.value || '').trim() : ''
+  if (!id) return { paperUrl: '', pdfUrl: '' }
+  return { paperUrl: 'https://arxiv.org/abs/' + id, pdfUrl: 'https://arxiv.org/pdf/' + id }
+}
+
 /* ---------------------------------------------------------------- 一个平台要摆什么 */
 
 interface Lineup {
@@ -142,6 +166,12 @@ function scriptFor(run: PaperRun): Artifact | undefined {
 }
 
 function lineupFor(run: PaperRun, p: PlatformId): Lineup {
+  // 小红书**真正投出去**的是 guizang 组图（poster/cards/output/xhs-*.jpg，选图顺序见
+  // 后端 modules/publish.py 的 _collect_images）。旧的 article/cards/p*.png 只是没有组图时的兜底，
+  // 前端以前一直显示它，于是「界面看到的」和「帖子里发的」对不上（2026-09-23 修）。
+  const deck = images(run, 'poster')
+    .filter((a) => /poster\/cards\/output\/xhs-/.test(a.path))
+    .sort((x, y) => x.path.localeCompare(y.path))
   const cards = images(run, 'article').filter((a) => /article\/cards\//.test(a.path)).sort((x, y) => x.path.localeCompare(y.path))
   const posters = images(run, 'poster')
   const videoImgs = images(run, 'video')
@@ -150,11 +180,13 @@ function lineupFor(run: PaperRun, p: PlatformId): Lineup {
   const videoCover = find(videoImgs, /video\/cover\.png$/)
 
   if (p === 'xhs') {
+    // 有组图就用组图（这才是帖子里的那套），没有才退回旧的自研卡片
+    const xhsShots = deck.length ? deck : cards
     return {
-      // 小红书的第一张卡片就是它在手机上真正的封面（1080×1440，3:4）
-      cover: cards[0] ?? find(posters, /poster-xhs-long\.png$/),
+      // 组图的第一张就是它在手机上真正的封面（1080×1440，3:4）
+      cover: xhsShots[0] ?? find(posters, /poster-xhs-long\.png$/),
       reader: readerFor(run, 'xhs'),
-      shots: cards,
+      shots: xhsShots,
     }
   }
   if (p === 'zhihu') {
@@ -276,6 +308,8 @@ export interface Extras {
   titles: Record<string, string>
   /** run.id -> 渠道 id -> 这个渠道投过的每条回执（新的在前）；缺省表示没读到明细，退回总表 */
   channelReceipts?: Record<string, Record<string, ReceiptNote[]>>
+  /** run.id -> 单位（读 poster.spec.json 的 affiliation；没跑 poster 就没有） */
+  affiliations?: Record<string, string>
 }
 
 export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
@@ -321,6 +355,8 @@ export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
       // 「已发布」要能看出是哪一次投的：本轮发布 / 作品库直投
       const routeWord = receipts[0]?.route === 'library' ? '作品库直投' : receipts[0]?.route === 'run' ? '本轮发布' : ''
       const stateNote = state === 'published' && routeWord ? (note ? note + ' · ' + routeWord : routeWord) : note
+      const { paperUrl, pdfUrl } = arxivLinks(run)
+      const authors = (run.source.authors ?? []).map((a) => (a || '').trim()).filter(Boolean)
 
       out.push({
         key: run.id + ':' + p,
@@ -338,6 +374,11 @@ export function buildWorks(runs: PaperRun[], extras: Extras): Work[] {
         video: l.video,
         state, note: stateNote, link,
         stats: statsFor(run, p, l, channelRec),
+        authors,
+        authorsText: authorLine(authors),
+        affiliation: (extras.affiliations?.[run.id] ?? '').trim(),
+        paperUrl,
+        pdfUrl,
         at: channelRec?.at ? channelRec.at * 1000 : Number(run.createdAt) || 0,
       })
     }

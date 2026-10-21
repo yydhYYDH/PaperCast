@@ -1,8 +1,8 @@
 import { defineStore } from 'pinia'
 import { api } from '../api'
-import type { SkillInfo, StyleMenu, StyleOption } from '../api/types'
+import type { SkillInfo, StyleMenu, StyleOption, VoiceDetail, VoicePayload } from '../api/types'
 import { exampleRunConfig } from '../data/example'
-import { styleLabel } from '../data/stylePick'
+import { constrainVariantsToTargets, platformsOfTargets, styleLabel } from '../data/stylePick'
 
 /**
  * 个性化层：两件事，彼此不混。
@@ -72,10 +72,12 @@ export const useStyleStore = defineStore('style', {
     maxVariants(state): number {
       return state.menu?.maxVariants ?? 4
     },
-    /** 风格页按平台分组渲染：一组 = 一个平台 + 它下面的几种口吻 */
+    /** 风格页按平台分组渲染：一组 = 一个平台 + 它下面的几种口吻；只列发布目标内的平台 */
     platformGroups(state): { id: string; label: string; rows: StyleOption[] }[] {
+      const allowed = platformsOfTargets(exampleRunConfig().publish.targets ?? [])
       const out: { id: string; label: string; rows: StyleOption[] }[] = []
       for (const s of state.menu?.styles ?? []) {
+        if (allowed.length && !allowed.includes(s.platform)) continue
         let g = out.find((x) => x.id === s.platform)
         if (!g) {
           g = { id: s.platform, label: s.platformLabel, rows: [] }
@@ -85,16 +87,19 @@ export const useStyleStore = defineStore('style', {
       }
       return out
     },
-    /** 这次真正会生成的变体：勾了就用勾的，没勾用工作台默认配置 */
+    /** 这次真正会生成的变体：勾了就用勾的（裁到发布目标内），没勾用工作台默认配置 */
     effectiveVariants(state): string[] {
-      return state.picked.length ? state.picked : (exampleRunConfig().article.variants ?? [])
+      const cfg = exampleRunConfig()
+      const base = state.picked.length ? state.picked : (cfg.article.variants ?? [])
+      const kept = constrainVariantsToTargets(base, cfg.publish.targets ?? [])
+      return kept.length ? kept : (cfg.article.variants ?? [])
     },
     effectiveIsDefault(state): boolean {
       return state.picked.length === 0
     },
-    /** 给人看的一句话：「小红书 · 专业科普、知乎 · 专业解读」 */
+    /** 给人看的一句话：「小红书 · 专业科普」 */
     effectiveLabel(state): string {
-      const list = state.picked.length ? state.picked : (exampleRunConfig().article.variants ?? [])
+      const list = this.effectiveVariants
       const styles = state.menu?.styles ?? []
       return list.map((v) => styleLabel(v, styles)).join('、')
     },
@@ -157,6 +162,27 @@ export const useStyleStore = defineStore('style', {
       } catch {
         /* 同上 */
       }
+    },
+
+    /* ---------- 自定义人格：新建 / 编辑 / 删除（2026-09-23） ---------- */
+
+    /** 读一条人格的完整信息（含提示词正文），编辑前用 */
+    voiceDetail(id: string): Promise<VoiceDetail> {
+      return api.voiceDetail(id)
+    },
+
+    /** 保存：有 id 就是改（内置会被后端存成「覆盖」），没 id 就是新建。返回后端那句人话回执。 */
+    async saveVoice(payload: VoicePayload, id?: string): Promise<string> {
+      const res = id ? await api.updateVoice(id, payload) : await api.createVoice(payload)
+      await this.load(true)   // 重新拉清单，新的/改过的立刻出现在风格页
+      return res.message
+    },
+
+    /** 删除自定义人格；内置的「覆盖」删掉 = 恢复默认。 */
+    async removeVoice(id: string): Promise<string> {
+      const res = await api.deleteVoice(id)
+      await this.load(true)
+      return res.message
     },
 
     /**

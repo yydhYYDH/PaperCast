@@ -254,6 +254,46 @@ def test_unknown_channel_is_404(tmp_path: Path) -> None:
     assert getattr(excinfo.value, "status", 0) == 404
 
 
+def test_concurrent_publish_same_channel_is_409(tmp_path: Path) -> None:
+    """同一个 run+渠道在途时，第二次直投直接 409（防重复点，别同时开两个发布页）。"""
+    _, store, _ = make_run(tmp_path)
+
+    class SlowChannel(FakeChannel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def publish(self, m: Materials, *, confirmed: bool = False) -> Delivery:
+            self.started.set()
+            await self.release.wait()
+            return await super().publish(m, confirmed=confirmed)
+
+    slow = SlowChannel()
+
+    async def scenario() -> dict[str, Any]:
+        first = asyncio.ensure_future(direct_publish.publish_work(
+            store, store.run.id, "fake", confirmed=True, channels=[slow]))
+        await slow.started.wait()          # 确保第一次真的进了 publish、名额已被占
+        with pytest.raises(Exception) as excinfo:
+            await direct_publish.publish_work(
+                store, store.run.id, "fake", confirmed=True, channels=[slow])
+        assert getattr(excinfo.value, "status", 0) == 409
+        assert "正在投递" in str(excinfo.value)
+        assert slow.published == []        # 第二次一个字节都没发
+        slow.release.set()
+        return await first
+
+    result = asyncio.run(scenario())
+    assert result["status"] == "published"
+    assert len(slow.published) == 1
+    # 名额要释放：这次结束后再投一次应该照常成功
+    again = asyncio.run(direct_publish.publish_work(
+        store, store.run.id, "fake", confirmed=True, channels=[slow]))
+    assert again["status"] == "published"
+    assert len(slow.published) == 2
+
+
 def test_overrides_are_applied(tmp_path: Path) -> None:
     """界面改过的标题/正文/标签要真的生效（改完仍要重新过 supports，见下一个用例）。"""
     _, store, _ = make_run(tmp_path)

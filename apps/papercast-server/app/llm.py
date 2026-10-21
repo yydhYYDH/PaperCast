@@ -62,6 +62,66 @@ class LLMClient:
             h["x-opencode-session"] = self._session
         return h
 
+    def _raise_http(self, status: int, body: str) -> None:
+        code = "LLM_AUTH" if status in (401, 403) else (
+            "LLM_QUOTA" if status == 402 else "LLM_HTTP"
+        )
+        raise LLMError(code, f"{status} {body[:300]}")
+
+    async def _blocking(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, Optional[str]]:
+        """非流式请求：返回 (content, finish_reason)。"""
+        async with httpx.AsyncClient(timeout=self.settings.llm_timeout_sec) as cx:
+            resp = await cx.post(url, json=payload, headers=headers)
+        if resp.status_code >= 400:
+            self._raise_http(resp.status_code, resp.text)
+        choice = (resp.json().get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        return (msg.get("content") or "").strip(), choice.get("finish_reason")
+
+    async def _stream(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, Optional[str]]:
+        """流式请求：返回 (content, finish_reason)。
+
+        reasoning 模型（deepseek-v4.1-flash）回答前会先写 ~8k token 思维链，整段非流式请求
+        要静默等 40-60 秒；网关按空闲连接把它掐断，客户端只看到
+        `RemoteProtocolError: Server disconnected without sending a response`（2026-10-02 实测）。
+        流式边收边保活，绕开这个空闲超时。
+        """
+        body = {**payload, "stream": True}
+        parts: list[str] = []
+        finish: Optional[str] = None
+        async with httpx.AsyncClient(timeout=self.settings.llm_timeout_sec) as cx:
+            async with cx.stream("POST", url, json=body, headers=headers) as resp:
+                if resp.status_code >= 400:
+                    raw = (await resp.aread()).decode("utf-8", "replace")
+                    self._raise_http(resp.status_code, raw)
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    choice = (chunk.get("choices") or [{}])[0]
+                    finish = choice.get("finish_reason") or finish
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        parts.append(delta["content"])
+        return "".join(parts).strip(), finish
+
+    async def _once(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[str, Optional[str]]:
+        """发一次请求，优先流式；流式在连接层失败时退回非流式（兼容不认 stream 的网关）。"""
+        if getattr(self.settings, "llm_stream", True):
+            try:
+                return await self._stream(url, payload, headers)
+            except LLMError:
+                raise
+            except Exception:
+                pass
+        return await self._blocking(url, payload, headers)
+
     async def chat(
         self,
         system: str,
@@ -78,6 +138,7 @@ class LLMClient:
         cap = getattr(self.settings, "llm_max_tokens_cap", 0)
         if cap and budget > cap:
             budget = cap
+        ceiling = cap if cap else 64000
         payload: dict[str, Any] = {
             "model": self.settings.llm_model,
             "messages": [
@@ -92,27 +153,19 @@ class LLMClient:
 
         for attempt in range(retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=self.settings.llm_timeout_sec) as cx:
-                    resp = await cx.post(url, json=payload, headers=self._headers())
-                if resp.status_code >= 400:
-                    detail = resp.text[:300]
-                    code = "LLM_AUTH" if resp.status_code in (401, 403) else (
-                        "LLM_QUOTA" if resp.status_code == 402 else "LLM_HTTP"
+                content, finish = await self._once(url, payload, self._headers())
+                # reasoning 模型把预算花在思维链上：内容空、或被 finish_reason=="length" 截断时，
+                # 翻倍预算重来。**截断的 JSON 正是「模型输出不是合法 JSON」的根因**（2026-10-02 实测）。
+                if (not content or finish == "length") and budget < ceiling and attempt < retries:
+                    budget = min(budget * 2, ceiling)
+                    payload["max_tokens"] = budget
+                    last = LLMError(
+                        "LLM_TRUNCATED",
+                        "思维链占满 token，已加倍预算重试" if not content else "输出被 max_tokens 截断，已加倍预算重试",
                     )
-                    raise LLMError(code, f"{resp.status_code} {detail}")
-                data = resp.json()
-                choice = (data.get("choices") or [{}])[0]
-                msg = choice.get("message") or {}
-                content = (msg.get("content") or "").strip()
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
                 if not content:
-                    # reasoning 模型 token 花在思维链上：加倍预算重试一次
-                    finish = choice.get("finish_reason")
-                    if finish == "length" and budget < 64000 and attempt < retries:
-                        budget *= 2
-                        payload["max_tokens"] = budget
-                        last = LLMError("LLM_TRUNCATED", "思维链占满 token，已加倍预算重试")
-                        await asyncio.sleep(1.5 * (attempt + 1))
-                        continue
                     raise LLMError("LLM_EMPTY", f"模型返回空内容 finish_reason={finish}")
                 return content
             except LLMError as e:

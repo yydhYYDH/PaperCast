@@ -24,6 +24,55 @@ index cfa3f11..0a9386b 100644
  	}
  
  	// 初始化 MCP Server（需要在创建 appServer 之后，因为工具注册需要访问 appServer）
+diff --git a/configs/browser.go b/configs/browser.go
+index 09fbbbf..d5cf382 100644
+--- a/configs/browser.go
++++ b/configs/browser.go
+@@ -3,6 +3,7 @@ package configs
+ import (
+ 	"os"
+ 	"strconv"
++	"strings"
+ 
+ 	"github.com/sirupsen/logrus"
+ )
+@@ -10,6 +11,10 @@ import (
+ var (
+ 	useHeadless = true
+ 
++	// publishHeaded 让「发布」这类长流程用有头浏览器，方便人旁观投递过程。
++	// 默认关：无显示器的服务器上开有头会直接起不来。见 XHS_PUBLISH_HEADED。
++	publishHeaded = false
++
+ 	fingerprintSeed = 0
+ 
+ 	proxy = ""
+@@ -24,6 +29,25 @@ func IsHeadless() bool {
+ 	return useHeadless
+ }
+ 
++func InitPublishHeaded(h bool) {
++	publishHeaded = h
++}
++
++// PublishHeaded 发布流程是否用有头浏览器。
++func PublishHeaded() bool {
++	return publishHeaded
++}
++
++// PublishHeadedFromEnv 从 XHS_PUBLISH_HEADED 读取：1/true/on/yes 视为开。
++func PublishHeadedFromEnv() bool {
++	switch strings.ToLower(strings.TrimSpace(os.Getenv("XHS_PUBLISH_HEADED"))) {
++	case "1", "true", "on", "yes":
++		return true
++	default:
++		return false
++	}
++}
++
+ func SetFingerprintSeed(s int) {
+ 	fingerprintSeed = s
+ }
 diff --git a/go.mod b/go.mod
 index 74c4654..086874f 100644
 --- a/go.mod
@@ -73,17 +122,26 @@ index ca5eff6..65d3172 100644
  		respondError(c, http.StatusInternalServerError, "STATUS_CHECK_FAILED",
  			"检查登录状态失败", err.Error())
 diff --git a/main.go b/main.go
-index bbcbb62..47514a3 100644
+index bbcbb62..b99eb91 100644
 --- a/main.go
 +++ b/main.go
-@@ -18,14 +18,35 @@ func main() {
- 		headless bool
- 		port     string
- 		token    string
-+		authUser string
-+		authPass string
+@@ -15,17 +15,41 @@ var version = "dev"
+ 
+ func main() {
+ 	var (
+-		headless bool
+-		port     string
+-		token    string
++		headless      bool
++		publishHeaded bool
++		port          string
++		token         string
++		authUser      string
++		authPass      string
  	)
  	flag.BoolVar(&headless, "headless", true, "是否无头模式")
++	flag.BoolVar(&publishHeaded, "publish-headed", configs.PublishHeadedFromEnv(),
++		"发布流程是否用有头浏览器（能看到投递过程）；也可用 XHS_PUBLISH_HEADED=1")
  	flag.StringVar(&port, "port", ":18060", "端口")
 -	flag.StringVar(&token, "token", "", "鉴权 Token，留空则读取 AUTH_TOKEN")
 +	flag.StringVar(&token, "token", "", "鉴权 Token（机器客户端），留空则读取 AUTH_TOKEN")
@@ -113,7 +171,18 @@ index bbcbb62..47514a3 100644
  
  	logrus.Infof("xiaohongshu-mcp version: %s", version)
  
-@@ -47,7 +68,7 @@ func main() {
+@@ -37,6 +61,10 @@ func main() {
+ 	logrus.Infof("using browser binary: %s", binPath)
+ 
+ 	configs.InitHeadless(headless)
++	configs.InitPublishHeaded(publishHeaded)
++	if publishHeaded {
++		logrus.Infof("发布流程使用有头浏览器（XHS_PUBLISH_HEADED）")
++	}
+ 	// 入口层解析出 seed 和代理，经 configs 透传给浏览器工厂。
+ 	// seed 取值：环境变量 > 会话文件 > 新生成并写回，保证同一账号每次启动一致。
+ 	configs.SetFingerprintSeed(configs.ResolveFingerprintSeed(
+@@ -47,7 +75,7 @@ func main() {
  	xiaohongshuService := NewXiaohongshuService()
  
  	// 创建并启动应用服务器
@@ -368,7 +437,7 @@ index 4a07208..e3bb8bc 100644
  	request := httptest.NewRequest(http.MethodPost, "/mcp",
  		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
 diff --git a/service.go b/service.go
-index 499b216..3410ca5 100644
+index 499b216..d0b2488 100644
 --- a/service.go
 +++ b/service.go
 @@ -60,6 +60,9 @@ type PublishResponse struct {
@@ -503,18 +572,20 @@ index 499b216..3410ca5 100644
  	}
  
  	return response, nil
-@@ -270,8 +344,9 @@ func (s *XiaohongshuService) processImages(images []string) ([]string, error) {
+@@ -270,9 +344,10 @@ func (s *XiaohongshuService) processImages(images []string) ([]string, error) {
  	return processor.ProcessImages(images)
  }
  
 -// publishContent 执行内容发布
 -func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohongshu.PublishImageContent) error {
+-	b := newBrowser()
 +// publishContent 执行内容发布，成功后再找回这条笔记的 id 与公开地址。
 +// 地址拿不到不算失败（我的笔记列表有刷新延迟），只是回执里没有链接。
 +func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohongshu.PublishImageContent) (noteID, noteURL string, err error) {
- 	b := newBrowser()
++	b := newBrowserForPublish()
  	defer b.Close()
  
+ 	page := b.NewPage()
 @@ -280,10 +355,14 @@ func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohon
  
  	action, err := xiaohongshu.NewPublishImageAction(page)
@@ -542,7 +613,7 @@ index 499b216..3410ca5 100644
  		return nil, err
  	}
  
-@@ -345,12 +425,14 @@ func (s *XiaohongshuService) PublishVideo(ctx context.Context, req *PublishVideo
+@@ -345,13 +425,15 @@ func (s *XiaohongshuService) PublishVideo(ctx context.Context, req *PublishVideo
  		Content: req.Content,
  		Video:   req.Video,
  		Status:  "发布完成",
@@ -554,11 +625,13 @@ index 499b216..3410ca5 100644
  
 -// publishVideo 执行视频发布
 -func (s *XiaohongshuService) publishVideo(ctx context.Context, content xiaohongshu.PublishVideoContent) error {
+-	b := newBrowser()
 +// publishVideo 执行视频发布，成功后再找回这条笔记的 id 与公开地址（同图文）。
 +func (s *XiaohongshuService) publishVideo(ctx context.Context, content xiaohongshu.PublishVideoContent) (noteID, noteURL string, err error) {
- 	b := newBrowser()
++	b := newBrowserForPublish()
  	defer b.Close()
  
+ 	page := b.NewPage()
 @@ -359,10 +441,14 @@ func (s *XiaohongshuService) publishVideo(ctx context.Context, content xiaohongs
  
  	action, err := xiaohongshu.NewPublishVideoAction(page)
@@ -576,28 +649,95 @@ index 499b216..3410ca5 100644
  }
  
  // ListFeeds 获取Feeds列表
-@@ -617,7 +703,11 @@ func (s *XiaohongshuService) ReplyNotification(ctx context.Context, commentID, c
+@@ -617,8 +703,23 @@ func (s *XiaohongshuService) ReplyNotification(ctx context.Context, commentID, c
  	return xiaohongshu.NewNotificationAction(page).Reply(ctx, commentID, content)
  }
  
 +// newBrowser 是所有业务操作的唯一浏览器入口，因此在这里统一记访问预算。
 +// 不改签名是为了不动 19 个调用点；超限由 accessBudgetMiddleware 在入口拦截。
  func newBrowser() *headless_browser.Browser {
+-	return browser.NewBrowser(configs.IsHeadless(),
++	return newBrowserWith(configs.IsHeadless())
++}
++
++// newBrowserForPublish 发布流程专用：XHS_PUBLISH_HEADED=1 时用有头浏览器，
++// 让人能看到投递过程；其余情况与普通浏览器完全一致（默认无头）。
++func newBrowserForPublish() *headless_browser.Browser {
++	return newBrowserWith(configs.IsHeadless() && !configs.PublishHeaded())
++}
++
++// newBrowserWith 是浏览器工厂的唯一入口，在这里统一记访问预算（见 guard.go）。
++func newBrowserWith(headless bool) *headless_browser.Browser {
 +	xhsBudget.Record()
 +
- 	return browser.NewBrowser(configs.IsHeadless(),
++	return browser.NewBrowser(headless,
  		browser.WithFingerprintSeed(configs.FingerprintSeed()),
  		browser.WithProxy(configs.Proxy()),
+ 	)
 diff --git a/xiaohongshu/publish.go b/xiaohongshu/publish.go
-index 96fe7a1..2774dc0 100644
+index 96fe7a1..c826e52 100644
 --- a/xiaohongshu/publish.go
 +++ b/xiaohongshu/publish.go
-@@ -734,14 +734,17 @@ func inputTag(ctx context.Context, contentElem *rod.Element, tag string) error {
+@@ -38,11 +38,19 @@ const (
+ 
+ 	// contentElemTimeout 查找正文输入框的轮询窗口
+ 	contentElemTimeout = 10 * time.Second
++
++	// publishDeadline 一次发布（图文/视频）的页面总预算。**必须小于**后端
++	// HttpChannel.publish_timeout（apps/papercast-server/app/channels/base.py，现为 480s）：
++	// 后端先到点就会断开连接、把这里正在跑的浏览器操作取消成 context canceled，
++	// 我们反而拿不到「发布未确认成功」这种能定位问题的结论（2026-09-23 实测）。
++	// 发布之后还会 best-effort 找回笔记地址（FindMyNote，最长 60s），所以留的余量要
++	// 大于 60s：360 + 60 = 420 < 480。实测正常发布约 4.5 分钟（845 字逐字拟人输入 + 7 张图）。
++	publishDeadline = 360 * time.Second
+ )
+ 
+ func NewPublishImageAction(page *rod.Page) (*PublishAction, error) {
+ 
+-	pp := page.Timeout(300 * time.Second)
++	pp := page.Timeout(publishDeadline)
+ 
+ 	if err := pp.Navigate(urlOfPublic); err != nil {
+ 		return nil, errors.Wrap(err, "导航到发布页面失败")
+@@ -75,8 +83,8 @@ func (p *PublishAction) Publish(ctx context.Context, content PublishImageContent
+ 		return errors.New("图片不能为空")
+ 	}
+ 
+-	// 重设超时：.Context(ctx) 会替换掉 NewPublishImageAction 里 Timeout(300s) 的 deadline
+-	page := p.page.Context(ctx).Timeout(300 * time.Second)
++	// 重设超时：.Context(ctx) 会替换掉 NewPublishImageAction 里 Timeout(publishDeadline) 的 deadline
++	page := p.page.Context(ctx).Timeout(publishDeadline)
+ 
+ 	if err := uploadImages(page, content.ImagePaths); err != nil {
+ 		return errors.Wrap(err, "小红书上传图片失败")
+@@ -584,12 +592,18 @@ func clickPublishWidget(page *rod.Page, widget *rod.Element) error {
+ 	return nil
+ }
+ 
+-// waitAndClickTitleInput 在填写正文后等待 1 秒并回点标题输入框，增强后续交互稳定性
++// waitAndClickTitleInput 在填写正文后等待 1 秒并回点标题输入框，增强后续交互稳定性。
++//
++// 这一步是**可选**的：标题框此刻可能被浮层挡住，而 humanize.Click 里的 WaitInteractable
++// 对「被遮挡」会一直重试到页面 deadline，把整个发布预算耗光（2026-09-23 实测两次发布都死在
++// 这里，最终只报一句看不懂的 context canceled）。所以给它一个短预算，点不动就记一笔跳过，
++// 绝不因此中止发布。
+ func waitAndClickTitleInput(titleElem *rod.Element) error {
+ 	slog.Info("正文填写完成，准备等待后回点标题输入框")
+ 	time.Sleep(1 * time.Second)
+-	if err := humanize.Click(titleElem); err != nil {
+-		return errors.Wrap(err, "回点标题输入框失败")
++	if err := humanize.Click(titleElem.Timeout(3 * time.Second)); err != nil {
++		slog.Warn("回点标题输入框失败，跳过（不影响继续发布）", "err", err)
++		return nil
+ 	}
+ 	slog.Info("已回点标题输入框，继续后续发布流程")
+ 	return nil
+@@ -734,14 +748,17 @@ func inputTag(ctx context.Context, contentElem *rod.Element, tag string) error {
  
  	time.Sleep(1 * time.Second) // 技术等待：等联想结果刷新
  
 +	// 联想框查找必须自带短超时：rod 的 Element 会一直等到 page 的 deadline，
-+	// 而发布页的 deadline 是 300s（见 NewPublishImageAction）。标签没有联想项时，
++	// 而发布页的 deadline 是 publishDeadline（见 NewPublishImageAction）。标签没有联想项时，
 +	// 这一句会把整个发布预算耗光，最后只报一句看不懂的 context canceled。
  	page := contentElem.Page()
 -	topicContainer, err := page.Element("#creator-editor-topic-container")
@@ -612,6 +752,30 @@ index 96fe7a1..2774dc0 100644
  	if err != nil || firstItem == nil {
  		slog.Warn("未找到标签联想选项，直接输入空格", "tag", tag)
  		return humanize.Type(ctx, contentElem, " ")
+diff --git a/xiaohongshu/publish_video.go b/xiaohongshu/publish_video.go
+index 0e74d75..105db0f 100644
+--- a/xiaohongshu/publish_video.go
++++ b/xiaohongshu/publish_video.go
+@@ -25,7 +25,7 @@ type PublishVideoContent struct {
+ 
+ // NewPublishVideoAction 进入发布页并切换到"上传视频"
+ func NewPublishVideoAction(page *rod.Page) (*PublishAction, error) {
+-	pp := page.Timeout(300 * time.Second)
++	pp := page.Timeout(publishDeadline)
+ 
+ 	if err := pp.Navigate(urlOfPublic); err != nil {
+ 		return nil, errors.Wrap(err, "导航到发布页面失败")
+@@ -57,8 +57,8 @@ func (p *PublishAction) PublishVideo(ctx context.Context, content PublishVideoCo
+ 		return errors.New("视频不能为空")
+ 	}
+ 
+-	// 重设超时：.Context(ctx) 会替换掉 NewPublishVideoAction 里 Timeout(300s) 的 deadline
+-	page := p.page.Context(ctx).Timeout(300 * time.Second)
++	// 重设超时：.Context(ctx) 会替换掉 NewPublishVideoAction 里 Timeout(publishDeadline) 的 deadline
++	page := p.page.Context(ctx).Timeout(publishDeadline)
+ 
+ 	if err := uploadVideo(page, content.VideoPath); err != nil {
+ 		return errors.Wrap(err, "小红书上传视频失败")
 diff --git a/xiaohongshu/user_profile.go b/xiaohongshu/user_profile.go
 index 61216c7..45f3539 100644
 --- a/xiaohongshu/user_profile.go
@@ -654,3 +818,90 @@ index 61216c7..45f3539 100644
  func (u *UserProfileAction) GetMyProfileViaSidebar(ctx context.Context, tab ProfileTab) (*UserProfileResponse, error) {
  	page := u.page.Context(ctx).Timeout(60 * time.Second) // 重设被 .Context 清掉的 deadline
  
+diff --git a/xiaohongshu/comment_feed.go b/xiaohongshu/comment_feed.go
+index 1bc6ff4..f6c3c07 100644
+--- a/xiaohongshu/comment_feed.go
++++ b/xiaohongshu/comment_feed.go
+@@ -3,6 +3,7 @@ package xiaohongshu
+ import (
+ 	"context"
+ 	"fmt"
++	"strings"
+ 	"time"
+ 
+ 	"github.com/go-rod/rod"
+@@ -77,7 +78,8 @@ func (f *CommentFeedAction) PostComment(ctx context.Context, feedID, xsecToken,
+ 	humanize.Delay(ctx, humanize.AfterClick)
+ 
+ 	// 就地校验：提交后评论应在评论区渲染出现；未出现则判定失败，避免假成功。
+-	if !waitCommentRendered(page, content, 4*time.Second) {
++	// 8 秒：给评论列表刷新留足时间；短了会把「已发出但还没渲染」误判成失败
++	if !waitCommentRendered(page, content, 8*time.Second) {
+ 		logrus.Warnf("评论提交后未在评论区渲染，判定未成功: feed=%s", feedID)
+ 		return fmt.Errorf("评论未确认成功：提交后未在评论区出现（可能账号被限制或发送失败），feed: %s", feedID)
+ 	}
+@@ -86,13 +88,28 @@ func (f *CommentFeedAction) PostComment(ctx context.Context, feedID, xsecToken,
+ 	return nil
+ }
+ 
++// normalizeCommentText 去掉全部空白后再比较：小红书会把评论里的换行/空格重新排版
++// （实测发带换行的多行评论，页面渲染成一行），按原文 includes 会判否。
++func normalizeCommentText(s string) string {
++	return strings.Join(strings.Fields(s), "")
++}
++
+ // commentRendered 就地读当前页评论区 DOM，判断指定文本的评论是否已渲染出现。
+ // 不重新导航、不滚动——只读已加载的 .comments-container 的可见文本。
++//
++// 两边都去掉空白再比：旧实现按原文 includes，一次带换行的评论**其实发成功了**，
++// 却因页面排版把换行吃掉而判失败 —— 接口回「发表评论失败」，调用方一重试就发重
++// （2026-10-02 实测，帖子下出现重复评论）。
+ func commentRendered(page *rod.Page, content string) bool {
++	want := normalizeCommentText(content)
++	if want == "" {
++		return true
++	}
+ 	res, err := page.Eval(`(txt) => {
+ 		const c = document.querySelector('.comments-container');
+-		return c ? c.innerText.includes(txt) : false;
+-	}`, content)
++		if (!c) return false;
++		return c.innerText.replace(/\s+/g, '').includes(txt);
++	}`, want)
+ 	if err != nil {
+ 		return false
+ 	}
+@@ -181,7 +198,7 @@ func (f *CommentFeedAction) ReplyToComment(ctx context.Context, feedID, xsecToke
+ 	humanize.Delay(ctx, humanize.AfterClick)
+ 
+ 	// 就地校验：回复应在评论区渲染出现，否则判定未成功。
+-	if !waitCommentRendered(page, content, 4*time.Second) {
++	if !waitCommentRendered(page, content, 8*time.Second) {
+ 		logrus.Warnf("回复提交后未在评论区渲染，判定未成功: feed=%s", feedID)
+ 		return fmt.Errorf("回复未确认成功：提交后未在评论区出现（可能账号被限制或发送失败）")
+ 	}
+diff --git a/xiaohongshu/comment_feed_test.go b/xiaohongshu/comment_feed_test.go
+new file mode 100644
+index 0000000..ec4711c
+--- /dev/null
++++ b/xiaohongshu/comment_feed_test.go
+@@ -0,0 +1,19 @@
++package xiaohongshu
++
++import "testing"
++
++// 评论校验前的归一化：去掉全部空白，避免平台重排换行导致「已发出却判失败」。
++func TestNormalizeCommentText(t *testing.T) {
++	cases := []struct{ in, want string }{
++		{"a\nb", "ab"},
++		{"论文 arXiv 2610.02162\nhttps://arxiv.org/abs/2610.02162", "论文arXiv2610.02162https://arxiv.org/abs/2610.02162"},
++		{"  多  空  格  ", "多空格"},
++		{"", ""},
++		{"\n\t ", ""},
++	}
++	for _, c := range cases {
++		if got := normalizeCommentText(c.in); got != c.want {
++			t.Errorf("normalizeCommentText(%q) = %q, want %q", c.in, got, c.want)
++		}
++	}
++}

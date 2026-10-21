@@ -40,7 +40,6 @@ const CHANNELS = [
 ]
 
 const targets = computed(() => props.run.config.publish.targets)
-const gate = computed(() => stage.value?.gate)
 
 function stateOf(id: string) {
   return platforms.channel(normalizeChannelId(id))?.state
@@ -88,15 +87,6 @@ onMounted(() => {
         <span v-if="blocked.length" class="chip warn"><i class="dot" />{{ blocked.length }} 个渠道未就绪</span>
         <div class="grow" />
         <button class="btn sm" @click="platforms.refresh(true)">刷新渠道状态</button>
-        <button
-          v-if="gate && stage.status === 'waiting'"
-          class="btn primary sm"
-          :disabled="!canConfirm"
-          :title="canConfirm ? '发布前请确认产物无误' : '勾选的渠道全都没就绪：先完成扫码登录 / 配置凭证'"
-          @click="store.confirm('publish', 'continue')"
-        >
-          确认发布
-        </button>
       </div>
 
       <p v-if="materialOnly.length" class="muted">
@@ -130,12 +120,12 @@ onMounted(() => {
 
       <div class="gate-card">
         <div class="row spread">
-          <strong class="g-title">人工闸门：发布不可全自动</strong>
+          <strong class="g-title">人工闸门：这一轮只落草稿</strong>
           <span class="chip warn" v-if="stage.status === 'waiting'"><i class="dot" />等待中</span>
         </div>
         <p class="panel-sub">
-          上游三份产物（长文 / 海报 / 视频）会先落入本地产物目录，只有闸门放行后才向平台投递；
-          投递前会二次确认账号与素材，登录态只在闸门放行后被动用，未登录时按钮不可点。
+          产物先落入本地产物目录，这一轮不会向任何平台投递（流水线里已不提供「确认发布」）。
+          要真的发出去，去作品库点「发布这一件」——那里会二次确认账号与素材，发布不可逆。
         </p>
         <div class="row wrap">
           <button class="btn" @click="store.confirm('publish', 'draft')">仅存草稿</button>

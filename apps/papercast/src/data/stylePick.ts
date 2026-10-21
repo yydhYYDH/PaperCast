@@ -102,3 +102,36 @@ export function styleLabel(variant: string, styles: StyleOption[]): string {
   const hit = styles.find((s) => s.variant === variant)
   return hit ? hit.platformLabel + ' · ' + hit.short : variant
 }
+
+/** 发布目标（渠道 id / 别名）→ 文案平台 id。与后端 models._TARGET_PLATFORM 同一套对应。 */
+const TARGET_TO_PLATFORM: Record<string, string> = {
+  xhs: 'xhs', xiaohongshu: 'xhs',
+  zhihu: 'zhihu',
+  bilibili: 'bilibili',
+  x: 'en', twitter: 'en', en: 'en',
+}
+
+export function platformsOfTargets(targets: string[]): string[] {
+  const out: string[] = []
+  for (const t of targets) {
+    const p = TARGET_TO_PLATFORM[t.trim().toLowerCase()]
+    if (p && !out.includes(p)) out.push(p)
+  }
+  return out
+}
+
+/**
+ * 只保留发布目标平台内的变体（2026-09-23）。
+ *
+ * 风格页勾的变体存在 localStorage，会跟着每次提交一起发过来；后端也会裁，
+ * 但前端得先裁一次，否则界面上写着「会生成知乎」而实际没有，等于骗人。
+ * targets 为空 = 用全部渠道，不裁。
+ */
+export function constrainVariantsToTargets(variants: string[], targets: string[]): string[] {
+  const allowed = platformsOfTargets(targets)
+  if (!allowed.length) return variants
+  return variants.filter((v) => {
+    const p = splitVariant(v)?.platform ?? ''
+    return allowed.includes(p)
+  })
+}

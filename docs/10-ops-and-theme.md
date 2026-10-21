@@ -335,20 +335,25 @@ node ops/shot/interactions_check.mjs                            # 真界面：�
 还是以临床医生的判断为准。」—— 没有编数字、没有时间承诺。
 
 
-## 14. Agent 审核 + 个性化风格层（2026-09-19）
+## 14. 个性化风格层（2026-09-19）；Agent 审核已下线（2026-09-23）
 
-**Agent 审核**（前端流程的第七步，`apps/papercast/src/review.ts`）
+> **Agent 审核那一步已按用户要求去掉（2026-09-23）**：`apps/papercast/src/review.ts` 已删除，
+> 右侧名单不再有第七行「审核」、对话里不再有 `#m-review`、闸门上方不再有汇总句。
+> 下方 2026-09-19 的原始记录仅作历史留档，不再是现状。
+
+<details><summary>历史：Agent 审核（已下线）</summary>
+
+**Agent 审核**（前端流程的第七步，原 `apps/papercast/src/review.ts`）
 
 - 位置在「六个产出环节之后、人工闸门之前」：右侧「谁在干活」多出第七行 **审核**，对话里多出一条
   `#m-review`（提醒：它不是后端 stage，`id: 'review'` 只是滚动锚点）；
-- 数据来源是后端每个阶段**真实落盘的** `stage.checks`（这次是 43 项），再补两条前端交叉检查
-  （事实源 `understand/digest.json` 在不在、走完的环节有没有产物）—— 汇总成一句可复核的话：
-  `Agent 审核已经通过。我把这批东西对着事实源核了一遍：核了 43 项：38 项通过，5 项是说明，没有发现要改的。`
+- 数据来源是后端每个阶段**真实落盘的** `stage.checks`，再补两条前端交叉检查
+  （事实源 `understand/digest.json` 在不在、走完的环节有没有产物）—— 汇总成一句可复核的话；
 - **人工审核时那一句**：闸门上方渲染 `Agent 审核已经通过 · 核了 N 项…`；没通过就如实写
   「Agent 审核没通过：N 项要你决定（…）」，并把要处理的项列在闸门上方；
-- 还在跑时**不提前说通过**（只说「先把已经出来的部分核了一遍…收齐了我再核一次」）——
-  `settled` 这个门就是为这句话设的；
-- 结论句在**两处是同一个字符串**（`reviewRun().line`）：审核消息和闸门上方，避免各写一份而漂移。
+- 结论句在**两处是同一个字符串**（`reviewRun().line`）：审核消息和闸门上方。
+
+</details>
 
 **个性化层：风格技能**（`src/stores/style.ts`、`src/views/StyleView.vue`、后端 `app/skills_api.py`）
 
@@ -364,8 +369,16 @@ node ops/shot/interactions_check.mjs                            # 真界面：�
 - 输入框下面那一行「风格：xxx · 它决定这一轮文章的语气、海报的排版，会写进本次运行的 brief」
   随时能点进风格页，**没有藏进设置**；选择只存浏览器 `localStorage`（`papercast.style`），不进 git。
 
-核验：`node ops/shot/review_style_check.mjs`（第七行 + #m-review 结论句 + 检查项 pill + 风格页 6 个技能 +
-SKILL.md 原文 4695 字符 + 换风格落 localStorage 并显示在输入框 + 控制台 0 错误），
+**文章风格可增删改**（2026-09-23，`app/styles_api.py`）：风格页的「口吻」不再只读 ——
+`GET/POST/PATCH/DELETE /api/styles/voices[/{id}]` 支持新建 / 编辑 / 删除。内置人格（`styles.VOICES`）
+是只读真源，用户改动落 `var/styles/voices.json`（不进 git），读取时**合并**：同 id 覆盖内置
+（等于「改了内置这条」，删掉即恢复默认），新 id 是自定义。id 必须匹配 `^[a-z0-9]+(-[a-z0-9]+)*$`
+且不能和平台同名；提示词正文 ≤4000 字。改的是「口吻」这一层，平台硬约束（长度 / 公式 / 标签）
+不归它管 —— 自定义人格会经 `styles.voice_spec()` 真进 `prompts.article_system()`。
+
+核验：`node ops/shot/review_style_check.mjs`（**断言审核那一步确实没了**：名单无「审核」行、无
+`#m-review`、无检查项、闸门上方无汇总句；+ 风格页技能 + SKILL.md 原文 + 换风格落 localStorage
+并显示在输入框 + 控制台 0 错误），
 `npx vue-tsc --noEmit` 干净，`ops/check_api_contract.py` 34 条路由 / 26 处调用双向对上。
 
 > 本轮踩到并已写进技能的两处运维坑：① Vite dev server 的 HMR 会陈旧 —— 页面报

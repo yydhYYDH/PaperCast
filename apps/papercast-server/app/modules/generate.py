@@ -53,6 +53,28 @@ def _brief_of(ctx) -> str:
     return (getattr(cfg, "brief", "") or "").strip()
 
 
+def _deck_will_replace_cards(ctx) -> bool:
+    """组图（guizang）会不会接管小红书的图？会就别再画一遍 PIL 卡片。
+
+    两个条件都要满足才算「会」：
+      · 组图本身能跑（`poster_deck` = on/auto 且技能已装，见 cards_deck.enabled）；
+      · 小红书在发布目标里（组图只为 xhs 跑，见 poster_stage._run_deck 的 `"xhs" in enabled`）。
+
+    为什么值得省：这两套图用的是**同一批原图、同一批已核过数字**，只是排版不同，
+    而投递只认组图（`publish._deck_images` 优先于 `article/cards`）。多画的那 6 张
+    没人看，白烧 CPU 与一次 LLM 卡片文案的 token。
+    """
+    from ..models import enabled_platforms
+    from . import cards_deck
+
+    try:
+        if not cards_deck.enabled(getattr(ctx.settings, "poster_deck", "auto")):
+            return False
+        return "xhs" in enabled_platforms(getattr(ctx.run, "config", None))
+    except Exception:
+        return False            # 判不出来就照旧渲染，绝不因为判断失败而少交付东西
+
+
 def brief_checks(ctx, brief: str, label: str, text: str, spec: Any = None) -> None:
     """把用户指令里「能判定的部分」变成 check 行；判定不了的如实标 run，不装作检查过。
 
@@ -186,6 +208,17 @@ def _condense(md: str, limit: int = 120_000) -> str:
     return head + "\n\n<!-- 中间章节因原文过长已省略 -->\n\n" + tail
 
 
+def _strip_article_attribution(body: str) -> str:
+    """文章模式下清掉模型仍可能加的「—— 论文：<标题>」这类署名/引用行（prompt 拦不干净）。"""
+    kept = []
+    for ln in body.splitlines():
+        probe = ln.strip().lstrip("—-–—·* \t")
+        if probe.startswith(("论文：", "论文:")):
+            continue
+        kept.append(ln)
+    return "\n".join(kept).strip()
+
+
 def _truncate_body(body: str, limit: int = 1000) -> str:
     body = body.strip()
     if len(body) <= limit:
@@ -260,6 +293,75 @@ def _build_digest(raw: dict, figures: list[dict], meta: dict, run_title: str, ha
     return digest, warnings
 
 
+# --------------------------------------------------------------------------- #
+# 非论文源：传播事实源（知乎/长文 → 小红书）
+# --------------------------------------------------------------------------- #
+
+def _is_article_run(ctx: StageContext) -> bool:
+    return getattr(ctx.run.source, "kind", "") in ("zhihu", "url")
+
+
+def _build_article_digest(raw: dict, figures: list[dict], meta: dict, run_title: str) -> PaperDigest:
+    """把传播提炼结果塞进 PaperDigest 的字段（保持 run 模型与仪表盘稳定）：
+    abstractCn=导读、contributions=传播要点、method=内容主线/金句、results=可引用事实。"""
+    fig_by_id = {f["id"]: f for f in figures}
+    picks = [i for i in (raw.get("figurePicks") or []) if i in fig_by_id][:6] or [f["id"] for f in figures[:6]]
+    key_facts = []
+    for r in raw.get("keyFacts") or []:
+        if isinstance(r, dict) and str(r.get("label", "")).strip():
+            key_facts.append({
+                "label": str(r.get("label", "")).strip(),
+                "value": str(r.get("value", "")).strip(),
+                "note": str(r.get("note", "")).strip(),
+            })
+    quotes = [str(q).strip() for q in (raw.get("quotes") or []) if str(q).strip()]
+    guide = str(raw.get("guide", "")).strip()
+    return PaperDigest(
+        title=meta.get("title") or run_title,
+        abstractCn=guide,
+        keywords=[str(k).strip() for k in (raw.get("keywords") or []) if str(k).strip()][:10],
+        contributions=[str(c).strip() for c in (raw.get("hookPoints") or []) if str(c).strip()][:6],
+        method="\n".join(quotes)[:2000] or guide,
+        results=key_facts[:10],
+        figures=[
+            {"id": i, "caption": fig_by_id[i].get("caption", "")[:300], "source": fig_by_id[i]["file"]}
+            for i in picks
+        ],
+        limitations=[],
+        stagesNote=str(raw.get("stagesNote", "")).strip(),
+    )
+
+
+async def _understand_article(ctx: StageContext, meta: dict, figures: list[dict], content: str) -> PaperDigest:
+    source_name = "知乎"
+    zh = meta.get("zhihu") if isinstance(meta.get("zhihu"), dict) else {}
+    if zh.get("author"):
+        source_name = f"知乎 · {zh['author']}"
+    title = meta.get("title") or ctx.run.title
+    ctx.log("info", "文章传播链路：用传播提炼提示词生成事实源（不走论文 digest）")
+    try:
+        raw = await ctx.llm.chat_json(
+            prompts.ARTICLE_DIGEST_SYSTEM,
+            prompts.article_digest_user(title, source_name, figures, content, _brief_of(ctx)),
+            max_tokens=8000,
+        )
+    except Exception as e:
+        raise GenerateError("LLM_ARTICLE_DIGEST_FAILED", f"传播事实源生成失败：{e}") from e
+    if not isinstance(raw, dict):
+        raise GenerateError("LLM_BAD_DIGEST", "模型返回的传播事实源不是 JSON 对象")
+
+    digest = _build_article_digest(raw, figures, meta, ctx.run.title)
+    ctx.run.digest = digest
+    (ctx.work / "digest.json").write_text(digest.model_dump_json(indent=1), encoding="utf-8")
+    (ctx.work / "digest.raw.json").write_text(json.dumps(raw, ensure_ascii=False, indent=1), encoding="utf-8")
+    ctx.artifact("json", "digest.json（传播事实源）", "digest.json", preview=True)
+    ctx.artifact("json", "模型原始输出 digest.raw.json", "digest.raw.json", preview=False)
+    ctx.check("传播点提炼", "pass" if digest.contributions else "fail", f"{len(digest.contributions)} 个传播要点")
+    ctx.check("可引用事实", "pass" if digest.results else "run", f"{len(digest.results)} 条事实/数字")
+    ctx.check("配图选择", "pass" if digest.figures else "run", f"选定 {len(digest.figures)} 张原文图")
+    return digest
+
+
 async def run_understand(ctx: StageContext) -> None:
     data = ctx.shared.get("intake")
     if not data:
@@ -271,6 +373,13 @@ async def run_understand(ctx: StageContext) -> None:
 
     if not ctx.llm.available:
         raise GenerateError("LLM_NOT_CONFIGURED", "没有可用的 LLM 凭据，无法生成内容（见 docs/05-deployment.md）")
+
+    # 非论文源（知乎/长文）走单独的传播链路：不用论文 digest，也不做论文式数值回溯。
+    if _is_article_run(ctx):
+        await _understand_article(ctx, meta, figures, content)
+        ctx.progress(1.0)
+        ctx.log("ok", "理解层就绪（文章传播事实源）")
+        return
 
     revise_note = ""
     digest: PaperDigest | None = None
@@ -348,23 +457,9 @@ async def run_understand(ctx: StageContext) -> None:
                 ctx.check("精读笔记", "run", "两次生成均失败（上游长请求被断开）；事实源与新媒链路不受影响")
                 ctx.log("warn", "精读笔记未产出，已记 check=run（不阻塞小红书链路）")
 
-        chosen = await ctx.gate(
-            "digest",
-            "确认论文理解层",
-            "下游小红书图文的数字与结论全部由这份事实源派生，确认贡献点与关键数据无误后再放行。",
-            [
-                ("continue", "确认并继续", None),
-                ("revise", "补充要点后重跑", "填写的批注会追加进理解层提示词，重新生成事实源"),
-            ],
-        )
-        if chosen == "revise":
-            revise_note = ctx.gate_note()
-            if not revise_note:
-                ctx.log("warn", "选择重跑但没有填写批注，按原样重跑一轮")
-            else:
-                ctx.log("info", f"收到人工批注：{revise_note[:120]}")
-            ctx.stage.gate = None
-            continue
+        # 理解层的「确认论文理解层」人工闸门已按用户要求去掉（2026-09-23）：
+        # digest 是唯一事实源，但不再停下来等人工确认，生成完直接交给下游。
+        # 下游的 publish 闸门仍是唯一的人工确认点（且已默认只存草稿）。
         break
 
     ctx.progress(1.0)
@@ -441,6 +536,7 @@ async def run_article(ctx: StageContext) -> None:
     card_errors: list[str] = []
     n = len(variants)
     failures: list[str] = []
+    article_mode = _is_article_run(ctx)
 
     for idx, (platform, voice) in enumerate(variants):
         spec = styles.platform_spec(platform)
@@ -450,7 +546,7 @@ async def run_article(ctx: StageContext) -> None:
                 # 卡片与人格无关（同一批图），只在第一个 xhs 变体时渲染，其余复用
                 cards = await _gen_xhs_variant(
                     ctx, spec, voice, digest, digest_json, data, figures, fig_by_id,
-                    render_cards=not made_cards, export=(idx == 0),
+                    render_cards=not made_cards, export=(idx == 0), article_mode=article_mode,
                 )
                 if cards:
                     made_cards = cards
@@ -502,16 +598,25 @@ async def run_article(ctx: StageContext) -> None:
 async def _gen_xhs_variant(
     ctx: StageContext, spec: "styles.PlatformSpec", voice: str, digest: PaperDigest,
     digest_json: str, data: dict, figures: list[dict], fig_by_id: dict, *,
-    render_cards: bool, export: bool,
+    render_cards: bool, export: bool, article_mode: bool = False,
 ) -> list[str]:
-    """小红书图文变体：JSON 结构输出 + 标题计重 + 去公式 + 数字回溯 + 3:4 卡片。"""
+    """小红书图文变体：JSON 结构输出 + 标题计重 + 去公式 + 数字回溯 + 3:4 卡片。
+
+    article_mode=True（知乎/长文）：用传播写法，并把原文一并喂给模型核对细节。
+    """
     label = styles.variant_label("xhs", voice)
     stem = "xhs" if voice == styles.DEFAULT_VOICE else f"xhs-{voice}"
-    ctx.log("info", f"调用 LLM 生成「{label}」文案（JSON 结构）…")
+    ctx.log("info", f"调用 LLM 生成「{label}」文案（JSON 结构{' · 文章传播模式' if article_mode else ''}）…")
+    source = ""
+    if isinstance(data.get("meta", {}).get("zhihu"), dict):
+        source = "知乎 · " + (data["meta"]["zhihu"].get("author") or "文章")
     try:
         raw = await ctx.llm.chat_json(
-            prompts.article_system("xhs", voice),
-            prompts.article_user(digest.title, digest_json, figures, _brief_of(ctx)),
+            prompts.article_system("xhs", voice, article_mode=article_mode),
+            prompts.article_user(
+                digest.title, digest_json, figures, _brief_of(ctx),
+                article_mode=article_mode, content_md=data.get("markdown", ""), source=source,
+            ),
             max_tokens=16000,
         )
     except Exception as e:
@@ -553,6 +658,8 @@ async def _gen_xhs_variant(
     if dropped_nums:
         ctx.log("warn", f"{label} 删除含无法回溯数字的句子，涉及数字：{sorted(set(dropped_nums))[:8]}")
     body = _truncate_body(body, spec.body_max)
+    if article_mode:
+        body = _strip_article_attribution(body)
 
     tags: list[str] = []
     for t in raw.get("tags") or []:
@@ -626,10 +733,14 @@ async def _gen_xhs_variant(
     brief_checks(ctx, _brief_of(ctx), label, f"{recommended}\n{body}", spec)
 
     made_cards: list[str] = []
-    if render_cards and ctx.settings.cards_enabled:
+    if render_cards and ctx.settings.cards_enabled and not _deck_will_replace_cards(ctx):
         ctx.log("info", f"渲染 {len(picks)} 张卡片（1080×1440）…")
-        series = f"论文速读 · {digest.arxivId or digest.venue or 'arXiv'}"
-        source_note = f"{digest.title[:60]} · {digest.authors[0] if digest.authors else ''}"
+        if article_mode:
+            series = f"文章速读 · {source or '知乎'}"
+            source_note = digest.title[:60]
+        else:
+            series = f"论文速读 · {digest.arxivId or digest.venue or 'arXiv'}"
+            source_note = f"{digest.title[:60]} · {digest.authors[0] if digest.authors else ''}"
         made_cards, card_errors = await asyncio.to_thread(
             card_render.render_cards,
             picks,
@@ -645,6 +756,10 @@ async def _gen_xhs_variant(
             ctx.artifact("image", f"卡片 {i}", rel, preview=True, meta={"w": 1080, "h": 1440})
     elif not ctx.settings.cards_enabled:
         ctx.log("warn", "PAPERCAST_CARDS=off，跳过卡片渲染（export/ 里只有文案）")
+    elif _deck_will_replace_cards(ctx):
+        # 组图（guizang）会重排同一批素材并投递（publish._deck_images 优先于 article/cards），
+        # 这里再画一遍 PIL 卡片就是纯浪费：同一批图、同一批数字、另一个排版，且没人看。
+        ctx.log("info", "小红书组图已启用，跳过 PIL 卡片（组图才是投递用的那套图）")
     else:
         ctx.log("info", f"卡片已在主变体渲染，{label} 复用同一批图")
 

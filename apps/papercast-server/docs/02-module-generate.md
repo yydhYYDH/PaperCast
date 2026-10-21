@@ -37,6 +37,22 @@
 4. 生成后跑 `verify_digest()`：数字回溯检查（`digest.results[].value` 的每个数字串在 `content.md` 中可检索），
    结果写进 `stage.checks`，前端能直接看到「证据链」是否闭合。
 
+## 1.5 非论文源（知乎/长文）的传播链路
+
+当 `source.kind ∈ {zhihu, url}` 时，M2 **不走论文事实源**（`digest.json` 里的 contributions/method/results
+是论文语义，硬套会把文章写成论文腔）。改为独立的"传播链路"：
+
+- **理解层**（`generate._understand_article`）用 `prompts.ARTICLE_DIGEST_SYSTEM` 提炼**传播要素**：
+  导读、目标读者、`hookPoints`（传播点）、`keyFacts`（原文可引用事实/数字）、`quotes`（金句）、
+  `keywords`、`figurePicks`。结果仍塞进 `PaperDigest` 字段以保持 run 模型与仪表盘稳定
+  （`abstractCn`=导读、`contributions`=传播点、`method`=内容主线/金句、`results`=可引用事实），
+  但不做论文式"贡献/方法"校验。
+- **文案层**（`_gen_xhs_variant(..., article_mode=True)`）用 `prompts.article_system(..., article_mode=True)`：
+  换成 `ARTICLE_PERSONA`（不套论文人格）+ `ARTICLE_XHS_STYLE`（科技干货+观点的传播写法）+ `ARTICLE_FACT_RULES`
+  （"改写但不编造"），并把原文一并喂给模型核对细节。生成后仍走标题计重/去公式/数字回溯/卡片渲染。
+- **兜底**：模型有时仍会加「—— 论文：<标题>」这类署名行，`_strip_article_attribution` 在文章模式下确定性剔除。
+- 论文源（arxiv/pdf/latex）路径完全不变。
+
 ## 2. 中文精读笔记 `reading_note.md`
 
 参考 `repos/paper2x/paper2note` 的结构，按论文叙事顺序：摘要翻译 → Introduction 翻译 →
@@ -132,18 +148,12 @@ cards/p1.png  = render_card(paper_image, caption_cn, "1/6 · 问题")
 
 ## 7. 闸门
 
-`understand` 阶段结束后挂一个闸门（与前端 mock 一致）：
+**`understand` 阶段不再挂人工闸门**（2026-09-23 用户要求）：digest 生成完直接交给下游，
+不再停下来等「确认论文理解层 / 补充要点后重跑」。事实源仍是唯一理解层，只是确认点收敛到
+`publish` 那一个人工闸门（且它默认只存草稿）。
 
-```jsonc
-{ "id": "digest", "label": "确认论文理解层",
-  "options": [{ "id": "continue", "label": "确认并继续" },
-              { "id": "revise", "label": "补充要点后重跑", "hint": "..." }] }
-```
-
-- `continue` → 放行到 `article`；
-- `revise` → 把手填的批注（`POST .../gate` 的 `note` 字段）追加进 digest prompt 重跑本阶段。
-
-**下游产物在闸门放行前不会生成**：这是「单一理解层」原则的执行点，保证文案与笔记永远基于同一版理解。
+> 历史：曾有一个 `{"id":"digest","label":"确认论文理解层","options":["continue","revise"]}` 闸门，
+> `revise` 会把 `POST .../gate` 的 `note` 追加进 digest prompt 重跑本阶段；现已移除。
 
 ## 8. 平台体裁 × 讲述者人格（`app/styles.py`）
 

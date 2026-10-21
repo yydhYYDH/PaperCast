@@ -80,6 +80,59 @@ function pick(s: SkillInfo) {
   ui.toast('界面与文档规范换成「' + s.name + '」了，下一轮开始时生效', 'info', 4000)
 }
 
+/* ---------- 自定义人格：新建 / 编辑 / 删除（2026-09-23） ---------- */
+const editing = ref('')          // '' = 没在编辑；'__new__' = 新建；否则是 voice id
+const saving = ref(false)
+const form = ref({ label: '', short: '', hint: '', persona: '' })
+
+function startNew() {
+  editing.value = '__new__'
+  form.value = { label: '', short: '', hint: '', persona: '' }
+}
+
+async function startEdit(voiceId: string) {
+  try {
+    const d = await style.voiceDetail(voiceId)
+    form.value = { label: d.label, short: d.short, hint: d.hint, persona: d.persona }
+    editing.value = voiceId
+  } catch (e) {
+    ui.toast('读不到这条风格：' + (e as Error).message, 'err')
+  }
+}
+
+function cancelEdit() {
+  editing.value = ''
+}
+
+async function saveVoice() {
+  if (saving.value) return
+  saving.value = true
+  try {
+    const msg = await style.saveVoice({ ...form.value }, editing.value === '__new__' ? undefined : editing.value)
+    ui.toast(msg, 'info', 4000)
+    editing.value = ''
+  } catch (e) {
+    ui.toast('保存失败：' + (e as Error).message, 'err', 6000)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function removeVoice(r: StyleOption) {
+  const ok = await ui.askConfirm({
+    title: r.custom ? '删除这个风格？' : '恢复默认？',
+    text: r.custom ? `「${r.short}」会从风格清单里删掉。` : `「${r.short}」会改回内置的写法。`,
+    okLabel: r.custom ? '删除' : '恢复默认',
+    tone: 'warn',
+  })
+  if (!ok) return
+  try {
+    ui.toast(await style.removeVoice(r.voice), 'info', 4000)
+  } catch (e) {
+    ui.toast('没做成：' + (e as Error).message, 'err', 6000)
+  }
+}
+
 /** SKILL.md 原文按纯文本展示（不引 markdown 渲染库）：等宽、可滚动、可复制 */
 const bodyLines = computed(() => (detail.value?.body ?? '').split('\n'))
 </script>
@@ -118,8 +171,36 @@ const bodyLines = computed(() => (detail.value?.body ?? '').split('\n'))
         <span class="panel-title">文章风格</span>
         <div class="grow" />
         <span class="panel-sub">平台决定体裁与硬约束，口吻只决定语气 · 最多 {{ style.maxVariants }} 个</span>
+        <button class="btn sm" @click="startNew">新建风格</button>
       </header>
       <div class="panel-body">
+        <!-- 编辑 / 新建人格：口吻这一层可改；平台硬约束不归它管 -->
+        <div v-if="editing" class="editor">
+          <div class="ed-head">
+            <strong>{{ editing === '__new__' ? '新建风格' : '编辑风格' }}</strong>
+            <span class="panel-sub">改的是「口吻」：语气、人称、句长节奏、归属强度。平台的硬约束（长度 / 公式 / 标签）不归它管。</span>
+          </div>
+          <div class="ed-grid">
+            <label class="fld"><span>名称</span>
+              <input v-model="form.label" class="field" placeholder="例如：一线工程师复盘" />
+            </label>
+            <label class="fld"><span>短名（清单里显示）</span>
+              <input v-model="form.short" class="field" placeholder="例如：工程师视角" />
+            </label>
+          </div>
+          <label class="fld"><span>一句话手感</span>
+            <input v-model="form.hint" class="field" placeholder="它读起来什么样（清单里那一行小字）" />
+          </label>
+          <label class="fld"><span>提示词正文（进生成的人格片段）</span>
+            <textarea v-model="form.persona" class="field body" placeholder="你是一位……&#10;&#10;写法特征：&#10;- …" />
+          </label>
+          <div class="row wrap gap">
+            <button class="btn primary" :disabled="saving || !form.label.trim() || !form.persona.trim()" @click="saveVoice">
+              {{ saving ? '保存中…' : '保存' }}
+            </button>
+            <button class="btn ghost" :disabled="saving" @click="cancelEdit">取消</button>
+          </div>
+        </div>
         <div v-for="g in style.platformGroups" :key="g.id" class="pgroup">
           <div class="pg-head">
             <span class="pg-name">{{ g.label }}</span>
@@ -131,9 +212,14 @@ const bodyLines = computed(() => (detail.value?.body ?? '').split('\n'))
               <span class="pname">{{ r.short }}</span>
               <span class="pline grow ellipsis" :title="r.hint">{{ r.hint }}</span>
               <span v-if="r.sampled === '1'" class="pnum">有语料支撑</span>
+              <span v-if="r.custom" class="pnum">自定义</span>
+              <span v-else-if="r.overridden" class="pnum">改过</span>
               <button class="btn sm" :class="{ ghost: !isPicked(r.variant) }" @click="toggleStyle(r.variant)">
                 {{ isPicked(r.variant) ? '取消' : '用这个' }}
               </button>
+              <button class="btn sm ghost" @click="startEdit(r.voice)">编辑</button>
+              <button v-if="r.custom" class="btn sm ghost" @click="removeVoice(r)">删除</button>
+              <button v-else-if="r.overridden" class="btn sm ghost" @click="removeVoice(r)">恢复默认</button>
             </li>
           </ul>
         </div>
@@ -220,8 +306,21 @@ const bodyLines = computed(() => (detail.value?.body ?? '').split('\n'))
 .foot-note { font-size: 12px; color: var(--muted-2); padding: 0 2px 8px; line-height: 1.7; }
 .foot-note code { font-family: var(--mono); font-size: 11.5px; background: #f1f0ec; padding: 1px 5px; border-radius: 5px; }
 
+/* 编辑 / 新建人格的表单 */
+.editor {
+  border: 1px solid var(--hairline); border-radius: 12px; padding: 14px;
+  margin: 4px 0 12px; background: var(--surface-2);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.ed-head { display: flex; flex-direction: column; gap: 3px; }
+.ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.fld { display: flex; flex-direction: column; gap: 4px; }
+.fld > span { font-size: 12px; color: var(--muted); }
+.fld .field.body { min-height: 170px; resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.7; }
+
 /* 手机：名字一行、说明一行、按钮一行 —— 别让「含 N 份分册」把整行顶出屏幕 */
 @media (max-width: 720px) {
+  .ed-grid { grid-template-columns: 1fr; }
   .lines li { gap: 8px; }
   .pname { min-width: 0; }
   .pline { flex: 1 1 100%; order: 3; }

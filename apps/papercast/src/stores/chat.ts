@@ -1,11 +1,10 @@
 import { defineStore } from 'pinia'
 import { api } from '../api'
 import { exampleRunConfig } from '../data/example'
-import { variantsFromText } from '../data/stylePick'
+import { constrainVariantsToTargets, variantsFromText } from '../data/stylePick'
 import { useRunsStore } from './runs'
 import { useUiStore } from './ui'
 import { useStyleStore } from './style'
-import { reviewRun } from '../review'
 import type { ChatAction, InteractionItem } from '../api/types'
 import type { Artifact, PaperRun, SourceInput, Stage, StageGate, StageId, StageStatus } from '../types'
 
@@ -49,8 +48,6 @@ export interface ChatMessage {
   actNote?: string
   /** 正在干活（右侧名单里也会亮） */
   pending?: boolean
-  /** Agent 审核的检查项（后端每段真实 checks + 前端两条交叉检查） */
-  reviewItems?: { label: string; state: string; detail: string; from: string }[]
 }
 
 interface AgentSpec {
@@ -98,6 +95,14 @@ function sayStage(stage: Stage, run: PaperRun): { text: string; bullets?: string
   const names = stage.artifacts.map(artifactLabel)
   const failed = (stage.checks ?? []).filter((c) => c.state === 'fail')
   const bullets = failed.map((c) => `自检没过：${c.label}（${c.detail}）`)
+
+  // 跳过 / 失败要按状态说，别套用「做完了」的措辞（2026-09-23：视频默认跳过时曾说成「视频备好了」）
+  if (stage.status === 'skipped') {
+    return { text: `「${stage.label}」这一步本轮跳过了，没有做。` }
+  }
+  if (stage.status === 'failed') {
+    return { text: `这一步没成功${lastLine(stage) ? '：' + lastLine(stage) : '。'}`, bullets }
+  }
 
   switch (stage.id) {
     case 'intake':
@@ -193,11 +198,25 @@ export const useChatStore = defineStore('chat', {
         ].filter(Boolean),
       })
 
+      // 每个已启动的阶段**按顺序**出一条消息；正在跑的那一步就地写成「正在…」，
+      // 不再额外追加到末尾 —— 否则「视频（skipped，已终态）」会排到「读懂（running）」前面，
+      // 看着就是顺序乱的（2026-09-23 用户报的 bug）。同时 sayStage 按状态给措辞，
+      // 运行中/跳过不再说成「做完了」。
       for (const spec of AGENTS) {
         const stage = run.stages.find((s) => s.id === spec.id)
-        if (!stage) continue
-        const started = stage.status !== 'pending'
-        if (!started) continue
+        if (!stage || stage.status === 'pending') continue
+        if (stage.status === 'running') {
+          out.push({
+            id: `stage-${stage.id}`,
+            role: 'agent',
+            who: spec.who,
+            stageId: stage.id,
+            state: 'running',
+            pending: true,
+            text: `正在${spec.doing}` + (lastLine(stage) ? `：${lastLine(stage)}` : '…'),
+          })
+          continue
+        }
         const { text, bullets } = sayStage(stage, run)
         out.push({
           id: `stage-${stage.id}`,
@@ -210,44 +229,6 @@ export const useChatStore = defineStore('chat', {
           artifacts: stage.artifacts,
           viewer: spec.viewer,
           gate: stage.status === 'waiting' && stage.gate && !stage.gate.resolved ? stage.gate : undefined,
-        })
-      }
-
-      // ── Agent 审核：把这次已落盘的自检汇总成一条消息，**插在人工闸门前面** ──
-      // 还在跑就只说「已出来的这部分核过了」，绝不提前说「已经通过」。
-      if (run.stages.some((s) => ['done', 'waiting', 'failed', 'skipped'].includes(s.status))) {
-        const rev = reviewRun(run)
-        const reviewMsg: ChatMessage = {
-          id: 'review',
-          role: 'agent',
-          who: '审核',
-          state: rev.settled ? (rev.verdict === 'blocked' ? 'failed' : 'done') : 'running',
-          pending: !rev.settled,
-          // 结论句在前（人工闸门上方用的是同一句 rev.line，两处一个来源，不会各说各话）
-          text: rev.settled
-            ? `${rev.line}。我把这批东西对着事实源核了一遍：${rev.detail}。`
-            : `先把已经出来的部分核了一遍：${rev.detail} —— 还没跑完，收齐了我再核一次。`,
-          bullets: [...rev.failed, ...rev.notes]
-            .slice(0, 4)
-            .map((i) => `${i.state === 'fail' ? '要处理' : '说明'}：${i.label}（${i.detail}）`),
-          reviewItems: rev.items,
-        }
-        const gateAt = out.findIndex((m) => m.gate)
-        if (gateAt >= 0) out.splice(gateAt, 0, reviewMsg)
-        else out.push(reviewMsg)
-      }
-
-      const running = run.stages.find((s) => s.status === 'running')
-      if (running) {
-        const spec = AGENTS.find((a) => a.id === running.id)
-        out.push({
-          id: 'now',
-          role: 'agent',
-          who: spec?.who ?? '它',
-          stageId: running.id,
-          state: 'running',
-          pending: true,
-          text: (spec ? `正在${spec.doing}` : '正在干活') + (lastLine(running) ? `：${lastLine(running)}` : '…'),
         })
       }
 
@@ -273,22 +254,6 @@ export const useChatStore = defineStore('chat', {
                 : STAGE_STATE_LABEL[state]
         return { id: a.id, who: a.who, doing: a.doing, state, activity, artifacts: stage?.artifacts.length ?? 0 }
       })
-
-      // 第七行：Agent 审核 —— 不是后端阶段，是前端按真实 self-check 汇总的那一步。
-      // id 用 'review' 只为滚动锚点（#m-review）对得上，别当成后端 stage 用。
-      const rev = reviewRun(run)
-      if (run.stages.some((s) => s.status !== 'pending')) {
-        rows.push({
-          id: 'review' as StageId,
-          who: '审核',
-          doing: '对着事实源核一遍',
-          state: !rev.settled ? 'running' : rev.verdict === 'blocked' ? 'failed' : 'done',
-          activity: !rev.settled
-            ? `已核 ${rev.items.length} 项`
-            : `${rev.items.length} 项检查 · ${rev.failed.length ? `${rev.failed.length} 项要处理` : '都过了'}`,
-          artifacts: 0,
-        })
-      }
       return rows
     },
   },
@@ -631,7 +596,10 @@ export const useChatStore = defineStore('chat', {
       // 说出口的要真的算数：这句话里点到的平台/口吻直接改这一轮的 variants。
       // （只写进 brief 的话，平台与校验规则其实没变 —— 那就成了「说了不认」。）
       const fromWords = variantsFromText(userWords, style.effectiveVariants, style.maxVariants)
-      if (fromWords.length) cfg.article.variants = fromWords
+      // 收口到发布目标平台：默认只发小红书时，历史遗留/口头点名的知乎、英文变体都不生成
+      // （后端 align_variants_with_targets 还会再裁一次，这里先裁是为了界面与回执一致）
+      const wanted = constrainVariantsToTargets(fromWords, cfg.publish.targets ?? [])
+      if (wanted.length) cfg.article.variants = wanted
       cfg.brief = style.buildBrief([cfg.brief ?? '', userWords].filter(Boolean).join('；'))
       return cfg
     },

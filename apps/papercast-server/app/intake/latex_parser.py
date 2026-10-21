@@ -86,8 +86,12 @@ def _expand(path: Path, root: Path, seen: set, depth: int = 0) -> str:
         name = m.group(1).strip()
         if not name.endswith(".tex"):
             name += ".tex"
-        sub = (path.parent / name).resolve()
-        if sub.is_file() and str(sub).startswith(str(root.resolve())):
+        # \input 路径按 LaTeX 习惯相对**主文件目录(root)** 解析；也兼容相对当前子文件的写法。
+        # 只按 path.parent 解析会漏掉 Paragraph 里 \input{Figure/xxx} 这种 root 相对路径（2026-10-05 踩到）。
+        root_dir = root.resolve()
+        cand = [(path.parent / name).resolve(), (root_dir / name).resolve()]
+        sub = next((c for c in cand if c.is_file() and str(c).startswith(str(root_dir))), None)
+        if sub is not None:
             parts.append(_expand(sub, root, seen, depth + 1))
         else:
             parts.append(f"\n（未找到 \\input 文件：{m.group(1)}）\n")

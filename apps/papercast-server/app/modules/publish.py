@@ -427,7 +427,12 @@ def _build_materials(run_dir: Path, run: Any, *, title: str, body: str, tags: li
         run_id=getattr(run, "id", ""),
         source=source,
         # 物料来源可审计：闸门详情、日志与回执都靠它说清「这一版投的是哪份文案」
-        extra={"variant": variant, "variantPlatform": variant_platform},
+        # isArticle：知乎/长文源，渠道拼正文时不要加「—— 论文：…」署名行。
+        extra={
+            "variant": variant,
+            "variantPlatform": variant_platform,
+            "isArticle": getattr(src, "kind", "") in ("zhihu", "url") if src is not None else False,
+        },
     )
 
 
@@ -726,12 +731,15 @@ async def run_publish(ctx: StageContext) -> None:
               "、".join(row["channel"].name for row in deliverable) if deliverable else "本轮没有可投递渠道（素材包已就绪，可手动发布）")
 
     # ---- 4. 一个人工闸门 ----
+    #
+    # **只给「仅存草稿 / 本轮不发布」**（2026-09-23 用户要求）：流水线不再提供「确认发布」，
+    # 真实投递一律走作品库直投（POST /api/runs/{id}/publish[/video]，带 confirmed + 账号二次校验）。
+    # 这样即使闸门被误放行，publish 阶段也不会真的发出任何请求。
     chosen = await ctx.gate(
         "publish-gate",
         "发布前人工闸门",
         _gate_detail(rows, previous),
         [
-            ("continue", "确认发布", "只向就绪的渠道投递，逐个写回执"),
             ("draft", "仅存草稿", "只准备 export/，不调用任何发布接口"),
             ("skip", "本轮不发布", None),
         ],
