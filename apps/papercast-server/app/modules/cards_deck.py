@@ -62,7 +62,7 @@ COVER_FIG_RATIO = "16x9"
 # 字号 → 每行能放多少个「汉字宽度单位」（西文/数字按 ASCII_EM 计，见 units）。
 # 依据：画布 1080、内容左右各留 88px → 可用 904px；h-display 112px、h-xl 88px、h-md 56px。
 UNITS_PER_LINE = {"display": 880.0 / 112, "xl": 880.0 / 88, "md": 880.0 / 56}
-TITLE_LINES = {"display": 2, "xl": 2}
+TITLE_LINES = {"display": 3, "xl": 2}
 # 标题放不下时的降级字号阶梯（先降字号，**绝不截字** —— 截出来的「罕见病诊断智…」比小一号难看十倍）。
 # display 顶档 100（原 124 → 112 → 100）：封面大标题两轮收小。第一轮 124→112 修的是
 # 「SpeakerMem-R1：双轨记忆」断成三行落单字母（R6 WARN）；第二轮 112→100 是为了给
@@ -380,9 +380,13 @@ def fit_title(text: str, kind: str = "xl", *, max_lines: Optional[int] = None) -
     ladder = SIZE_LADDER.get(kind, SIZE_LADDER["xl"])
     track = TRACK_EM.get(kind, 0.0)
     design = ladder[0]
-    lines = _wrap_no_cut(text, AVAIL_PX / design, track)
-    if len(lines) <= lim and _fits(lines, AVAIL_PX / design, track):
-        return design, lines
+    # 先尝试「整句降字号」：标题是读者唯一信息量最大的那行，宁可小一号也不要砍成
+    # 「长程任务里」这种没有判断的半句（2026-10-22 实测：从句尾往前砍，砍掉的恰好是有信息的那半）。
+    for size in ladder:
+        lines = _wrap_no_cut(text, AVAIL_PX / size, track)
+        if len(lines) <= lim and _fits(lines, AVAIL_PX / size, track):
+            return size, lines
+    # 整句在最小字号下仍放不下，才退到「按从句砍」兜底。
     trimmed = clause_trim(text, AVAIL_PX / design, lim, track)
     lines = _wrap_no_cut(trimmed, AVAIL_PX / design, track)
     if len(lines) <= lim and _fits(lines, AVAIL_PX / design, track):
@@ -1221,6 +1225,12 @@ def build_html(pages: list[dict[str, Any]], figures_dir: Path, out_dir: Path, *,
     de_selfref_hits = 0
     sections: list[str] = []
     n = len(pages)
+    # 封面 teaser 的去重底线：如果同一张图在后面的「证据」页还会出现，封面就不再放它 ——
+    # 否则组图里同一张图重复两次（2026-10-22 用户打回：首图与第 9 页都是 fig-1）。
+    later_figs = {
+        Path(str(pg.get("figure", {}).get("file") or "")).name
+        for pg in pages if pg.get("kind") == "figure"
+    }
     for i, pg in enumerate(pages, start=1):
         pid = f"xhs-{i:02d}"
         strip = [f"{i:02d} / {n:02d}", "—", brand]
@@ -1243,7 +1253,11 @@ def build_html(pages: list[dict[str, Any]], figures_dir: Path, out_dir: Path, *,
             fig_html = ""
             # 嵌了头部截图就腾地方：teaser 从 16:9 收到 21:9，且不再放 chips 行。
             ratio = "21x9" if tb_html else COVER_FIG_RATIO
-            src = _fig_src(pg.get("teaser") or {}, figures_dir)
+            teaser_name = Path(str((pg.get("teaser") or {}).get("file") or "")).name
+            # 与后面的证据页重复的图，封面不再放（宁可封面少一张图，也不要组图里同一张出现两次）
+            if teaser_name and teaser_name in later_figs:
+                teaser_name = ""
+            src = _fig_src(pg.get("teaser") or {}, figures_dir) if teaser_name else None
             if src:
                 rel = _copy_asset(src, assets_dir)
                 used += 1
