@@ -739,7 +739,7 @@ def fit_lead(text: str, budget_px: float = LEAD_BUDGET_PX) -> tuple[int, str]:
     if cur and used + 1 <= max_lines:
         kept.append(cur)
     out = "".join(kept).strip().rstrip("，,、；;")
-    return size, inline(out) + "…" if out else size, inline(raw)
+    return size, (inline(out) + "…" if out else inline(raw))
 
 
 def _img_aspect(path: Path) -> Optional[tuple[int, int]]:
