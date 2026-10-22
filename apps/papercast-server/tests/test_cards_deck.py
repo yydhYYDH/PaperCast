@@ -74,6 +74,17 @@ def test_cover_title_is_never_cut_mid_word():
     assert size in cd.SIZE_LADDER["display"]
 
 
+def test_display_title_keeps_full_claim_not_leading_scene_clause():
+    """2026-10-22 用户打回：封面标题被砍成「长程任务里」—— 只留了没有信息的前半句。
+
+    整句在 3 行内放得下时必须保留整句；不许从句尾往前砍、把有判断的后半句砍掉。
+    """
+    text = "长程任务里，智能体得学会自己分工与纠错"
+    _size, lines = cd.fit_title(text, "display")
+    assert "".join(lines) == text
+    assert len(lines) <= 3
+
+
 def test_long_title_trimmed_at_punctuation_not_ellipsis():
     text = "九个数据集上的跨数据集召回对比结果，以及加入基因数据之后的多模态性能提升幅度"
     size, lines = cd.fit_title(text, "xl")
